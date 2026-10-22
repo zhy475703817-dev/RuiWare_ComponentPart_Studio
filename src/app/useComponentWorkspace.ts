@@ -2,9 +2,10 @@ import { useEffect, useRef, useState } from "react";
 import type { ComponentAction } from "../domain/componentReducer";
 import { SharedDraftController, httpDraftApi, initialSharedState } from "./sharedDraft";
 import type { PublishedTemplate } from "../library/publishedLibrary";
+import { loadReconstructionInfo } from "../library/templatePreview";
 import type { StageId } from "./stages";
 
-const initialMessage = "左侧可浏览已发布零部件，点击模板预览模型和版本信息";
+const initialMessage = "左侧可浏览已发布零部件，点击模板预览或使用加号加入组件";
 
 export function useComponentWorkspace() {
   const [shared, setShared] = useState(initialSharedState);
@@ -77,6 +78,40 @@ export function useComponentWorkspace() {
     setMessage("已删除成员，并清理关联的连接、接口及参数绑定");
   }
 
+  async function addPublishedTemplate(template: PublishedTemplate) {
+    if (!editable) return setMessage("共享草稿尚未就绪，请稍后再加入零部件");
+    const current = controller.current?.getSnapshot().document;
+    if (!current) return setMessage("共享草稿尚未就绪，请稍后再加入零部件");
+    if (current.assembly.members.some(member => member.template.publicationId === template.publicationId)) {
+      return setMessage(`${template.name} 的这个发布版本已经加入组件`);
+    }
+    setPreviewTemplate(template);
+    setMessage(`正在读取 ${template.name} 的接口定义…`);
+    try {
+      const info = await loadReconstructionInfo(template, new AbortController().signal);
+      const member = {
+        id: crypto.randomUUID(),
+        name: template.name,
+        code: template.code,
+        role: "零部件",
+        template: { publicationId: template.publicationId, templateId: template.templateId, version: template.version, sha256: template.sha256 },
+        position: [0, 0, 0] as [number, number, number],
+        rotation: [0, 0, 0] as [number, number, number],
+        parameterValues: Object.fromEntries(info.parameters.map(parameter => [parameter.id, parameter.default])),
+        interfaces: info.interfaces,
+      };
+      const latest = controller.current?.getSnapshot().document;
+      if (!latest || latest.assembly.members.some(item => item.template.publicationId === template.publicationId)) {
+        return setMessage(`${template.name} 的这个发布版本已经加入组件`);
+      }
+      if (!dispatch({ type: "member.add", member })) return setMessage("加入失败，请检查共享草稿状态后重试");
+      setSelectedMemberId(member.id);
+      setMessage(`已加入 ${template.name} · V${template.version}，可在装配阶段建立连接`);
+    } catch (cause) {
+      setMessage(cause instanceof Error ? `无法加入 ${template.name}：${cause.message}` : `无法加入 ${template.name}，请重试`);
+    }
+  }
+
   function connectFirstInterfaces() {
     const [a, b] = document.assembly.members;
     if (!a || !b) return setMessage("至少加入两个零部件后才能记录内部连接");
@@ -124,7 +159,7 @@ export function useComponentWorkspace() {
 
   const syncMessage = shared.error || (shared.status === "loading" ? "正在读取共享草稿…" : shared.status === "saving" ? "正在保存草稿…" : shared.notice || message);
   return { document, dispatch, stage, setStage, selectedMemberId, selectedMember, setSelectedMemberId, previewTemplate, setPreviewTemplate,
-    selectionResetToken, message: syncMessage, setMessage, checks, newDraft, removeMember, connectFirstInterfaces, inheritInterface, exportDraft,
+    selectionResetToken, message: syncMessage, setMessage, checks, newDraft, removeMember, addPublishedTemplate, connectFirstInterfaces, inheritInterface, exportDraft,
     shared, editable, selectDraft, copyDraftLink,
     downloadLocalDraft, dismissAgentChanges: () => controller.current?.dismissAgentChanges(),
     retrySave: () => { void controller.current?.retry().catch(() => {}); },

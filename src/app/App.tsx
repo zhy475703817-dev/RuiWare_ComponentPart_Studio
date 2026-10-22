@@ -33,9 +33,9 @@ export function App() {
 
   return <WorkspaceLayout stage={stage} onStageChange={workspace.setStage} onNew={workspace.newDraft} onExport={workspace.exportDraft} message={workspace.message} revision={document.revision}
     library={<>
-      <PublishedTemplateLibrary onPreview={workspace.setPreviewTemplate} selectionResetToken={workspace.selectionResetToken}/>
+      <PublishedTemplateLibrary onPreview={workspace.setPreviewTemplate} onAdd={workspace.addPublishedTemplate} memberPublicationIds={members.map(member => member.template.publicationId)} selectionResetToken={workspace.selectionResetToken}/>
       <div className="panel-title member-title"><span>组件成员</span><small>{members.length}</small></div>
-      {members.length === 0 && <p className="hint">暂无成员，当前支持模板预览，加入装配待接入</p>}
+      {members.length === 0 && <p className="hint">暂无成员，点击发布库模板旁的加号加入组件</p>}
       {members.map(member => <div className={`member-row ${workspace.selectedMemberId === member.id ? "selected" : ""}`} key={member.id}>
         <button className="member-select" onClick={() => workspace.setSelectedMemberId(member.id)}><span>{member.role}<small>{member.code} · V{member.template.version}</small></span></button>
         <button className="member-remove" onClick={() => workspace.removeMember(member.id)} aria-label={`删除成员 ${member.role}`}><Trash2 size={14}/></button>

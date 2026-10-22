@@ -193,7 +193,11 @@ async def reconstruction_info(publication_id: str, request: Request, response: R
     async with request.app.state.reconstruction_slots:
         publication, draft, _ = await _read_template(request, publication_id, sha256)
     response.headers["Cache-Control"] = "no-store"
-    return {"publication": publication.model_dump(mode="json"), "parameters": editable_parameters(draft)}
+    return {
+        "publication": publication.model_dump(mode="json"),
+        "parameters": editable_parameters(draft),
+        "interfaces": draft.get("interfaces", []),
+    }
 
 
 @router.post("/{publication_id}/reconstruction/model", summary="生成零件预览")

@@ -3,6 +3,7 @@ import type { BufferGeometry } from "three";
 import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
 import { parsePublishedTemplates } from "./publishedLibrary.ts";
 import type { PublishedTemplate } from "./publishedLibrary.ts";
+import type { PartInterface } from "../domain/component.ts";
 
 export type PreviewDescription = {
   publication: PublishedTemplate;
@@ -17,7 +18,7 @@ export type ReconstructionParameter = {
   minimum: number | null; maximum: number | null; allowedValues: (number | string | boolean)[];
 };
 export type LoadedPreview = { description: PreviewDescription; geometry: BufferGeometry };
-export type ReconstructionInfo = { publication: PublishedTemplate; parameters: ReconstructionParameter[] };
+export type ReconstructionInfo = { publication: PublishedTemplate; parameters: ReconstructionParameter[]; interfaces: PartInterface[] };
 export type PreviewPhase = "package" | "model";
 const MAX_MODEL_BYTES = 64 * 1024 * 1024;
 
@@ -103,7 +104,7 @@ export async function loadReconstructionInfo(selected: PublishedTemplate, signal
   const response = await fetch(`/api/published-templates/${encodeURIComponent(selected.publicationId)}/reconstruction?sha256=${selected.sha256.toLowerCase()}`, { signal, cache: "no-store" });
   if (!response.ok) return responseError(response);
   const value: unknown = await response.json();
-  if (!record(value) || !record(value.publication) || !Array.isArray(value.parameters)) throw new Error("无法显示这个零件，请稍后重试。");
+  if (!record(value) || !record(value.publication) || !Array.isArray(value.parameters) || !Array.isArray(value.interfaces)) throw new Error("无法显示这个零件，请稍后重试。");
   const publication = parsePublishedTemplates({ items: [value.publication], count: 1 })[0];
   if (publication.publicationId !== selected.publicationId || publication.templateId !== selected.templateId || publication.sha256.toLowerCase() !== selected.sha256.toLowerCase()) throw new Error("发布版本已更新，请重新选择。");
   const parameters = value.parameters.map(item => {
@@ -114,7 +115,26 @@ export async function loadReconstructionInfo(selected: PublishedTemplate, signal
       !Array.isArray(item.allowedValues)) throw new Error("无法读取零件参数。");
     return item as ReconstructionParameter;
   });
-  return { publication, parameters };
+  const interfaceIds = new Set<string>();
+  const interfaces = value.interfaces.map(item => {
+    if (!record(item) || typeof item.id !== "string" || !item.id.trim() || typeof item.name !== "string" || !item.name.trim() || interfaceIds.has(item.id)) {
+      throw new Error("无法读取零件接口。");
+    }
+    const sourceType = typeof item.type === "string" ? item.type : "";
+    const locatingType = typeof item.locatingType === "string" ? item.locatingType : "";
+    const interfaceType = typeof item.interfaceType === "string" ? item.interfaceType : "";
+    const type: PartInterface["type"] = sourceType === "plane" || sourceType === "axis" || sourceType === "point"
+      ? sourceType
+      : locatingType === "axisCoincident" || interfaceType === "connecting" ? "axis"
+        : locatingType === "pinHole" ? "point" : "plane";
+    const rawTags = Array.isArray(item.tags) ? item.tags : Array.isArray(item.compatibilityTags) ? item.compatibilityTags : [];
+    const tags = [...new Set(rawTags.filter((tag): tag is string => typeof tag === "string" && Boolean(tag.trim())).map(tag => tag.trim()))];
+    if (interfaceType) tags.push(`interface:${interfaceType}`);
+    if (locatingType) tags.push(`locating:${locatingType}`);
+    interfaceIds.add(item.id);
+    return { id: item.id, name: item.name, type, tags: [...new Set(tags)] };
+  });
+  return { publication, parameters, interfaces };
 }
 
 export async function loadTemplatePreview(selected: PublishedTemplate, parameters: Record<string, unknown>, signal: AbortSignal): Promise<LoadedPreview> {

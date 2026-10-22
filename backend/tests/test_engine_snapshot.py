@@ -78,6 +78,7 @@ class EngineSnapshotTests(unittest.TestCase):
             info = client.get(f"/api/published-templates/version-1/reconstruction?sha256={digest}")
             self.assertEqual(info.status_code, 200, info.text)
             self.assertEqual(info.json()["parameters"][0]["id"], "length")
+            self.assertEqual(info.json()["interfaces"], [])
             oversized = client.post(f"/api/published-templates/version-1/reconstruction/model?sha256={digest}", content=b"{" + b" " * (64 * 1024) + b"}", headers={"content-type": "application/json"})
             self.assertEqual(oversized.status_code, 413)
             small = client.post(f"/api/published-templates/version-1/reconstruction/model?sha256={digest}", json={"parameters": {"length": 120}})

@@ -32,7 +32,7 @@ test('STL保持工程原点和毫米尺寸，拒绝无三角形或无效坐标',
 });
 
 test('预览从固定发布版本读取参数并校验重建模型',async t=>{
-  const info={publication,parameters:[{id:'length',label:'长度',unit:'mm',valueType:'number',default:100,minimum:20,maximum:500,allowedValues:[]}]};
+  const info={publication,parameters:[{id:'length',label:'长度',unit:'mm',valueType:'number',default:100,minimum:20,maximum:500,allowedValues:[]}],interfaces:[]};
   t.mock.method(globalThis,'fetch',async (_url,options)=>options?.method==='POST' ? new Response(stl,{headers:{'X-RuiWare-SHA256':hash}}) : Response.json(info));
   assert.equal((await loadReconstructionInfo(publication,new AbortController().signal)).parameters[0].id,'length');
   const result=await loadTemplatePreview(publication,{length:120},new AbortController().signal);
@@ -40,6 +40,21 @@ test('预览从固定发布版本读取参数并校验重建模型',async t=>{
   result.geometry.dispose();
   t.mock.method(globalThis,'fetch',async()=>Response.json({error:{code:'MODEL_MISSING'}},{status:422}));
   await assert.rejects(loadTemplatePreview(publication,{},new AbortController().signal),/检查模板内容/);
+});
+
+test('重建接口会映射单体平台的接口类型和兼容标签',async t=>{
+  const info={publication,parameters:[],interfaces:[
+    {id:'axis',name:'导向轴',interfaceType:'connecting',locatingType:'axisCoincident',compatibilityTags:['round']},
+    {id:'pin',name:'定位孔',interfaceType:'locating',locatingType:'pinHole',tags:['hole']},
+    {id:'face',name:'安装面',interfaceType:'supporting',locatingType:'faceCoincident'},
+  ]};
+  t.mock.method(globalThis,'fetch',async()=>Response.json(info));
+  const result=await loadReconstructionInfo(publication,new AbortController().signal);
+  assert.deepEqual(result.interfaces,[
+    {id:'axis',name:'导向轴',type:'axis',tags:['round','interface:connecting','locating:axisCoincident']},
+    {id:'pin',name:'定位孔',type:'point',tags:['hole','interface:locating','locating:pinHole']},
+    {id:'face',name:'安装面',type:'plane',tags:['interface:supporting','locating:faceCoincident']},
+  ]);
 });
 
 test('模型字节校验失败或请求取消时不会产生可用预览',async t=>{
