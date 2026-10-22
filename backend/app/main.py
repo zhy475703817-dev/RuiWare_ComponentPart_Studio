@@ -15,7 +15,7 @@ from .components.router import router as draft_router
 from .components.service import ComponentError
 from .library import LibraryError, router
 from .preview import PreviewCache, router as preview_router
-from .reconstruction import router as reconstruction_router
+from .reconstruction import ReconstructionCache, router as reconstruction_router
 from .mcp.server import MCPAccess, create_mcp
 
 
@@ -38,6 +38,7 @@ def create_app(
         app.state.settings = resolved_settings
         app.state.preview_cache = PreviewCache()
         app.state.reconstruction_slots = asyncio.Semaphore(1)
+        app.state.reconstruction_cache = ReconstructionCache()
         app.state.drafts = DraftRepository(draft_db or resolved_settings.draft_db)
         async with httpx.AsyncClient(timeout=10, follow_redirects=False, trust_env=False, transport=transport) as client:
             app.state.http = client

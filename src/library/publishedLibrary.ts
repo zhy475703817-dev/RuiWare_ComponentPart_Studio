@@ -49,7 +49,11 @@ const errorMessages: Record<string, string> = {
 };
 
 export async function fetchPublishedTemplates(signal: AbortSignal): Promise<PublishedTemplate[]> {
-  const response = await fetch("/api/published-templates", {
+  return parsePublishedTemplates(await libraryResponse("/api/published-templates", signal));
+}
+
+async function libraryResponse(url: string, signal: AbortSignal): Promise<unknown> {
+  const response = await fetch(url, {
     signal, cache: "no-store", headers: { Accept: "application/json" },
   });
   let body: unknown;
@@ -58,5 +62,39 @@ export async function fetchPublishedTemplates(signal: AbortSignal): Promise<Publ
     const code = isRecord(body) && isRecord(body.error) && typeof body.error.code === "string" ? body.error.code : "";
     throw new Error(errorMessages[code] || errorMessages.LIBRARY_UPSTREAM_ERROR);
   }
-  return parsePublishedTemplates(body);
+  return body;
+}
+
+export async function fetchAvailableTemplates(signal: AbortSignal, onUpdate?: (items: PublishedTemplate[]) => void): Promise<PublishedTemplate[]> {
+  const items = await fetchPublishedTemplates(signal);
+  signal.throwIfAborted();
+  onUpdate?.([]);
+  const accepted = new Set<string>();
+  const errors: unknown[] = [];
+  let next = 0;
+  const visible = () => items.filter(item => accepted.has(item.publicationId));
+  async function checkNext() {
+    while (next < items.length) {
+      signal.throwIfAborted();
+      const item = items[next++];
+      try {
+        const result = await libraryResponse(`/api/published-templates/${encodeURIComponent(item.publicationId)}/availability?sha256=${item.sha256.toLowerCase()}`, signal);
+        signal.throwIfAborted();
+        if (!isRecord(result) || typeof result.available !== "boolean") throw new Error(errorMessages.LIBRARY_INVALID_RESPONSE);
+        if (result.available) {
+          accepted.add(item.publicationId);
+          onUpdate?.(visible());
+        }
+      } catch (error) {
+        signal.throwIfAborted();
+        errors.push(error);
+      }
+    }
+  }
+  // Bound requests so opening the library cannot flood the CAD worker queue.
+  const outcomes = await Promise.allSettled([checkNext(), checkNext()]);
+  signal.throwIfAborted();
+  for (const outcome of outcomes) if (outcome.status === "rejected") throw outcome.reason;
+  if (errors.length) throw errors[0];
+  return visible();
 }

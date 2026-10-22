@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
 import test from 'node:test';
-import { fetchPublishedTemplates, parsePublishedTemplates } from '../src/library/publishedLibrary.ts';
+import { fetchAvailableTemplates, fetchPublishedTemplates, parsePublishedTemplates } from '../src/library/publishedLibrary.ts';
 
 const publication = {
   publicationId: 'version-1', templateId: 'draft-1', version: 1,
@@ -59,4 +59,52 @@ test('客户端读取真实响应，拒绝异常数据并显示明确的服务�
   payload = { error: { code: 'REMOTE_STORAGE_NOT_CONFIGURED' } };
   await assert.rejects(fetchPublishedTemplates(signal), /尚未配置共享发布库/);
   await assert.rejects(fetchPublishedTemplates(AbortSignal.abort()), { name: 'AbortError' });
+});
+
+test('列表只逐步展示重建成功的模板，检查并发受限，刷新移除旧项', async t => {
+  const items = Array.from({length:5}, (_,i)=>({...publication,publicationId:`version-${i}`,sha256:String(i).repeat(64)}));
+  const updates=[];
+  let running=0, peak=0;
+  t.mock.method(globalThis,'fetch',async url=>{
+    if(String(url)==='/api/published-templates') return Response.json({items,count:items.length});
+    running++; peak=Math.max(peak,running);
+    await new Promise(resolve=>setTimeout(resolve,5));
+    running--;
+    const id=String(url).match(/version-(\d+)/)[1];
+    assert.ok(String(url).endsWith(`?sha256=${id.repeat(64)}`));
+    return Response.json({available:Number(id)%2===0});
+  });
+  const result=await fetchAvailableTemplates(new AbortController().signal, items=>updates.push([...items]));
+  assert.deepEqual(updates[0],[]);
+  assert.deepEqual(result.map(item=>item.publicationId).sort(),['version-0','version-2','version-4']);
+  assert.ok(updates.every(items=>items.every(item=>['version-0','version-2','version-4'].includes(item.publicationId))));
+  assert.ok(peak<=2);
+});
+
+test('检查返回格式错误或连接失败时不能将模板放入列表，取消不发布迟到结果',async t=>{
+  let reply=()=>Response.json({available:'yes'});
+  t.mock.method(globalThis,'fetch',async url=>String(url)==='/api/published-templates'
+    ? Response.json({items:[publication],count:1}) : reply());
+  const updates=[];
+  await assert.rejects(fetchAvailableTemplates(new AbortController().signal,items=>updates.push(items)),/数据格式不正确/);
+  assert.ok(updates.every(items=>items.length===0));
+  reply=()=>Response.json({error:{code:'LIBRARY_UNREACHABLE'}},{status:502});
+  await assert.rejects(fetchAvailableTemplates(new AbortController().signal),/无法连接/);
+  const controller=new AbortController();
+  reply=()=>{controller.abort();return Response.json({available:true});};
+  await assert.rejects(fetchAvailableTemplates(controller.signal,items=>updates.push(items)),{name:'AbortError'});
+  assert.ok(updates.every(items=>items.length===0));
+});
+
+test('前两个模板读取失败仍继续检查后续模板，成功项保留且失败可重试',async t=>{
+  const items=Array.from({length:4},(_,i)=>({...publication,publicationId:`v${i}`}));
+  const checked=[]; const updates=[];
+  t.mock.method(globalThis,'fetch',async url=>{
+    if(String(url)==='/api/published-templates')return Response.json({items,count:items.length});
+    const id=String(url).match(/\/v(\d)\//)[1]; checked.push(Number(id));
+    return Number(id)<2 ? Response.json({error:{code:'LIBRARY_TIMEOUT'}},{status:504}) : Response.json({available:true});
+  });
+  await assert.rejects(fetchAvailableTemplates(new AbortController().signal,items=>updates.push(items)),/超时/);
+  assert.deepEqual(checked.sort(),[0,1,2,3]);
+  assert.deepEqual(updates.at(-1).map(item=>item.publicationId),['v2','v3']);
 });

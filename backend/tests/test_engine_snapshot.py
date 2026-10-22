@@ -3,6 +3,7 @@ import io
 import json
 import unittest
 import zipfile
+from unittest.mock import AsyncMock, patch
 
 import httpx
 from fastapi.testclient import TestClient
@@ -10,6 +11,8 @@ from fastapi.testclient import TestClient
 from backend.engine.template_core import TemplateDraft, lower_to_plan
 from backend.app.config import Settings
 from backend.app.main import create_app
+from backend.app.library import LibraryError, PublishedTemplate
+from backend.tests.test_preview import STL, metadata
 
 
 class EngineSnapshotTests(unittest.TestCase):
@@ -42,6 +45,8 @@ class EngineSnapshotTests(unittest.TestCase):
             "materialRequirements", "materialValidationSamples", "geometryRecipe", "featureRules",
             "interfaces", "evidence", "aiProposals",
         })
+        # Publication metadata is not a field of the CAD draft.
+        manifest["previewModel"] = {"file": "preview.stl", "format": "stl"}
         documents = {
             "manifest.json": manifest,
             "outputs.json": {"success": False, "artifacts": []},
@@ -59,6 +64,7 @@ class EngineSnapshotTests(unittest.TestCase):
             "evidence.json": {"items": [], "aiProposals": []},
             "admission.json": {"policy": draft.admission.model_dump()},
         }
+        documents.pop("outputs.json")
         stream = io.BytesIO()
         with zipfile.ZipFile(stream, "w", zipfile.ZIP_DEFLATED) as archive:
             for name, value in documents.items():
@@ -75,6 +81,9 @@ class EngineSnapshotTests(unittest.TestCase):
             return httpx.Response(404)
 
         with TestClient(create_app(Settings(api_url="http://parts.local", api_key="secret"), transport=httpx.MockTransport(upstream), dist_dir=None)) as client:
+            available = client.get(f"/api/published-templates/version-1/availability?sha256={digest}")
+            self.assertEqual(available.status_code, 200, available.text)
+            self.assertEqual(available.json(), {"available": True})
             info = client.get(f"/api/published-templates/version-1/reconstruction?sha256={digest}")
             self.assertEqual(info.status_code, 200, info.text)
             self.assertEqual(info.json()["parameters"][0]["id"], "length")
@@ -89,6 +98,90 @@ class EngineSnapshotTests(unittest.TestCase):
             self.assertNotEqual(small.headers["x-ruiware-sha256"], large.headers["x-ruiware-sha256"])
             rejected = client.post(f"/api/published-templates/version-1/reconstruction/model?sha256={digest}", json={"parameters": {"thickness": 99}})
             self.assertEqual(rejected.status_code, 422)
+            for broken in ("parameter", "recipe", "material", "missing_file"):
+                with self.subTest(broken=broken):
+                    invalid = json.loads(json.dumps(documents))
+                    if broken == "parameter":
+                        invalid["parameters.json"]["definitions"] = [p for p in invalid["parameters.json"]["definitions"] if p["id"] != "length"]
+                    elif broken == "recipe":
+                        invalid["geometry-recipe.json"]["operations"] = []
+                    elif broken == "material":
+                        invalid["material-validation.json"]["resolved"] = []
+                    else:
+                        invalid.pop("parameters.json")
+                    stream = io.BytesIO()
+                    with zipfile.ZipFile(stream, "w", zipfile.ZIP_DEFLATED) as archive:
+                        for name, value in invalid.items():
+                            archive.writestr(name, json.dumps(value))
+                    package_data = stream.getvalue()
+                    metadata.update(sha256=hashlib.sha256(package_data).hexdigest(), size=len(package_data))
+                    available = client.get(f"/api/published-templates/version-1/availability?sha256={metadata['sha256']}")
+                    self.assertEqual(available.status_code, 200, available.text)
+                    self.assertEqual(available.json(), {"available": False})
+
+
+class AvailabilityTests(unittest.TestCase):
+    def setUp(self):
+        self.publication = PublishedTemplate.model_validate(metadata(b"test-package"))
+        draft = TemplateDraft(id="draft-1", code="BEAM-1", name="test")
+        self.draft = draft.model_dump(mode="json")
+        self.record = patch("backend.app.reconstruction.read_publication", new_callable=AsyncMock).start()
+        self.record.return_value = self.publication
+        self.read = patch("backend.app.reconstruction._read_template", new_callable=AsyncMock).start()
+        self.read.return_value = self.publication, self.draft, {"record": {"thickness": 2}}
+        self.worker = patch("backend.app.reconstruction._run_worker", return_value=STL).start()
+        self.addCleanup(patch.stopall)
+        self.client = TestClient(create_app(Settings(), dist_dir=None))
+        self.client.__enter__()
+        self.addCleanup(self.client.__exit__, None, None, None)
+
+    def check(self):
+        return self.client.get(f"/api/published-templates/version-1/availability?sha256={self.publication.sha256}")
+
+    def test_success_and_failure_are_cached_per_package_hash(self):
+        self.assertEqual(self.check().json(), {"available": True})
+        self.assertEqual(self.check().json(), {"available": True})
+        self.assertEqual(self.worker.call_count, 1)
+        self.worker.side_effect = LibraryError(422, "PARAMETER_INVALID")
+        self.publication.sha256 = "b" * 64
+        self.assertEqual(self.check().json(), {"available": False})
+        self.assertEqual(self.check().json(), {"available": False})
+        self.assertEqual(self.worker.call_count, 2)
+
+    def test_missing_definitions_hidden_and_transient_connection_errors_retry(self):
+        self.read.side_effect = LibraryError(422, "PACKAGE_UNSUPPORTED")
+        self.assertEqual(self.check().json(), {"available": False})
+        self.worker.assert_not_called()
+        self.publication.sha256 = "c" * 64
+        self.read.side_effect = LibraryError(502, "LIBRARY_UNREACHABLE")
+        self.assertEqual(self.check().status_code, 502)
+        self.read.side_effect = None
+        self.assertEqual(self.check().json(), {"available": True})
+
+    def test_default_preview_reuses_checked_model_but_overrides_still_rebuild(self):
+        self.assertEqual(self.check().json(), {"available": True})
+        url = f"/api/published-templates/version-1/reconstruction/model?sha256={self.publication.sha256}"
+        result = self.client.post(url, json={"parameters": {}})
+        self.assertEqual(result.content, STL)
+        self.assertEqual(self.worker.call_count, 1)
+        # Browsers serialize a whole-valued float default as an integer.
+        result = self.client.post(url, json={"parameters": {"length": 1000}})
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(self.worker.call_count, 1)
+        self.client.post(url, json={"parameters": {"length": 120}})
+        self.assertEqual(self.worker.call_count, 2)
+
+    def test_unchanged_defaults_do_not_allow_protected_parameters_to_use_cache(self):
+        self.assertEqual(self.check().json(), {"available": True})
+        self.worker.side_effect = LibraryError(422, "PARAMETER_INVALID")
+        url = f"/api/published-templates/version-1/reconstruction/model?sha256={self.publication.sha256}"
+        self.assertEqual(self.client.post(url, json={"parameters": {"thickness": 2}}).status_code, 422)
+
+    def test_worker_service_failure_is_not_cached_as_template_rejection(self):
+        self.worker.side_effect = LibraryError(503, "MODEL_RECONSTRUCTION_FAILED")
+        self.assertEqual(self.check().status_code, 503)
+        self.worker.side_effect = None
+        self.assertEqual(self.check().json(), {"available": True})
 
 
 if __name__ == "__main__":

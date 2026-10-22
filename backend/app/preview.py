@@ -124,7 +124,7 @@ def read_package(data: bytes, publication: PublishedTemplate, *, require_model: 
                     raise ValueError("invalid document")
                 return body
 
-            manifest, outputs = document("manifest.json"), document("outputs.json")
+            manifest = document("manifest.json")
             if manifest.get("schemaVersion") != "3.0" or manifest.get("unitSystem") != "mm-kg-s" or manifest.get("coordinateSystem") != "right-handed-z-up":
                 raise LibraryError(422, "PACKAGE_UNSUPPORTED")
             if manifest.get("id") != publication.templateId or manifest.get("code") != publication.code:
@@ -135,6 +135,9 @@ def read_package(data: bytes, publication: PublishedTemplate, *, require_model: 
             interfaces = interfaces.get("interfaces")
             if any(not isinstance(items, list) or not all(isinstance(item, dict) for item in items) for items in [parameters, interfaces]):
                 raise ValueError("invalid definitions")
+            if not require_model:
+                return parameters, interfaces, None, None
+            outputs = document("outputs.json")
             artifacts = outputs.get("artifacts")
             if not isinstance(artifacts, list) or (require_model and outputs.get("success") is not True):
                 if not require_model:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import OrderedDict
 import hashlib
 import io
 import json
@@ -14,16 +15,44 @@ import zipfile
 from typing import Any
 
 from fastapi import APIRouter, Query, Request, Response
+import httpx
 from pydantic import ValidationError
 
 from .config import PROJECT_ROOT, Settings
 from .library import LibraryError, PublishedTemplate
-from .preview import MAX_DOWNLOAD_BYTES, MAX_JSON_BYTES, SHA256, download, read_package, read_publication
+from .preview import DOWNLOAD_TIMEOUT_SECONDS, MAX_CACHE_BYTES, MAX_DOWNLOAD_BYTES, MAX_JSON_BYTES, SHA256, download, read_package, read_publication
 
 
 ENGINE_ROOT = PROJECT_ROOT / "backend" / "engine"
 WORKER_TIMEOUT_SECONDS = 90
 MAX_REQUEST_BYTES = 64 * 1024
+
+
+class ReconstructionCache:
+    """Default models or confirmed package failures, bounded for this engine lifetime."""
+    def __init__(self):
+        self.entries: OrderedDict[tuple[str, str], bytes | bool] = OrderedDict()
+        self.size = 0
+
+    def get(self, publication: PublishedTemplate) -> bytes | bool | None:
+        key = publication.publicationId, publication.sha256.lower()
+        if key not in self.entries:
+            return None
+        self.entries.move_to_end(key)
+        return self.entries[key]
+
+    def put(self, publication: PublishedTemplate, model: bytes | bool):
+        key = publication.publicationId, publication.sha256.lower()
+        previous = self.entries.pop(key, False)
+        self.size -= len(previous) if isinstance(previous, bytes) else 0
+        weight = len(model) if isinstance(model, bytes) else 0
+        if weight > MAX_CACHE_BYTES:
+            return
+        while self.entries and (self.size + weight > MAX_CACHE_BYTES or len(self.entries) >= 1000):
+            _, removed = self.entries.popitem(last=False)
+            self.size -= len(removed) if isinstance(removed, bytes) else 0
+        self.entries[key] = model
+        self.size += weight
 
 
 def _package_documents(data: bytes, publication: PublishedTemplate) -> dict[str, dict[str, Any]]:
@@ -61,7 +90,9 @@ def _package_documents(data: bytes, publication: PublishedTemplate) -> dict[str,
 
 
 def _draft_and_material(documents: dict[str, dict[str, Any]]) -> tuple[dict[str, Any], dict[str, Any]]:
-    manifest = {key: value for key, value in documents["manifest"].items() if key != "reconstructionGuide"}
+    manifest = {key: value for key, value in documents["manifest"].items() if key not in {"reconstructionGuide", "previewModel"}}
+    if not documents["recipe"].get("operations"):
+        raise LibraryError(422, "PACKAGE_UNSUPPORTED")
     manifest.update(
         parameterDefinitions=documents["parameters"].get("definitions"),
         geometryRecipe=documents["recipe"],
@@ -86,6 +117,8 @@ def _draft_and_material(documents: dict[str, dict[str, Any]]) -> tuple[dict[str,
         raise LibraryError(422, "PACKAGE_UNSUPPORTED") from None
 
     resolved = documents["material"].get("resolved", [])
+    if not isinstance(resolved, list) or any(not isinstance(item, dict) for item in resolved):
+        raise LibraryError(422, "PACKAGE_UNSUPPORTED")
     preferred = next((item for item in draft.materialValidationSamples if item.role == "nominal"), None)
     preferred = preferred or next((item for item in draft.materialValidationSamples if item.requiredForAdmission), None)
     selected = next((item for item in resolved if preferred and item.get("sampleId") == preferred.id), None)
@@ -158,10 +191,14 @@ def _run_worker(draft_data: dict[str, Any], material: dict[str, Any], overrides:
             raise LibraryError(504, "MODEL_RECONSTRUCTION_FAILED") from None
         except OSError:
             raise LibraryError(503, "MODEL_RECONSTRUCTION_FAILED") from None
-        if result.returncode != 0 or not result_path.is_file():
+        if result.returncode == 2 and result_path.is_file():
             raise LibraryError(422, "MODEL_RECONSTRUCTION_FAILED") from None
+        if result.returncode != 0 or not result_path.is_file():
+            raise LibraryError(503, "MODEL_RECONSTRUCTION_FAILED") from None
         try:
             result_data = json.loads(result_path.read_text(encoding="utf-8"))
+            if result_data.get("success") is not True or result_data.get("metrics", {}).get("valid") is not True:
+                raise ValueError("invalid geometry")
             stl_path = output_path / result_data["inputHash"][:16] / "preview.stl"
             stl = stl_path.read_bytes()
         except (OSError, KeyError, ValueError, TypeError):
@@ -171,20 +208,49 @@ def _run_worker(draft_data: dict[str, Any], material: dict[str, Any], overrides:
         return stl
 
 
-async def _read_template(request: Request, publication_id: str, expected_hash: str | None):
+async def _read_template(request: Request, publication_id: str, expected_hash: str | None, *, publication: PublishedTemplate | None = None):
     client, settings = request.app.state.http, request.app.state.settings
-    publication = await read_publication(client, settings, publication_id, expected_hash)
-    if publication.size > MAX_DOWNLOAD_BYTES:
-        raise LibraryError(502, "PACKAGE_TOO_LARGE")
-    package = await download(client, settings, f"/api/public/v1/templates/{publication_id}/download", MAX_DOWNLOAD_BYTES)
-    if len(package) != publication.size or hashlib.sha256(package).hexdigest() != publication.sha256.lower():
-        raise LibraryError(502, "PACKAGE_INTEGRITY_ERROR")
+    try:
+        async with asyncio.timeout(DOWNLOAD_TIMEOUT_SECONDS):
+            publication = publication or await read_publication(client, settings, publication_id, expected_hash)
+            if publication.size > MAX_DOWNLOAD_BYTES:
+                raise LibraryError(502, "PACKAGE_TOO_LARGE")
+            package = await download(client, settings, f"/api/public/v1/templates/{publication_id}/download", MAX_DOWNLOAD_BYTES)
+            if len(package) != publication.size or hashlib.sha256(package).hexdigest() != publication.sha256.lower():
+                raise LibraryError(502, "PACKAGE_INTEGRITY_ERROR")
+    except (TimeoutError, httpx.TimeoutException):
+        raise LibraryError(504, "LIBRARY_TIMEOUT") from None
+    except httpx.RequestError:
+        raise LibraryError(502, "LIBRARY_UNREACHABLE") from None
     documents = await asyncio.to_thread(_package_documents, package, publication)
     draft, material = await asyncio.to_thread(_draft_and_material, documents)
     return publication, draft, material
 
 
 router = APIRouter(prefix="/api/published-templates", tags=["模板模型"])
+
+
+@router.get("/{publication_id}/availability", summary="检查固定发布版本是否可生成模型")
+async def template_availability(publication_id: str, request: Request, response: Response,
+                                sha256: str = Query(pattern=SHA256)):
+    publication = await read_publication(request.app.state.http, request.app.state.settings, publication_id, sha256)
+    cache = request.app.state.reconstruction_cache
+    async with request.app.state.reconstruction_slots:
+        cached = cache.get(publication)
+        if cached is None:
+            try:
+                _, draft, material = await _read_template(request, publication_id, sha256, publication=publication)
+                cached = await asyncio.to_thread(_run_worker, draft, material, {})
+            except LibraryError as error:
+                # Infrastructure failures are retryable; never remember them as bad templates.
+                package_error = error.code in {"PACKAGE_INVALID", "PACKAGE_TOO_LARGE"}
+                model_error = error.status == 422 and error.code in {"PACKAGE_UNSUPPORTED", "PARAMETER_INVALID", "MODEL_RECONSTRUCTION_FAILED"}
+                if not (package_error or model_error):
+                    raise
+                cached = False
+            cache.put(publication, cached)
+    response.headers["Cache-Control"] = "no-store"
+    return {"available": isinstance(cached, bytes) and bool(cached)}
 
 
 @router.get("/{publication_id}/reconstruction", summary="读取模板参数")
@@ -222,7 +288,12 @@ async def reconstruction_model(publication_id: str, request: Request, sha256: st
         raise LibraryError(422, "PARAMETER_INVALID")
     async with request.app.state.reconstruction_slots:
         publication, draft, material = await _read_template(request, publication_id, sha256)
-        stl = await asyncio.to_thread(_run_worker, draft, material, parameters)
+        defaults = {item["id"]: item["default"] for item in editable_parameters(draft)}
+        is_default = all(key in defaults and isinstance(value, bool) == isinstance(defaults[key], bool) and value == defaults[key] for key, value in parameters.items())
+        cached = request.app.state.reconstruction_cache.get(publication) if is_default else None
+        stl = cached if isinstance(cached, bytes) else await asyncio.to_thread(_run_worker, draft, material, parameters)
+        if is_default:
+            request.app.state.reconstruction_cache.put(publication, stl)
     return Response(stl, media_type="model/stl", headers={
         "Cache-Control": "no-store",
         "X-Content-Type-Options": "nosniff",
