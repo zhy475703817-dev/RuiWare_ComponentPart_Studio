@@ -22,6 +22,7 @@ function Wait-Ready([string]$Url, [System.Diagnostics.Process]$Process) {
 
 function Restart-UnhealthyBackend([int[]]$ListenerIds, [string]$PythonExe) {
     $roots = @()
+    $projectPythonPattern = '(?i)(?:^|\s)"?' + [regex]::Escape($PythonExe) + '"?(?=\s|$)'
     foreach ($listenerId in $ListenerIds) {
         $processId = $listenerId
         $root = $null
@@ -29,8 +30,11 @@ function Restart-UnhealthyBackend([int[]]$ListenerIds, [string]$PythonExe) {
         for ($depth = 0; $processId -gt 0 -and $depth -lt 16; $depth++) {
             $process = Get-CimInstance Win32_Process -Filter "ProcessId = $processId"
             if (-not $process) { break }
-            if ($process.ExecutablePath -eq $PythonExe -and
-                $process.CommandLine -match '(?:^|\s)-m\s+uvicorn\s+backend\.app\.main:app(?:\s|$)') {
+            $commandLine = [string]$process.CommandLine
+            $isProjectPython = $process.ExecutablePath -eq $PythonExe -or $commandLine -match $projectPythonPattern
+            $isComponentBackend = $commandLine -match '(?:^|\s)-m\s+uvicorn\s+backend\.app\.main:app(?:\s|$)' -and
+                $commandLine -match '(?:^|\s)--port\s+8020(?:\s|$)'
+            if ($isProjectPython -and $isComponentBackend) {
                 $root = $process.ProcessId
                 break
             }
