@@ -21,7 +21,7 @@ export function App() {
 
   function renderStage() {
     switch (stage) {
-      case "definition": return <DefinitionStage definition={document.definition} onChange={patch => dispatch({ type: "definition.patch", patch })}/>;
+      case "definition": return <DefinitionStage definition={document.definition} draftId={workspace.shared.draftId} onChange={patch => dispatch({ type: "definition.patch", patch })}/>;
       case "assembly": return <AssemblyStage mates={mates} onConnect={workspace.connectFirstInterfaces} onInherit={workspace.inheritInterface}/>;
       case "interfaces": return <InterfacesStage ports={document.ports} slots={document.slots}/>;
       case "parameters": return <ParametersStage parameters={document.parameters} bindings={document.bindings} onChange={(id, value) => dispatch({ type: "parameter.value", id, value })}/>;

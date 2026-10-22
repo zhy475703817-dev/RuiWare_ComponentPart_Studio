@@ -87,11 +87,41 @@ class ComponentRule(ComponentModel):
     expression: str
 
 
+ConnectionType = Literal["螺栓连接", "焊接", "卡扣连接", "插接", "铆接", "胶接", "自定义"]
+
+
+class EvidenceFile(ComponentModel):
+    id: str
+    fileName: str = Field(max_length=255)
+    mediaType: str = Field(max_length=255)
+    size: Annotated[int, Field(strict=True, ge=0, le=5 * 1024 * 1024)]
+    sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    dataUrl: str | None = Field(default=None, max_length=7_000_000)
+
+
 class ComponentDefinition(ComponentModel):
     name: str
     code: str
     category: str
     description: str
+    projectCode: str = ""
+    owner: str = ""
+    organization: str = ""
+    searchTags: list[str] = Field(default_factory=list, max_length=100)
+    partConnectionType: ConnectionType = "螺栓连接"
+    partConnectionCustom: str = ""
+    componentConnectionType: ConnectionType = "螺栓连接"
+    componentConnectionCustom: str = ""
+    designConstraints: str = ""
+    evidenceFiles: list[EvidenceFile] = Field(default_factory=list, max_length=10)
+
+    @model_validator(mode="after")
+    def validate_evidence_files(self):
+        if len({item.id for item in self.evidenceFiles}) != len(self.evidenceFiles):
+            raise ValueError("Evidence file IDs must be unique")
+        if sum(item.size for item in self.evidenceFiles) > 15 * 1024 * 1024:
+            raise ValueError("Evidence files exceed the 15 MB total limit")
+        return self
 
 
 class Assembly(ComponentModel):
@@ -128,6 +158,16 @@ class DefinitionPatch(PatchModel):
     code: str | None = None
     category: str | None = None
     description: str | None = None
+    projectCode: str | None = None
+    owner: str | None = None
+    organization: str | None = None
+    searchTags: list[str] | None = None
+    partConnectionType: ConnectionType | None = None
+    partConnectionCustom: str | None = None
+    componentConnectionType: ConnectionType | None = None
+    componentConnectionCustom: str | None = None
+    designConstraints: str | None = None
+    evidenceFiles: list[EvidenceFile] | None = None
 
 
 class MemberPatch(PatchModel):

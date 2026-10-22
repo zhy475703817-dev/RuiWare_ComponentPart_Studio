@@ -120,3 +120,23 @@ test('导出保留旧连接和接口字段，并附带可无歧义读取的结�
   assert.equal(result.stages.ports[0].sourceInterfaceId, 'face.left');
   assert.equal(result.stages.assembly.members[0].bindings.length, 2400);
 });
+
+test('定义阶段的项目元数据、两级连接说明、约束和证据引用会保存并导出', () => {
+  const original = createComponentDocument();
+  const evidenceFiles = [{ id: 'evidence-1', fileName: '连接示意.png', mediaType: 'image/png', size: 12, sha256: 'b'.repeat(64), dataUrl: 'data:image/png;base64,AA==' }];
+  const draft = componentReducer(original, { type: 'definition.patch', patch: {
+    projectCode: 'RACK-2026-001', owner: '张工', organization: '结构组', searchTags: ['货架', '横梁'],
+    partConnectionType: '自定义', partConnectionCustom: '零部件采用端板螺栓连接',
+    componentConnectionType: '卡扣连接', designConstraints: '横梁长度可调，端部需避开立柱加强筋', evidenceFiles,
+  } });
+  const exported = JSON.parse(serializeComponent(draft));
+  assert.equal(draft.definition.projectCode, 'RACK-2026-001');
+  assert.equal(draft.definition.code, '');
+  assert.equal(draft.definition.owner, '张工');
+  assert.equal(exported.stages.definition.organization, '结构组');
+  assert.deepEqual(exported.stages.definition.searchTags, ['货架', '横梁']);
+  assert.equal(exported.stages.definition.partConnectionCustom, '零部件采用端板螺栓连接');
+  assert.equal(exported.stages.definition.componentConnectionType, '卡扣连接');
+  assert.equal(exported.stages.definition.designConstraints, '横梁长度可调，端部需避开立柱加强筋');
+  assert.deepEqual(exported.stages.definition.evidenceFiles, evidenceFiles);
+});

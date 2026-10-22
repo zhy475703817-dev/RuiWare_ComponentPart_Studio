@@ -1,7 +1,10 @@
 from contextlib import closing
+import base64
 from datetime import datetime, timezone
+import hashlib
 import json
 from pathlib import Path
+import re
 import sqlite3
 from uuid import uuid4
 
@@ -29,6 +32,11 @@ class DraftRepository:
                 actor TEXT NOT NULL, created_at TEXT NOT NULL, items TEXT NOT NULL,
                 PRIMARY KEY (draft_id, revision)
             )""")
+            connection.execute("""CREATE TABLE IF NOT EXISTS component_draft_evidence (
+                draft_id TEXT NOT NULL, id TEXT NOT NULL, file_name TEXT NOT NULL,
+                media_type TEXT NOT NULL, size INTEGER NOT NULL, sha256 TEXT NOT NULL, content BLOB NOT NULL,
+                PRIMARY KEY (draft_id, id)
+            )""")
 
     def _connect(self):
         connection = sqlite3.connect(self.path, timeout=15)
@@ -46,6 +54,8 @@ class DraftRepository:
             document = ComponentDocument.model_validate(data)
         draft_id = str(uuid4())
         with closing(self._connect()) as connection, connection:
+            document = self._store_embedded_evidence(connection, draft_id, document)
+            self._require_evidence_content(connection, draft_id, document)
             connection.execute("INSERT INTO component_drafts VALUES (?, ?, ?, ?, ?)", (
                 draft_id, document.definition.name, document.revision, document.model_dump_json(by_alias=True), self._now(),
             ))
@@ -88,6 +98,8 @@ class DraftRepository:
                     raise ComponentError(409, code, self._envelope(connection, draft_id, document, expected_revision)) from error
                 raise
             if updated.revision != document.revision:
+                updated = self._store_embedded_evidence(connection, draft_id, updated)
+                self._require_evidence_content(connection, draft_id, updated)
                 now = self._now()
                 connection.execute("UPDATE component_drafts SET name = ?, revision = ?, document = ?, updated_at = ? WHERE id = ?", (
                     updated.definition.name, updated.revision, updated.model_dump_json(by_alias=True), now, draft_id,
@@ -96,9 +108,93 @@ class DraftRepository:
                 connection.execute("INSERT INTO component_draft_changes VALUES (?, ?, ?, ?, ?)", (
                     draft_id, updated.revision, actor, now, json.dumps(items, ensure_ascii=False),
                 ))
+                self._remove_unreferenced_evidence(connection, draft_id, updated)
             result = self._envelope(connection, draft_id, updated, expected_revision)
             result["reconciled"] = reconciled
             return result
+
+    def save_evidence(self, draft_id: str, evidence_id: str, file_name: str, media_type: str, content: bytes) -> dict:
+        if not re.fullmatch(r"[0-9a-f-]{36}", evidence_id) or len(file_name) > 255 or not file_name.strip():
+            raise ComponentError(422, "INVALID_EVIDENCE")
+        if len(content) > 5 * 1024 * 1024:
+            raise ComponentError(413, "EVIDENCE_TOO_LARGE")
+        with closing(self._connect()) as connection, connection:
+            connection.execute("BEGIN IMMEDIATE")
+            if connection.execute("SELECT 1 FROM component_drafts WHERE id = ?", (draft_id,)).fetchone() is None:
+                raise ComponentError(404, "DRAFT_NOT_FOUND")
+            prior = connection.execute("SELECT size FROM component_draft_evidence WHERE draft_id = ? AND id = ?", (draft_id, evidence_id)).fetchone()
+            total = connection.execute("SELECT COALESCE(SUM(size), 0) AS size FROM component_draft_evidence WHERE draft_id = ?", (draft_id,)).fetchone()["size"]
+            if total - (prior["size"] if prior else 0) + len(content) > 15 * 1024 * 1024:
+                raise ComponentError(413, "EVIDENCE_TOTAL_TOO_LARGE")
+            digest = hashlib.sha256(content).hexdigest()
+            connection.execute("""INSERT INTO component_draft_evidence VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(draft_id, id) DO UPDATE SET file_name=excluded.file_name,
+                media_type=excluded.media_type, size=excluded.size, sha256=excluded.sha256, content=excluded.content""",
+                (draft_id, evidence_id, file_name, media_type[:255] or "application/octet-stream", len(content), digest, content))
+        return {"id": evidence_id, "fileName": file_name, "mediaType": media_type[:255] or "application/octet-stream",
+                "size": len(content), "sha256": digest, "dataUrl": None}
+
+    def get_evidence(self, draft_id: str, evidence_id: str) -> dict:
+        with closing(self._connect()) as connection:
+            row = connection.execute("SELECT * FROM component_draft_evidence WHERE draft_id = ? AND id = ?", (draft_id, evidence_id)).fetchone()
+        if row is None:
+            raise ComponentError(404, "EVIDENCE_NOT_FOUND")
+        return {"id": row["id"], "fileName": row["file_name"], "mediaType": row["media_type"], "size": row["size"],
+                "sha256": row["sha256"], "content": bytes(row["content"])}
+
+    def delete_evidence(self, draft_id: str, evidence_id: str) -> None:
+        with closing(self._connect()) as connection, connection:
+            connection.execute("DELETE FROM component_draft_evidence WHERE draft_id = ? AND id = ?", (draft_id, evidence_id))
+
+    def export(self, draft_id: str) -> dict:
+        from .service import serialize_component
+
+        document = ComponentDocument.model_validate(self.get(draft_id)["document"])
+        result = serialize_component(document)
+        for evidence in result["stages"]["definition"]["evidenceFiles"]:
+            stored = self.get_evidence(draft_id, evidence["id"])
+            evidence["dataUrl"] = f"data:{stored['mediaType']};base64,{base64.b64encode(stored['content']).decode('ascii')}"
+        return result
+
+    @staticmethod
+    def _store_embedded_evidence(connection, draft_id: str, document: ComponentDocument) -> ComponentDocument:
+        data = document.model_dump(by_alias=True)
+        files = data["definition"]["evidenceFiles"]
+        for item in files:
+            data_url = item.get("dataUrl")
+            if not data_url:
+                continue
+            match = re.fullmatch(r"data:([^;,]+);base64,([A-Za-z0-9+/]*={0,2})", data_url)
+            if not match or match.group(1) != item["mediaType"]:
+                raise ComponentError(422, "INVALID_EVIDENCE")
+            try:
+                content = base64.b64decode(match.group(2), validate=True)
+            except ValueError as error:
+                raise ComponentError(422, "INVALID_EVIDENCE") from error
+            if (len(content) != item["size"] or len(content) > 5 * 1024 * 1024
+                    or hashlib.sha256(content).hexdigest() != item["sha256"]):
+                raise ComponentError(422, "INVALID_EVIDENCE")
+            connection.execute("""INSERT INTO component_draft_evidence VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(draft_id, id) DO UPDATE SET file_name=excluded.file_name,
+                media_type=excluded.media_type, size=excluded.size, sha256=excluded.sha256, content=excluded.content""",
+                (draft_id, item["id"], item["fileName"], item["mediaType"], len(content), item["sha256"], content))
+            item["dataUrl"] = None
+        clean = ComponentDocument.model_validate(data)
+        return clean
+
+    @staticmethod
+    def _require_evidence_content(connection, draft_id: str, document: ComponentDocument):
+        for item in document.definition.evidenceFiles:
+            if connection.execute("SELECT 1 FROM component_draft_evidence WHERE draft_id = ? AND id = ?", (draft_id, item.id)).fetchone() is None:
+                raise ComponentError(422, "EVIDENCE_CONTENT_MISSING")
+
+    @staticmethod
+    def _remove_unreferenced_evidence(connection, draft_id: str, document: ComponentDocument):
+        referenced = {item.id for item in document.definition.evidenceFiles}
+        rows = connection.execute("SELECT id FROM component_draft_evidence WHERE draft_id = ?", (draft_id,)).fetchall()
+        for row in rows:
+            if row["id"] not in referenced:
+                connection.execute("DELETE FROM component_draft_evidence WHERE draft_id = ? AND id = ?", (draft_id, row["id"]))
 
     @staticmethod
     def _envelope(connection, draft_id, document, after_revision):

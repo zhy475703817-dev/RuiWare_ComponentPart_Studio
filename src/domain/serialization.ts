@@ -8,7 +8,7 @@ export function serializeComponent(document: ComponentDocument): string {
     revision: document.revision, name: definition.name,
     unitSystem: document.unitSystem, coordinateSystem: document.coordinateSystem,
     stages: {
-      definition: { name: definition.name, code: definition.code, category: definition.category, description: definition.description },
+      definition: { ...definition },
       assembly: {
         members: assembly.members.map(member => ({
           memberId: member.id, partTemplateVersion: member.template.publicationId,

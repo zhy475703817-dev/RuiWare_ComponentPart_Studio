@@ -34,7 +34,24 @@ export type ComponentSlot = { id: string; name: string; memberId: string | null;
 export type ComponentParameter = { id: string; label: string; value: number | null; unit: string; min: number; max: number };
 export type ParameterBinding = { id: string; parameterId: string; memberId: string; memberParameterId: string };
 export type ComponentRule = { id: string; expression: string };
-export type ComponentDefinition = { name: string; code: string; category: string; description: string };
+export type ConnectionType = "螺栓连接" | "焊接" | "卡扣连接" | "插接" | "铆接" | "胶接" | "自定义";
+export type EvidenceFile = { id: string; fileName: string; mediaType: string; size: number; sha256: string; dataUrl?: string | null };
+export type ComponentDefinition = {
+  name: string;
+  code: string;
+  category: string;
+  description: string;
+  projectCode: string;
+  owner: string;
+  organization: string;
+  searchTags: string[];
+  partConnectionType: ConnectionType;
+  partConnectionCustom: string;
+  componentConnectionType: ConnectionType;
+  componentConnectionCustom: string;
+  designConstraints: string;
+  evidenceFiles: EvidenceFile[];
+};
 
 export type ComponentDocument = {
   schemaVersion: "component-1.0";
@@ -55,7 +72,13 @@ export function createComponentDocument(): ComponentDocument {
   return {
     schemaVersion: "component-1.0", templateKind: "component", revision: 1,
     unitSystem: "mm-kg-s", coordinateSystem: "right-handed-z-up",
-    definition: { name: "横梁组件", code: "", category: "货架组件", description: "由多个已发布零部件组成的可复用组件模板" },
+    definition: {
+      name: "横梁组件", code: "", category: "货架组件", description: "由多个已发布零部件组成的可复用组件模板",
+      projectCode: "", owner: "", organization: "", searchTags: [],
+      partConnectionType: "螺栓连接", partConnectionCustom: "",
+      componentConnectionType: "螺栓连接", componentConnectionCustom: "",
+      designConstraints: "", evidenceFiles: [],
+    },
     assembly: { members: [], mates: [] }, ports: [], slots: [], bindings: [],
     parameters: [{ id: "componentLength", label: "组件总长", value: 2400, unit: "mm", min: 1000, max: 6000 }],
     rules: [{ id: "rule-1", expression: "组件总长必须在 1000~6000 mm 范围内" }],

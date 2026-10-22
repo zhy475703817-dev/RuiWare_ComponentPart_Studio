@@ -4,7 +4,6 @@ from mcp.types import CallToolResult, ToolAnnotations
 from pydantic import Field
 
 from ..components.models import ComponentAction, ComponentDocument, DefinitionPatch, MemberPatch
-from ..components.service import serialize_component
 
 
 Revision = Annotated[int, Field(strict=True, ge=1)]
@@ -96,6 +95,5 @@ def register(mcp, app, invoke):
     async def component_export_draft(draftId: str) -> CallToolResult:
         """导出兼容 component-1.0 的草稿 JSON，包含验证结果；导出不会正式发布。"""
         def export():
-            draft = app.state.drafts.get(draftId)
-            return serialize_component(ComponentDocument.model_validate(draft["document"]))
+            return app.state.drafts.export(draftId)
         return await invoke(export)
