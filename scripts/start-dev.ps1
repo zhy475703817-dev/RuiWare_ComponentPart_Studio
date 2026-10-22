@@ -20,9 +20,12 @@ function Wait-Ready([string]$Url, [System.Diagnostics.Process]$Process) {
     throw "Service did not become ready: $Url. Check logs in $runtimeDir"
 }
 
-function Restart-UnhealthyBackend([int[]]$ListenerIds, [string]$PythonExe) {
+function Restart-UnhealthyBackend([int[]]$ListenerIds, [string]$ProjectRoot) {
     $roots = @()
-    $projectPythonPattern = '(?i)(?:^|\s)"?' + [regex]::Escape($PythonExe) + '"?(?=\s|$)'
+    $knownProjectRoots = @(
+        $ProjectRoot.TrimEnd('\'),
+        (Join-Path (Split-Path -Parent $ProjectRoot) 'RuiWare_ComponentPart_Studio-master').TrimEnd('\')
+    )
     foreach ($listenerId in $ListenerIds) {
         $processId = $listenerId
         $root = $null
@@ -31,12 +34,24 @@ function Restart-UnhealthyBackend([int[]]$ListenerIds, [string]$PythonExe) {
             $process = Get-CimInstance Win32_Process -Filter "ProcessId = $processId"
             if (-not $process) { break }
             $commandLine = [string]$process.CommandLine
-            $isProjectPython = $process.ExecutablePath -eq $PythonExe -or $commandLine -match $projectPythonPattern
-            $isComponentBackend = $commandLine -match '(?:^|\s)-m\s+uvicorn\s+backend\.app\.main:app(?:\s|$)' -and
-                $commandLine -match '(?:^|\s)--port\s+8020(?:\s|$)'
-            if ($isProjectPython -and $isComponentBackend) {
+            # A venv process may report the base Python executable. Match the
+            # platform launch signature and a known checkout path before stopping it.
+            $isComponentBackend = $commandLine -match '(?i)(?:^|\s)-m\s+uvicorn\s+backend\.app\.main:app(?:\s|$)' -and
+                $commandLine -match '(?i)(?:^|\s)--host\s+127\.0\.0\.1(?:\s|$)' -and
+                $commandLine -match '(?i)(?:^|\s)--port\s+8020(?:\s|$)' -and
+                $commandLine -match '(?i)(?:^|\s)--reload(?:\s|$)' -and
+                $commandLine -match '(?i)(?:^|\s)--reload-dir(?:\s|=)'
+            $isKnownCheckout = $false
+            foreach ($knownRoot in $knownProjectRoots) {
+                if ($commandLine.IndexOf($knownRoot, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+                    $isKnownCheckout = $true
+                    break
+                }
+            }
+            if ($isComponentBackend -and $isKnownCheckout) {
+                # The reload worker and supervisor can expose the same command line.
+                # Keep walking so taskkill targets the supervisor and its full tree.
                 $root = $process.ProcessId
-                break
             }
             $processId = $process.ParentProcessId
         }
@@ -88,9 +103,10 @@ try {
     if ($health.service -ne 'component-template-api') {
         $listeners = @(Get-NetTCPConnection -LocalPort 8020 -State Listen -ErrorAction SilentlyContinue)
         if ($listeners.Count -gt 0) {
-            Restart-UnhealthyBackend -ListenerIds @($listeners.OwningProcess | Select-Object -Unique) -PythonExe $pythonExe
+            Restart-UnhealthyBackend -ListenerIds @($listeners.OwningProcess | Select-Object -Unique) -ProjectRoot $projectRoot
         }
-        $api = Start-Process -FilePath $pythonExe -ArgumentList @('-m', 'uvicorn', 'backend.app.main:app', '--host', '127.0.0.1', '--port', '8020', '--reload', '--reload-dir', 'backend') -WorkingDirectory $projectRoot -WindowStyle Hidden -RedirectStandardOutput (Join-Path $runtimeDir 'backend.out.log') -RedirectStandardError (Join-Path $runtimeDir 'backend.err.log') -PassThru
+        $backendDir = Join-Path $projectRoot 'backend'
+        $api = Start-Process -FilePath $pythonExe -ArgumentList @('-m', 'uvicorn', 'backend.app.main:app', '--host', '127.0.0.1', '--port', '8020', '--reload', '--reload-dir', $backendDir) -WorkingDirectory $projectRoot -WindowStyle Hidden -RedirectStandardOutput (Join-Path $runtimeDir 'backend.out.log') -RedirectStandardError (Join-Path $runtimeDir 'backend.err.log') -PassThru
         $startedProcesses += $api
         Wait-Ready $healthUrl $api
         if ((Get-JsonResponse $healthUrl).service -ne 'component-template-api') { throw 'Backend health identity is invalid.' }
