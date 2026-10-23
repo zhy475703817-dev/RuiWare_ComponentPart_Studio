@@ -15,6 +15,7 @@ function PreviewScene({ geometry }: { geometry: BufferGeometry | null }) {
   const radius = geometry?.boundingSphere?.radius || 8;
   const center = geometry?.boundingSphere?.center || new Vector3();
   const section = 10 ** Math.floor(Math.log10(radius));
+  const maxDistance = radius * 100;
 
   useEffect(() => {
     const viewCamera = camera as PerspectiveCamera;
@@ -35,9 +36,10 @@ function PreviewScene({ geometry }: { geometry: BufferGeometry | null }) {
   }, [geometry, camera, size.width, size.height]);
 
   return <>
-    <Grid key={section} args={[section * 40, section * 40]} position={[center.x, center.y, geometry?.boundingBox?.min.z || 0]} rotation={[Math.PI / 2, 0, 0]} cellSize={section / 5} cellThickness={.5} sectionSize={section} sectionThickness={1}/>
+    {/* Keep the floor visible beneath the model throughout the permitted zoom range. */}
+    <Grid key={section} args={[section * 40, section * 40]} position={[center.x, center.y, geometry?.boundingBox?.min.z || 0]} rotation={[Math.PI / 2, 0, 0]} cellSize={section / 5} cellThickness={.5} sectionSize={section} sectionThickness={1} fadeDistance={maxDistance * 2} cellColor="#c0c8d0" sectionColor="#8da6be" side={DoubleSide}/>
     {geometry && <mesh><primitive object={geometry} attach="geometry" dispose={null}/><meshStandardMaterial color="#7394b0" metalness={.18} roughness={.55} side={DoubleSide}/></mesh>}
-    <OrbitControls ref={controls} makeDefault minDistance={radius / 100} maxDistance={radius * 100}/>
+    <OrbitControls ref={controls} makeDefault minDistance={radius / 100} maxDistance={maxDistance}/>
   </>;
 }
 
