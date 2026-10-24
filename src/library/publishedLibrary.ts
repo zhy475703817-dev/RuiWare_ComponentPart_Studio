@@ -124,3 +124,26 @@ export async function fetchReusableTemplates(signal: AbortSignal, onUpdate: (ite
   for (const outcome of outcomes) if (outcome.status === "rejected") throw outcome.reason;
   return merged();
 }
+
+export type CachedLibrary = {
+  items: PublishedTemplate[]; updateCount: number; initialized: boolean;
+  syncing: boolean; checkedAt: number | null; error: string;
+};
+
+export async function readCachedLibrary(signal: AbortSignal, action?: "sync" | "apply"): Promise<CachedLibrary> {
+  const response = await fetch(`/api/template-library${action ? `/${action}` : ""}`, {
+    method: action ? "POST" : "GET", signal, cache: "no-store", headers: { Accept: "application/json" },
+  });
+  let body: unknown;
+  try { body = await response.json(); } catch { throw new Error(errorMessages.LIBRARY_INVALID_RESPONSE); }
+  if (!response.ok) throw new Error("暂时无法读取模板列表，请稍后重试。");
+  if (!isRecord(body) || typeof body.initialized !== "boolean" || typeof body.syncing !== "boolean" ||
+    typeof body.updateCount !== "number" || !Number.isSafeInteger(body.updateCount) || body.updateCount < 0 ||
+    !(body.checkedAt === null || typeof body.checkedAt === "number" && Number.isFinite(body.checkedAt)) ||
+    !Array.isArray(body.errors) || body.errors.some(code => typeof code !== "string")) throw new Error(errorMessages.LIBRARY_INVALID_RESPONSE);
+  const items = parsePublishedTemplates(body);
+  return { items, initialized: body.initialized, syncing: body.syncing, updateCount: body.updateCount,
+    checkedAt: body.checkedAt as number | null,
+    error: [...new Set(body.errors.map(code => errorMessages[String(code)] || "暂时无法检查模板更新，请稍后重试。"))].join(" "),
+  };
+}

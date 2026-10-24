@@ -18,6 +18,8 @@ src/viewport/ComponentViewport.tsx 真实 STL 展示、相机适配、网格和�
 src/styles/workspace.css         工作台样式
 backend/app/config.py             后端环境配置，密钥仅留在 Python
 backend/app/library.py            发布库响应模型、只读调用和 API 路由
+backend/app/library_cache.py      SQLite 发布包、默认模型和活动/待应用列表快照
+backend/app/library_sync.py       后台增量同步、模型准入及缓存列表 API
 backend/app/preview.py            包下载校验、安全 ZIP 读取、模型缓存和预览路由
 backend/app/main.py               FastAPI 入口、生命周期、健康检查、静态页面
 backend/app/components/           共享工程模型、编辑/验证/导出、SQLite 修订事务、REST

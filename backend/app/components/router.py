@@ -17,12 +17,21 @@ def list_publications(request: Request):
 
 @publication_router.get("/{publication_id}")
 def publication(request: Request, publication_id: str):
+    cached = request.app.state.library_cache.publication(publication_id, kind='component')
+    if cached:
+        payload = request.app.state.library_cache.package(cached)
+        if payload is not None:
+            return JSONResponse(request.app.state.publications._parse_package(payload, cached.model_dump(exclude_unset=True)), headers={"Cache-Control": "no-store"})
     return JSONResponse(request.app.state.publications.detail(publication_id), headers={"Cache-Control": "no-store"})
 
 
 @publication_router.get("/{publication_id}/download")
 def publication_download(request: Request, publication_id: str):
-    return Response(request.app.state.publications.package(publication_id), media_type="application/octet-stream", headers={
+    cached = request.app.state.library_cache.publication(publication_id, kind='component')
+    payload = request.app.state.library_cache.package(cached) if cached else None
+    if payload is None:
+        payload = request.app.state.publications.package(publication_id)
+    return Response(payload, media_type="application/octet-stream", headers={
         "Content-Disposition": f'attachment; filename="{publication_id}.rwpart"', "Cache-Control": "no-store",
     })
 

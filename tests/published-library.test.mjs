@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
 import test from 'node:test';
-import { fetchAvailableTemplates, fetchPublishedTemplates, fetchReusableTemplates, parsePublishedTemplates } from '../src/library/publishedLibrary.ts';
+import { fetchAvailableTemplates, fetchPublishedTemplates, fetchReusableTemplates, parsePublishedTemplates, readCachedLibrary } from '../src/library/publishedLibrary.ts';
 import { componentPublicationMember } from '../src/library/componentPublications.ts';
 import { createComponentDocument } from '../src/domain/component.ts';
 
@@ -12,6 +12,27 @@ const publication = {
   sha256: 'a'.repeat(64), size: 1024,
   downloadUrl: '/api/public/v1/templates/version-1/download',
 };
+
+test('本地发布库只读取快照，检查更新和应用更新使用明确的操作', async t => {
+  const calls = [];
+  const snapshot = {items:[publication],count:1,updateCount:2,initialized:true,syncing:true,checkedAt:1792800000,errors:[]};
+  t.mock.method(globalThis,'fetch', async (url, options) => {
+    calls.push([url,options.method || 'GET']);
+    return Response.json(snapshot);
+  });
+  const signal = new AbortController().signal;
+  const result = await readCachedLibrary(signal);
+  assert.equal(result.items[0].publicationId,'version-1');
+  assert.equal(result.updateCount,2);
+  await readCachedLibrary(signal,'sync');
+  await readCachedLibrary(signal,'apply');
+  assert.deepEqual(calls,[['/api/template-library','GET'],['/api/template-library/sync','POST'],['/api/template-library/apply','POST']]);
+  snapshot.errors = ['LIBRARY_UNREACHABLE','private-debug-information'];
+  assert.ok((await readCachedLibrary(signal)).error.includes('无法连接零部件平台'));
+  assert.ok(!(await readCachedLibrary(signal)).error.includes('private-debug-information'));
+  snapshot.updateCount=-1;
+  await assert.rejects(readCachedLibrary(signal),/数据格式不正确/);
+});
 
 test('保留不同发布版本并按发布时间排序', () => {
   const items = parsePublishedTemplates({ items: [publication, {

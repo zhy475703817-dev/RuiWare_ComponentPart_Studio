@@ -210,12 +210,15 @@ def _run_worker(draft_data: dict[str, Any], material: dict[str, Any], overrides:
 
 async def _read_template(request: Request, publication_id: str, expected_hash: str | None, *, publication: PublishedTemplate | None = None):
     client, settings = request.app.state.http, request.app.state.settings
+    store = request.app.state.library_cache
     try:
         async with asyncio.timeout(DOWNLOAD_TIMEOUT_SECONDS):
-            publication = publication or await read_publication(client, settings, publication_id, expected_hash)
+            publication = publication or store.publication(publication_id, expected_hash) or await read_publication(client, settings, publication_id, expected_hash)
             if publication.size > MAX_DOWNLOAD_BYTES:
                 raise LibraryError(502, "PACKAGE_TOO_LARGE")
-            package = await download(client, settings, f"/api/public/v1/templates/{publication_id}/download", MAX_DOWNLOAD_BYTES)
+            package = store.package(publication)
+            if package is None:
+                package = await download(client, settings, f"/api/public/v1/templates/{publication_id}/download", MAX_DOWNLOAD_BYTES)
             if len(package) != publication.size or hashlib.sha256(package).hexdigest() != publication.sha256.lower():
                 raise LibraryError(502, "PACKAGE_INTEGRITY_ERROR")
     except (TimeoutError, httpx.TimeoutException):
@@ -230,25 +233,35 @@ async def _read_template(request: Request, publication_id: str, expected_hash: s
 router = APIRouter(prefix="/api/published-templates", tags=["模板模型"])
 
 
+def confirmed_unavailable(error: LibraryError) -> bool:
+    package_error = error.code in {"PACKAGE_INVALID", "PACKAGE_TOO_LARGE"}
+    model_error = error.status == 422 and error.code in {"PACKAGE_UNSUPPORTED", "PARAMETER_INVALID", "MODEL_RECONSTRUCTION_FAILED"}
+    return package_error or model_error
+
+
 @router.get("/{publication_id}/availability", summary="检查固定发布版本是否可生成模型")
 async def template_availability(publication_id: str, request: Request, response: Response,
                                 sha256: str = Query(pattern=SHA256)):
-    publication = await read_publication(request.app.state.http, request.app.state.settings, publication_id, sha256)
+    store = request.app.state.library_cache
+    local = store.publication(publication_id, sha256)
+    publication = local or await read_publication(request.app.state.http, request.app.state.settings, publication_id, sha256)
     cache = request.app.state.reconstruction_cache
     async with request.app.state.reconstruction_slots:
         cached = cache.get(publication)
+        if cached is None and local:
+            cached = store.model(publication)
         if cached is None:
             try:
                 _, draft, material = await _read_template(request, publication_id, sha256, publication=publication)
                 cached = await asyncio.to_thread(_run_worker, draft, material, {})
             except LibraryError as error:
                 # Infrastructure failures are retryable; never remember them as bad templates.
-                package_error = error.code in {"PACKAGE_INVALID", "PACKAGE_TOO_LARGE"}
-                model_error = error.status == 422 and error.code in {"PACKAGE_UNSUPPORTED", "PARAMETER_INVALID", "MODEL_RECONSTRUCTION_FAILED"}
-                if not (package_error or model_error):
+                if not confirmed_unavailable(error):
                     raise
                 cached = False
             cache.put(publication, cached)
+            if local:
+                store.save_model(publication, cached)
     response.headers["Cache-Control"] = "no-store"
     return {"available": isinstance(cached, bytes) and bool(cached)}
 
@@ -291,9 +304,15 @@ async def reconstruction_model(publication_id: str, request: Request, sha256: st
         defaults = {item["id"]: item["default"] for item in editable_parameters(draft)}
         is_default = all(key in defaults and isinstance(value, bool) == isinstance(defaults[key], bool) and value == defaults[key] for key, value in parameters.items())
         cached = request.app.state.reconstruction_cache.get(publication) if is_default else None
+        store = request.app.state.library_cache
+        local = store.publication(publication_id, sha256)
+        if is_default and cached is None and local:
+            cached = store.model(publication)
         stl = cached if isinstance(cached, bytes) else await asyncio.to_thread(_run_worker, draft, material, parameters)
         if is_default:
             request.app.state.reconstruction_cache.put(publication, stl)
+            if local:
+                store.save_model(publication, stl)
     return Response(stl, media_type="model/stl", headers={
         "Cache-Control": "no-store",
         "X-Content-Type-Options": "nosniff",

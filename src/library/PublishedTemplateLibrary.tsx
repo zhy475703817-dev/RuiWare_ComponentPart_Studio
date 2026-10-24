@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import { AlertTriangle, Boxes, Plus, RefreshCw, Search } from "lucide-react";
-import { fetchReusableTemplates, publicationKey } from "./publishedLibrary";
+import { readCachedLibrary, publicationKey } from "./publishedLibrary";
 import type { PublishedTemplate } from "./publishedLibrary";
 
 const formatDate = (value: string) => new Date(value).toLocaleString("zh-CN", { hour12: false });
@@ -21,30 +21,50 @@ export function PublishedTemplateLibrary({ onPreview, onAdd, memberPublicationId
   const [error, setError] = useState("");
   const [updatedAt, setUpdatedAt] = useState("");
   const [query, setQuery] = useState("");
+  const [updateCount, setUpdateCount] = useState(0);
+  const [initialized, setInitialized] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const request = useRef<AbortController | null>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const applyAfterCheck = useRef(false);
 
-  async function refresh() {
+  async function refresh(action?: "sync" | "apply") {
+    if (timer.current) clearTimeout(timer.current);
     request.current?.abort();
     const controller = new AbortController();
     request.current = controller;
-    setLoading(true);
-    setError("");
+    if (action === "sync") applyAfterCheck.current = true;
+    let syncing = false;
     try {
-      const result = await fetchReusableTemplates(controller.signal, available => {
-        if (!controller.signal.aborted) setItems(available);
-      });
+      let result = await readCachedLibrary(controller.signal, action);
+      if (!result.syncing && applyAfterCheck.current) {
+        if (result.updateCount) result = await readCachedLibrary(controller.signal, "apply");
+        applyAfterCheck.current = false;
+      }
       if (controller.signal.aborted) return;
-      setItems(result);
-      setUpdatedAt(new Date().toISOString());
+      setItems(result.items);
+      setUpdateCount(result.updateCount);
+      setInitialized(result.initialized);
+      setError(result.error);
+      setUpdatedAt(result.checkedAt === null ? "" : new Date(result.checkedAt * 1000).toISOString());
+      syncing = result.syncing;
     } catch (cause) {
       if (!controller.signal.aborted) setError(cause instanceof TypeError ? "无法连接组件平台服务，请检查服务是否运行后重试。" : cause instanceof Error ? cause.message : "读取发布库失败，请重试。");
     } finally {
-      if (!controller.signal.aborted) setLoading(false);
+      if (!controller.signal.aborted) {
+        setLoading(syncing);
+        timer.current = setTimeout(() => void refresh(), syncing ? 1000 : 15000);
+      }
     }
   }
 
-  useEffect(() => { void refresh(); return () => request.current?.abort(); }, [refreshToken]);
+  useEffect(() => {
+    void refresh(refreshToken > 0 ? "sync" : undefined);
+    return () => {
+      request.current?.abort();
+      if (timer.current) clearTimeout(timer.current);
+    };
+  }, [refreshToken]);
   useEffect(() => setSelectedId(null), [selectionResetToken]);
 
   const term = query.trim().toLocaleLowerCase();
@@ -53,12 +73,13 @@ export function PublishedTemplateLibrary({ onPreview, onAdd, memberPublicationId
   const alreadyAdded = (item: PublishedTemplate) => memberPublicationIds.includes(item.publicationId);
 
   return <section className="published-library" aria-label="已发布模板库">
-    <div className="panel-title"><span><Boxes size={16}/>已发布模板</span><div className="library-actions"><small>{updatedAt || items.length ? items.length : "—"}</small><button className="library-refresh" onClick={() => void refresh()} disabled={loading} aria-label={error ? "重试读取发布库" : "刷新发布库"} title="刷新发布库"><RefreshCw size={14} className={loading ? "spinning" : ""}/></button></div></div>
+    <div className="panel-title"><span><Boxes size={16}/>已发布模板</span><div className="library-actions"><small>{initialized || items.length ? items.length : "—"}</small><button className="library-refresh" onClick={() => void refresh("sync")} disabled={loading} aria-label={error ? "重试读取发布库" : "刷新发布库"} title="刷新发布库"><RefreshCw size={14} className={loading ? "spinning" : ""}/></button></div></div>
     <p className="hint">零部件与组件 · 点击查看版本，或加入当前组件</p>
     <label className="library-search"><Search size={14}/><input aria-label="搜索模板名称或编码" placeholder="搜索名称或编码" value={query} onChange={event => setQuery(event.target.value)}/></label>
-    <div className="library-status" role="status" aria-live="polite">{loading ? "正在读取发布库…" : updatedAt ? `上次读取：${formatDate(updatedAt)}` : "尚未连接发布库"}</div>
-    {error && <div className="library-error" role="alert"><AlertTriangle size={15}/><div><b>发布库暂未完整加载</b><p>{error}</p><button className="ghost" onClick={() => void refresh()} disabled={loading}>重试</button></div></div>}
-    {!loading && !error && updatedAt && items.length === 0 && <p className="library-empty">暂无可用模板。</p>}
+    <div className="library-status" role="status" aria-live="polite">{loading ? initialized || items.length ? "正在检查模板更新…" : "正在准备模板…" : updatedAt ? `上次检查：${formatDate(updatedAt)}` : "尚未连接发布库"}</div>
+    {updateCount > 0 && <div className="library-update" role="status"><span>发现 {updateCount} 项模板更新</span><button className="ghost" onClick={() => void refresh("apply")}>更新列表</button></div>}
+    {error && <div className="library-error" role="alert"><AlertTriangle size={15}/><div><b>{items.length ? "暂时无法检查模板更新" : "发布库暂未完整加载"}</b><p>{error}</p><button className="ghost" onClick={() => void refresh("sync")} disabled={loading}>重试</button></div></div>}
+    {!loading && !error && initialized && items.length === 0 && <p className="library-empty">暂无可用模板。</p>}
     {!loading && items.length > 0 && visible.length === 0 && <p className="library-empty">没有匹配的模板，请调整搜索内容。</p>}
     <div aria-busy={loading}>{visible.map(item => <Fragment key={publicationKey(item)}>
       <div className="publication-card-row">

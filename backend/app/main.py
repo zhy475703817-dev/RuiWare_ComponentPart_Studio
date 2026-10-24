@@ -15,6 +15,8 @@ from .components.publications import ComponentPublications
 from .components.router import router as draft_router, publication_router
 from .components.service import ComponentError
 from .library import LibraryError, router
+from .library_cache import LibraryCache
+from .library_sync import LibrarySync, router as cached_library_router
 from .preview import PreviewCache, router as preview_router
 from .reconstruction import ReconstructionCache, router as reconstruction_router
 from .mcp.server import MCPAccess, create_mcp
@@ -42,10 +44,15 @@ def create_app(
         app.state.reconstruction_cache = ReconstructionCache()
         app.state.drafts = DraftRepository(draft_db or resolved_settings.draft_db)
         app.state.publications = ComponentPublications(app.state.drafts, resolved_settings.minio)
+        app.state.library_cache = LibraryCache(draft_db or resolved_settings.draft_db, resolved_settings)
+        app.state.library_sync = LibrarySync(app)
         async with httpx.AsyncClient(timeout=10, follow_redirects=False, trust_env=False, transport=transport) as client:
             app.state.http = client
             async with mcp.session_manager.run():
-                yield
+                try:
+                    yield
+                finally:
+                    await app.state.library_sync.close()
 
     app = FastAPI(title="组件模板平台 API", version="0.1.0", lifespan=lifespan)
     mcp = create_mcp(app, resolved_settings.public_base_url)
@@ -64,6 +71,7 @@ def create_app(
         return HealthResponse()
 
     app.include_router(router)
+    app.include_router(cached_library_router)
     app.include_router(preview_router)
     app.include_router(reconstruction_router)
     app.include_router(draft_router)
