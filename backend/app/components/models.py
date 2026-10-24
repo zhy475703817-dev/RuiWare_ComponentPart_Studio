@@ -1,6 +1,6 @@
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_serializer, model_validator
 
 
 Number = Annotated[float, Field(strict=True, allow_inf_nan=False)]
@@ -14,10 +14,18 @@ class ComponentModel(BaseModel):
 
 
 class PartTemplateReference(ComponentModel):
+    templateKind: Literal["part", "component"] = "part"
     publicationId: str
     templateId: str
     version: int
     sha256: str
+
+    @model_serializer(mode="wrap")
+    def keep_legacy_reference(self, handler):
+        data = handler(self)
+        if "templateKind" not in self.model_fields_set:
+            data.pop("templateKind", None)
+        return data
 
 
 class PartInterface(ComponentModel):
@@ -240,3 +248,7 @@ class ActionRequest(ComponentModel):
 class CreateDraftRequest(ComponentModel):
     name: str | None = None
     document: ComponentDocument | None = None
+
+
+class PublishRequest(ComponentModel):
+    expectedRevision: Revision

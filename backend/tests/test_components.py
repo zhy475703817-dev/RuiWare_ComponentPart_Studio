@@ -1,14 +1,18 @@
 import json
+import hashlib
+from io import BytesIO
 import os
 from pathlib import Path
 import subprocess
 from tempfile import TemporaryDirectory
 import unittest
+from zipfile import ZipFile
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
 from backend.app.main import create_app
+from backend.tests.storage_helpers import MemoryMinio, STORAGE_ENV
 
 
 def member(identifier):
@@ -28,9 +32,12 @@ class ComponentTests(unittest.TestCase):
     def setUp(self):
         self.directory = TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
-        self.environment = patch.dict(os.environ, {"COMPONENT_DRAFT_DB": str(Path(self.directory.name) / "drafts.sqlite3")})
+        self.environment = patch.dict(os.environ, {**STORAGE_ENV, "COMPONENT_DRAFT_DB": str(Path(self.directory.name) / "drafts.sqlite3")})
         self.environment.start()
         self.addCleanup(self.environment.stop)
+        storage = patch('minio.Minio', return_value=MemoryMinio())
+        storage.start()
+        self.addCleanup(storage.stop)
 
     def create(self, client, **body):
         response = client.post("/api/component-drafts", json=body)
@@ -218,6 +225,80 @@ console.log(JSON.stringify({document:result,checks:validateComponent(result),exp
         self.assertEqual(len(errors), 1)
         self.assertEqual(errors[0].code, "REVISION_CONFLICT")
         self.assertEqual(first.get(draft["draftId"])["document"]["revision"], 2)
+
+    def test_publish_snapshot_reuse_and_republish_as_immutable_versions(self):
+        with TestClient(create_app(dist_dir=None)) as client:
+            first = self.create(client, name="底座组件")
+            first_publish = client.post(f"/api/component-drafts/{first['draftId']}/publish", json={"expectedRevision": 1})
+            self.assertEqual(first_publish.status_code, 200, first_publish.text)
+            published = first_publish.json()
+            self.assertEqual(published["version"], 1)
+            self.assertEqual(published["checks"][-2]["status"], "pending")
+            retry = client.post(f"/api/component-drafts/{first['draftId']}/publish", json={"expectedRevision": 1})
+            self.assertEqual(retry.json(), published)
+            self.assertEqual(client.get("/api/published-components").json()["count"], 1)
+            package = client.get(published["downloadUrl"])
+            self.assertEqual(hashlib.sha256(package.content).hexdigest(), published["sha256"])
+            self.assertEqual(len(package.content), published["size"])
+            with ZipFile(BytesIO(package.content)) as archive:
+                self.assertEqual(set(archive.namelist()), {"manifest.json", "component.json", "checks.json"})
+                self.assertEqual(json.loads(archive.read("component.json")), published["document"])
+                self.assertEqual(json.loads(archive.read("checks.json")), published["checks"])
+
+            second = self.create(client, name="设备组件")
+            component_member = member("base.instance")
+            component_member["template"] = {
+                "templateKind": "component", "publicationId": published["publicationId"],
+                "templateId": published["templateId"], "version": published["version"], "sha256": published["sha256"],
+            }
+            component_member["interfaces"] = []
+            added = self.action(client, second, {"type": "member.add", "member": component_member})
+            self.assertEqual(added.status_code, 200, added.text)
+            second_publish = client.post(f"/api/component-drafts/{second['draftId']}/publish", json={"expectedRevision": 2})
+            self.assertEqual(second_publish.status_code, 200, second_publish.text)
+            self.assertEqual(second_publish.json()["version"], 1)
+            self.assertEqual(second_publish.json()["document"]["assembly"]["members"][0]["template"]["publicationId"], published["publicationId"])
+
+            client.post(f"/api/component-drafts/{first['draftId']}/actions", json={
+                "expectedRevision": 1, "action": {"type": "definition.patch", "patch": {"name": "修改后的底座"}},
+            })
+            second_version = client.post(f"/api/component-drafts/{first['draftId']}/publish", json={"expectedRevision": 2}).json()
+            self.assertEqual(second_version["version"], 2)
+            detail = client.get(f"/api/published-components/{published['publicationId']}").json()
+            self.assertEqual(detail["document"]["definition"]["name"], "底座组件")
+            self.assertEqual(client.get("/api/published-components").json()["count"], 3)
+        with TestClient(create_app(dist_dir=None)) as client:
+            self.assertEqual(client.get("/api/published-components").json()["count"], 3)
+            self.assertEqual(client.get(f"/api/published-components/{published['publicationId']}").json(), published)
+
+    def test_publish_rejects_nonexistent_or_mismatched_component_dependencies(self):
+        with TestClient(create_app(dist_dir=None)) as client:
+            original = self.create(client)
+            published = client.post(f"/api/component-drafts/{original['draftId']}/publish", json={"expectedRevision": 1}).json()
+            for reference, expected_status in [
+                ({"publicationId": "nonexistent"}, 404),
+                ({"sha256": "b" * 64}, 422),
+                ({"version": 2}, 422),
+                ({"templateId": "wrong-template"}, 422),
+            ]:
+                document = original["document"]
+                nested = member("nested")
+                nested["template"] = {"templateKind": "component", **{key: published[key] for key in ("publicationId", "templateId", "version", "sha256")}, **reference}
+                document["assembly"]["members"] = [nested]
+                draft = self.create(client, document=document)
+                result = client.post(f"/api/component-drafts/{draft['draftId']}/publish", json={"expectedRevision": 1})
+                self.assertEqual(result.status_code, expected_status, result.text)
+            self.assertEqual(client.get("/api/published-components").json()["count"], 1)
+
+    def test_publish_requires_current_saved_revision(self):
+        with TestClient(create_app(dist_dir=None)) as client:
+            draft = self.create(client)
+            client.post(f"/api/component-drafts/{draft['draftId']}/actions", json={
+                "expectedRevision": 1, "action": {"type": "definition.patch", "patch": {"name": "新名称"}},
+            })
+            response = client.post(f"/api/component-drafts/{draft['draftId']}/publish", json={"expectedRevision": 1})
+            self.assertEqual(response.status_code, 409)
+            self.assertEqual(response.json()["error"]["code"], "REVISION_CONFLICT")
 
 
 if __name__ == "__main__":

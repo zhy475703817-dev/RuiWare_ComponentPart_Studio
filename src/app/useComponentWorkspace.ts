@@ -2,8 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import type { ComponentAction } from "../domain/componentReducer";
 import { SharedDraftController, httpDraftApi, initialSharedState } from "./sharedDraft";
 import type { PublishedTemplate } from "../library/publishedLibrary";
-import { loadReconstructionInfo } from "../library/templatePreview";
 import type { StageId } from "./stages";
+import { componentPublicationMember, fetchPublishedComponent, publishComponentDraft } from "../library/componentPublications";
+import { loadReconstructionInfo } from "../library/templatePreview";
 
 const initialMessage = "左侧可浏览已发布零部件，点击模板预览或使用加号加入组件";
 
@@ -15,8 +16,11 @@ export function useComponentWorkspace() {
   const [previewTemplate, setPreviewTemplate] = useState<PublishedTemplate | null>(null);
   const [selectionResetToken, setSelectionResetToken] = useState(0);
   const [message, setMessage] = useState(initialMessage);
+  const [publishing, setPublishing] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const [libraryRefreshToken, setLibraryRefreshToken] = useState(0);
   const { document, checks } = shared;
-  const editable = shared.status === "ready" || shared.status === "saving";
+  const editable = (shared.status === "ready" || shared.status === "saving") && !publishing && !adding;
   const selectedMember = document.assembly.members.find(member => member.id === selectedMemberId);
 
   useEffect(() => {
@@ -58,11 +62,13 @@ export function useComponentWorkspace() {
   }
 
   async function newDraft() {
+    if (publishing || adding) return;
     try { await controller.current?.create(); if (controller.current?.getSnapshot().status === "ready") resetSelection(); }
     catch { setMessage("请先处理未保存的修改，再新建草稿。"); }
   }
 
   async function selectDraft(id: string) {
+    if (publishing || adding) return;
     try { await controller.current?.select(id); if (controller.current?.getSnapshot().status === "ready") resetSelection(); }
     catch { setMessage("请先处理未保存的修改，再切换草稿。"); }
   }
@@ -76,40 +82,6 @@ export function useComponentWorkspace() {
     if (!dispatch({ type: "member.remove", id })) return;
     if (selectedMemberId === id) setSelectedMemberId(null);
     setMessage("已删除成员，并清理关联的连接、接口及参数绑定");
-  }
-
-  async function addPublishedTemplate(template: PublishedTemplate) {
-    if (!editable) return setMessage("共享草稿尚未就绪，请稍后再加入零部件");
-    const current = controller.current?.getSnapshot().document;
-    if (!current) return setMessage("共享草稿尚未就绪，请稍后再加入零部件");
-    if (current.assembly.members.some(member => member.template.publicationId === template.publicationId)) {
-      return setMessage(`${template.name} 的这个发布版本已经加入组件`);
-    }
-    setPreviewTemplate(template);
-    setMessage(`正在读取 ${template.name} 的接口定义…`);
-    try {
-      const info = await loadReconstructionInfo(template, new AbortController().signal);
-      const member = {
-        id: crypto.randomUUID(),
-        name: template.name,
-        code: template.code,
-        role: "零部件",
-        template: { publicationId: template.publicationId, templateId: template.templateId, version: template.version, sha256: template.sha256 },
-        position: [0, 0, 0] as [number, number, number],
-        rotation: [0, 0, 0] as [number, number, number],
-        parameterValues: Object.fromEntries(info.parameters.map(parameter => [parameter.id, parameter.default])),
-        interfaces: info.interfaces,
-      };
-      const latest = controller.current?.getSnapshot().document;
-      if (!latest || latest.assembly.members.some(item => item.template.publicationId === template.publicationId)) {
-        return setMessage(`${template.name} 的这个发布版本已经加入组件`);
-      }
-      if (!dispatch({ type: "member.add", member })) return setMessage("加入失败，请检查共享草稿状态后重试");
-      setSelectedMemberId(member.id);
-      setMessage(`已加入 ${template.name} · V${template.version}，可在装配阶段建立连接`);
-    } catch (cause) {
-      setMessage(cause instanceof Error ? `无法加入 ${template.name}：${cause.message}` : `无法加入 ${template.name}，请重试`);
-    }
   }
 
   function connectFirstInterfaces() {
@@ -143,7 +115,52 @@ export function useComponentWorkspace() {
     link.download = `${filename}.component.json`;
     link.click();
     setTimeout(() => URL.revokeObjectURL(url), 0);
-    setMessage("组件草稿已导出，正式发布尚未接入");
+    setMessage("组件草稿已导出；可在发布阶段创建独立发布版本。");
+  }
+
+  async function publishDraft() {
+    const workspace = controller.current;
+    if (!workspace || !editable) return;
+    const draftId = workspace.getSnapshot().draftId;
+    setPublishing(true);
+    try {
+      await workspace.flush();
+      const saved = workspace.getSnapshot();
+      if (!draftId || saved.draftId !== draftId) throw new Error("草稿已切换，请重新发布。");
+      const publication = await publishComponentDraft(draftId, saved.document.revision);
+      setLibraryRefreshToken(token => token + 1);
+      setMessage(`已发布 ${publication.name} · V${publication.version}，可在左侧列表选用。`);
+    } catch (error) { setMessage(error instanceof Error ? error.message : "发布失败，请检查连接后重试。"); }
+    finally { setPublishing(false); }
+  }
+
+  async function addPublishedTemplate(template: PublishedTemplate) {
+    const workspace = controller.current;
+    if (!workspace || !editable) return;
+    const draftId = workspace.getSnapshot().draftId;
+    setAdding(true);
+    try {
+      let member;
+      if (template.templateKind === "component") {
+        const publication = await fetchPublishedComponent(template.publicationId);
+        if (publication.templateId !== template.templateId || publication.version !== template.version || publication.sha256.toLowerCase() !== template.sha256.toLowerCase()) throw new Error("发布版本已变化，请刷新列表后重试。");
+        member = componentPublicationMember(publication, crypto.randomUUID());
+      } else {
+        const info = await loadReconstructionInfo(template, AbortSignal.timeout(20000));
+        member = { id: crypto.randomUUID(), name: template.name, code: template.code, role: template.name,
+          template: { publicationId: template.publicationId, templateId: template.templateId, version: template.version, sha256: template.sha256 },
+          position: [0, 0, 0] as [number, number, number], rotation: [0, 0, 0] as [number, number, number],
+          parameterValues: Object.fromEntries(info.parameters.map(parameter => [parameter.id, parameter.default])), interfaces: [],
+        };
+      }
+      if (workspace !== controller.current || workspace.getSnapshot().draftId !== draftId) throw new Error("草稿已切换，请重新选择模板。");
+      if (!workspace.dispatch({ type: "member.add", member })) throw new Error("草稿暂不可编辑，请先处理同步问题。");
+      await workspace.flush();
+      setSelectedMemberId(member.id);
+      setStage("assembly");
+      setMessage(`已加入 ${template.name} · V${template.version}`);
+    } catch (error) { setMessage(error instanceof Error ? error.message : "加入失败，请重试。"); }
+    finally { setAdding(false); }
   }
 
   function downloadLocalDraft() {
@@ -159,8 +176,8 @@ export function useComponentWorkspace() {
 
   const syncMessage = shared.error || (shared.status === "loading" ? "正在读取共享草稿…" : shared.status === "saving" ? "正在保存草稿…" : shared.notice || message);
   return { document, dispatch, stage, setStage, selectedMemberId, selectedMember, setSelectedMemberId, previewTemplate, setPreviewTemplate,
-    selectionResetToken, message: syncMessage, setMessage, checks, newDraft, removeMember, addPublishedTemplate, connectFirstInterfaces, inheritInterface, exportDraft,
-    shared, editable, selectDraft, copyDraftLink,
+    selectionResetToken, message: syncMessage, setMessage, checks, newDraft, removeMember, connectFirstInterfaces, inheritInterface, exportDraft,
+    shared, editable, selectDraft, copyDraftLink, publishDraft, publishing, adding, addPublishedTemplate, libraryRefreshToken,
     downloadLocalDraft, dismissAgentChanges: () => controller.current?.dismissAgentChanges(),
     retrySave: () => { void controller.current?.retry().catch(() => {}); },
     reloadDraft: () => { void controller.current?.reload(); },

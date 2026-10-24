@@ -2,6 +2,7 @@ export type Vector3 = [number, number, number];
 export type ParameterValue = number | string | boolean;
 
 export type PartTemplateReference = {
+  templateKind?: "part" | "component";
   publicationId: string;
   templateId: string;
   version: number;

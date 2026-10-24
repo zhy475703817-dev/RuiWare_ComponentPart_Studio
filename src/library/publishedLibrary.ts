@@ -1,4 +1,7 @@
 export type PublishedTemplate = {
+  templateKind?: "part" | "component";
+  engineeringStatus?: "incomplete" | "ready";
+  memberCount?: number;
   publicationId: string;
   templateId: string;
   version: number;
@@ -26,6 +29,7 @@ export function parsePublishedTemplates(value: unknown): PublishedTemplate[] {
       typeof item.version !== "number" || !Number.isSafeInteger(item.version) || item.version < 1 ||
       typeof item.size !== "number" || !Number.isSafeInteger(item.size) || item.size < 0 ||
       typeof item.sha256 !== "string" || !/^[a-f0-9]{64}$/i.test(item.sha256) ||
+      (item.templateKind !== undefined && item.templateKind !== "part" && item.templateKind !== "component") ||
       !Number.isFinite(Date.parse(item.createdAt as string)) || ids.has(item.publicationId as string)
     ) throw invalid();
     ids.add(item.publicationId as string);
@@ -35,13 +39,14 @@ export function parsePublishedTemplates(value: unknown): PublishedTemplate[] {
 }
 
 const errorMessages: Record<string, string> = {
+  REMOTE_STORAGE_INTEGRITY_ERROR: "\u6a21\u677f\u5305\u6821\u9a8c\u5931\u8d25\uff0c\u8bf7\u8054\u7cfb\u53d1\u5e03\u8005\u786e\u8ba4\u53d1\u5e03\u7248\u672c\u3002",
   COMPONENT_LIBRARY_NOT_CONFIGURED: "尚未配置发布库连接密钥，请按接入说明完成本机配置后重启组件平台。",
   COMPONENT_LIBRARY_INVALID_URL: "发布库服务地址配置不正确，请检查本机配置后重启组件平台。",
   COMPONENT_LIBRARY_INVALID_KEY: "发布库连接密钥格式不正确，请使用不含换行的英文字符密钥并重启组件后端。",
   PUBLIC_API_NOT_CONFIGURED: "零部件平台尚未启用发布库读取接口，请配置接口密钥后重启零部件平台。",
   PUBLIC_API_KEY_INVALID: "发布库连接密钥不正确，请确认两个平台配置的密钥一致。",
-  REMOTE_STORAGE_NOT_CONFIGURED: "零部件平台尚未配置共享发布库，请先完成共享存储配置。",
-  REMOTE_STORAGE_UNAVAILABLE: "共享发布库暂时无法访问，请检查存储服务和网络后重试。",
+  REMOTE_STORAGE_NOT_CONFIGURED: "尚未配置共享发布库，请检查 MinIO 配置后重启组件平台。",
+  REMOTE_STORAGE_UNAVAILABLE: "共享发布库暂时无法访问，请稍后重试或检查服务连接。",
   LIBRARY_UNREACHABLE: "无法连接零部件平台，请确认零部件平台已启动且服务地址正确。",
   LIBRARY_TIMEOUT: "读取发布库超时，请稍后重试。",
   LIBRARY_INVALID_RESPONSE: "发布库返回的数据格式不正确，请检查零部件平台接口。",
@@ -66,7 +71,7 @@ async function libraryResponse(url: string, signal: AbortSignal): Promise<unknow
 }
 
 export async function fetchAvailableTemplates(signal: AbortSignal, onUpdate?: (items: PublishedTemplate[]) => void): Promise<PublishedTemplate[]> {
-  const items = await fetchPublishedTemplates(signal);
+  const items = (await fetchPublishedTemplates(signal)).filter(item => item.templateKind !== "component");
   signal.throwIfAborted();
   onUpdate?.([]);
   const accepted = new Set<string>();
@@ -97,4 +102,25 @@ export async function fetchAvailableTemplates(signal: AbortSignal, onUpdate?: (i
   for (const outcome of outcomes) if (outcome.status === "rejected") throw outcome.reason;
   if (errors.length) throw errors[0];
   return visible();
+}
+
+export const publicationKey = (item: PublishedTemplate) => `${item.templateKind || "part"}:${item.publicationId}`;
+
+export async function fetchReusableTemplates(signal: AbortSignal, onUpdate: (items: PublishedTemplate[]) => void): Promise<PublishedTemplate[]> {
+  let parts: PublishedTemplate[] = [], components: PublishedTemplate[] = [];
+  const merged = () => [...parts, ...components].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+  onUpdate([]);
+  const outcomes = await Promise.allSettled([
+    fetchAvailableTemplates(signal, items => { parts = items; onUpdate(merged()); }),
+    libraryResponse("/api/published-components", signal).then(body => {
+      signal.throwIfAborted();
+      const items = parsePublishedTemplates(body);
+      if (items.some(item => item.templateKind !== "component")) throw new Error(errorMessages.LIBRARY_INVALID_RESPONSE);
+      components = items;
+      onUpdate(merged());
+    }),
+  ]);
+  signal.throwIfAborted();
+  for (const outcome of outcomes) if (outcome.status === "rejected") throw outcome.reason;
+  return merged();
 }

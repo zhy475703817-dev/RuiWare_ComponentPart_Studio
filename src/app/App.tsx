@@ -27,15 +27,15 @@ export function App() {
       case "parameters": return <ParametersStage parameters={document.parameters} bindings={document.bindings} onChange={(id, value) => dispatch({ type: "parameter.value", id, value })}/>;
       case "rules": return <RulesStage rules={document.rules} onChange={(id, expression) => dispatch({ type: "rule.expression", id, expression })}/>;
       case "validation": return <ValidationStage checks={checks} revision={document.revision} onValidate={() => workspace.setMessage(checks.some(check => check.status === "fail") ? "基础数据检查未通过，请处理失败项" : "基础数据检查通过；装配求解和工程规则执行仍待接入")}/>;
-      case "publish": return <PublishStage checks={checks} revision={document.revision} onExport={workspace.exportDraft}/>;
+      case "publish": return <PublishStage checks={checks} revision={document.revision} onExport={workspace.exportDraft} onPublish={workspace.publishDraft} publishing={workspace.publishing}/>;
     }
   }
 
   return <WorkspaceLayout stage={stage} onStageChange={workspace.setStage} onNew={workspace.newDraft} onExport={workspace.exportDraft} message={workspace.message} revision={document.revision}
     library={<>
-      <PublishedTemplateLibrary onPreview={workspace.setPreviewTemplate} onAdd={workspace.addPublishedTemplate} memberPublicationIds={members.map(member => member.template.publicationId)} selectionResetToken={workspace.selectionResetToken}/>
+      <PublishedTemplateLibrary onPreview={workspace.setPreviewTemplate} onAdd={workspace.addPublishedTemplate} memberPublicationIds={members.map(member => member.template.publicationId)} selectionResetToken={workspace.selectionResetToken} refreshToken={workspace.libraryRefreshToken} addDisabled={!workspace.editable}/>
       <div className="panel-title member-title"><span>组件成员</span><small>{members.length}</small></div>
-      {members.length === 0 && <p className="hint">暂无成员，点击发布库模板旁的加号加入组件</p>}
+      {members.length === 0 && <p className="hint">暂无成员，可从发布库加入零部件或组件。</p>}
       {members.map(member => <div className={`member-row ${workspace.selectedMemberId === member.id ? "selected" : ""}`} key={member.id}>
         <button className="member-select" onClick={() => workspace.setSelectedMemberId(member.id)}><span>{member.role}<small>{member.code} · V{member.template.version}</small></span></button>
         <button className="member-remove" onClick={() => workspace.removeMember(member.id)} aria-label={`删除成员 ${member.role}`}><Trash2 size={14}/></button>

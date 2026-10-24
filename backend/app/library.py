@@ -1,6 +1,6 @@
 import asyncio
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 from urllib.parse import urlsplit, urlunsplit
 
 from fastapi import APIRouter, Request, Response
@@ -26,6 +26,11 @@ class PublishedTemplate(BaseModel):
     sha256: str = Field(pattern=r"^[a-fA-F0-9]{64}$")
     size: int = Field(ge=0)
     downloadUrl: NonEmptyString
+    templateKind: Literal["part", "component"] = "part"
+    schemaVersion: str | None = None
+    sourceRevision: int | None = None
+    engineeringStatus: Literal["incomplete", "ready"] | None = None
+    memberCount: int | None = Field(default=None, ge=0)
 
     @field_validator("publicationId", "templateId", "code", "name", "downloadUrl")
     @classmethod
@@ -120,7 +125,7 @@ async def read_published_library(client: httpx.AsyncClient, settings: Settings) 
 router = APIRouter(prefix="/api", tags=["发布库"])
 
 
-@router.get("/published-templates", response_model=PublishedLibrary, summary="读取已发布零部件模板库")
+@router.get("/published-templates", response_model=PublishedLibrary, response_model_exclude_unset=True, summary="读取已发布零部件模板库")
 async def published_templates(request: Request, response: Response) -> PublishedLibrary:
     response.headers["Cache-Control"] = "no-store"
     return await read_published_library(request.app.state.http, request.app.state.settings)

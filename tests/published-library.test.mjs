@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
 import test from 'node:test';
-import { fetchAvailableTemplates, fetchPublishedTemplates, parsePublishedTemplates } from '../src/library/publishedLibrary.ts';
+import { fetchAvailableTemplates, fetchPublishedTemplates, fetchReusableTemplates, parsePublishedTemplates } from '../src/library/publishedLibrary.ts';
+import { componentPublicationMember } from '../src/library/componentPublications.ts';
+import { createComponentDocument } from '../src/domain/component.ts';
 
 const publication = {
   publicationId: 'version-1', templateId: 'draft-1', version: 1,
@@ -107,4 +109,50 @@ test('前两个模板读取失败仍继续检查后续模板，成功项保留�
   await assert.rejects(fetchAvailableTemplates(new AbortController().signal,items=>updates.push(items)),/超时/);
   assert.deepEqual(checked.sort(),[0,1,2,3]);
   assert.deepEqual(updates.at(-1).map(item=>item.publicationId),['v2','v3']);
+});
+
+test('零部件服务失败时仍展示已发布组件，不对结构版本执行零件模型检查', async t => {
+  const component = {...publication, publicationId:'component-1', templateKind:'component'};
+  const requests=[]; const updates=[];
+  t.mock.method(globalThis,'fetch',async url=>{
+    requests.push(url);
+    if(url==='/api/published-components') return Response.json({items:[component],count:1});
+    if(url==='/api/published-templates') return Response.json({error:{code:'LIBRARY_UNREACHABLE'}},{status:502});
+    throw new Error('unexpected model check');
+  });
+  await assert.rejects(fetchReusableTemplates(new AbortController().signal,items=>updates.push(items)),/无法连接/);
+  assert.equal(updates.at(-1)[0].publicationId,'component-1');
+  assert.equal(requests.length,2);
+});
+
+test('共享库混合零件和组件时，组件只出现一次且不进入零件模型检查', async t => {
+  const component = {...publication, publicationId:'component-shared', templateKind:'component'};
+  const checked = [];
+  t.mock.method(globalThis,'fetch',async url => {
+    if(url==='/api/published-templates') return Response.json({items:[publication,component],count:2});
+    if(url==='/api/published-components') return Response.json({items:[component],count:1});
+    checked.push(url);
+    return Response.json({available:true});
+  });
+  const result = await fetchReusableTemplates(new AbortController().signal,()=>{});
+  assert.deepEqual(result.map(item=>item.publicationId).sort(),['component-shared','version-1']);
+  assert.equal(checked.length,1);
+  assert.ok(checked[0].includes('/version-1/availability'));
+});
+
+test('加入组件只继承公开接口和参数，实例数据独立且固定发布版本', () => {
+  const document=createComponentDocument();
+  document.assembly.members=[{id:'internal',interfaces:[{id:'face',name:'内部面',type:'plane',tags:['private']}]}];
+  document.ports=[{id:'public-face',name:'安装面',source:{memberId:'internal',interfaceId:'face'},tags:['mount']}];
+  const published={...publication,templateKind:'component',document};
+  const first=componentPublicationMember(published,'instance-1');
+  const second=componentPublicationMember(published,'instance-2');
+  assert.deepEqual(first.interfaces,[{id:'public-face',name:'安装面',type:'plane',tags:['mount']}]);
+  assert.equal(first.template.templateKind,'component');
+  assert.equal(first.template.sha256,publication.sha256);
+  first.parameterValues.componentLength=3500; first.position[0]=42; first.interfaces[0].tags.push('changed');
+  assert.equal(second.parameterValues.componentLength,2400);
+  assert.equal(second.position[0],0);
+  assert.deepEqual(document.ports[0].tags,['mount']);
+  assert.equal('assembly' in first,false);
 });

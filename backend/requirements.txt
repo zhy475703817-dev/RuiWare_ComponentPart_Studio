@@ -2,6 +2,7 @@ fastapi>=0.115,<1
 uvicorn>=0.30,<1
 httpx>=0.27,<1
 python-dotenv>=1,<2
+minio>=7.2,<8
 mcp>=1.30,<2
 numpy>=1.26,<3
 cadquery-ocp>=7.8,<8

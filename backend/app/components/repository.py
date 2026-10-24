@@ -3,10 +3,12 @@ import base64
 from datetime import datetime, timezone
 import hashlib
 import json
+from io import BytesIO
 from pathlib import Path
 import re
 import sqlite3
 from uuid import uuid4
+from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
 from .changes import document_changes
 from .models import ComponentAction, ComponentDocument, Revision, TypedAction
@@ -36,6 +38,12 @@ class DraftRepository:
                 draft_id TEXT NOT NULL, id TEXT NOT NULL, file_name TEXT NOT NULL,
                 media_type TEXT NOT NULL, size INTEGER NOT NULL, sha256 TEXT NOT NULL, content BLOB NOT NULL,
                 PRIMARY KEY (draft_id, id)
+            )""")
+            connection.execute("""CREATE TABLE IF NOT EXISTS component_publications (
+                id TEXT PRIMARY KEY, draft_id TEXT NOT NULL, revision INTEGER NOT NULL,
+                version INTEGER NOT NULL, metadata TEXT NOT NULL, document TEXT NOT NULL,
+                checks TEXT NOT NULL, package BLOB NOT NULL,
+                UNIQUE(draft_id, revision), UNIQUE(draft_id, version)
             )""")
 
     def _connect(self):
@@ -71,6 +79,65 @@ class DraftRepository:
             connection.execute("BEGIN")
             document = self._read(connection, draft_id)
             return self._envelope(connection, draft_id, document, after_revision)
+
+    def list_publications(self) -> dict:
+        with closing(self._connect()) as connection:
+            rows = connection.execute("SELECT metadata FROM component_publications ORDER BY rowid DESC").fetchall()
+        items = [json.loads(row["metadata"]) for row in rows]
+        return {"items": items, "count": len(items)}
+
+    def publication(self, publication_id: str) -> dict:
+        with closing(self._connect()) as connection:
+            row = self._publication(connection, publication_id)
+            return {**json.loads(row["metadata"]), "document": json.loads(row["document"]), "checks": json.loads(row["checks"])}
+
+    def publication_package(self, publication_id: str) -> bytes:
+        with closing(self._connect()) as connection:
+            return self._publication(connection, publication_id)["package"]
+
+    @staticmethod
+    def _publication(connection, publication_id):
+        row = connection.execute("SELECT * FROM component_publications WHERE id = ?", (publication_id,)).fetchone()
+        if row is None:
+            raise ComponentError(404, "COMPONENT_PUBLICATION_NOT_FOUND")
+        return row
+
+    def prepare_publication(self, draft_id: str, expected_revision: int) -> dict:
+        with closing(self._connect()) as connection, connection:
+            connection.execute("BEGIN IMMEDIATE")
+            document = self._read(connection, draft_id)
+            if document.revision != expected_revision:
+                raise ComponentError(409, "REVISION_CONFLICT")
+            existing = connection.execute("SELECT id FROM component_publications WHERE draft_id = ? AND revision = ?", (draft_id, expected_revision)).fetchone()
+            if existing:
+                row = self._publication(connection, existing["id"])
+                return {**json.loads(row["metadata"]), "document": json.loads(row["document"]), "checks": json.loads(row["checks"])}
+            checks = validate_component(document)
+            if not document.definition.name.strip() or (document.assembly.members and next(check for check in checks if check["id"] == "references")["status"] != "pass"):
+                raise ComponentError(422, "COMPONENT_PUBLICATION_INVALID")
+            # Dependency checks use the shared publication service before preparing this
+            # immutable retry snapshot. Network operations never hold the SQLite write lock.
+            publication_id = f"component-{uuid4()}"
+            version = connection.execute("SELECT COALESCE(MAX(version), 0) + 1 FROM component_publications WHERE draft_id = ?", (draft_id,)).fetchone()[0]
+            manifest = {"schemaVersion": "component-package-1.0", "templateKind": "component", "publicationId": publication_id,
+                        "templateId": draft_id, "version": version, "createdAt": self._now(), "sourceRevision": document.revision}
+            data = document.model_dump(by_alias=True)
+            output = BytesIO()
+            with ZipFile(output, "w") as package:
+                for name, value in (("manifest.json", manifest), ("component.json", data), ("checks.json", checks)):
+                    info = ZipInfo(name)
+                    info.compress_type = ZIP_DEFLATED
+                    package.writestr(info, json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8"))
+            payload = output.getvalue()
+            metadata = {**manifest, "name": document.definition.name, "code": document.definition.code.strip() or draft_id[:8],
+                        "sha256": hashlib.sha256(payload).hexdigest(), "size": len(payload),
+                        "downloadUrl": f"/api/published-components/{publication_id}/download", "memberCount": len(document.assembly.members),
+                        "engineeringStatus": "incomplete" if any(check["status"] != "pass" for check in checks) else "ready"}
+            connection.execute("INSERT INTO component_publications VALUES (?, ?, ?, ?, ?, ?, ?, ?)", (
+                publication_id, draft_id, document.revision, version, json.dumps(metadata, ensure_ascii=False),
+                json.dumps(data, ensure_ascii=False), json.dumps(checks, ensure_ascii=False), payload,
+            ))
+            return {**metadata, "document": data, "checks": checks}
 
     def update(self, draft_id: str, expected_revision: int, action: TypedAction, *, actor: str = "user") -> dict:
         if actor not in ("user", "agent"):

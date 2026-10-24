@@ -11,7 +11,8 @@ from starlette.routing import Route
 
 from .config import PROJECT_ROOT, Settings, load_settings
 from .components.repository import DraftRepository
-from .components.router import router as draft_router
+from .components.publications import ComponentPublications
+from .components.router import router as draft_router, publication_router
 from .components.service import ComponentError
 from .library import LibraryError, router
 from .preview import PreviewCache, router as preview_router
@@ -40,6 +41,7 @@ def create_app(
         app.state.reconstruction_slots = asyncio.Semaphore(1)
         app.state.reconstruction_cache = ReconstructionCache()
         app.state.drafts = DraftRepository(draft_db or resolved_settings.draft_db)
+        app.state.publications = ComponentPublications(app.state.drafts, resolved_settings.minio)
         async with httpx.AsyncClient(timeout=10, follow_redirects=False, trust_env=False, transport=transport) as client:
             app.state.http = client
             async with mcp.session_manager.run():
@@ -65,6 +67,7 @@ def create_app(
     app.include_router(preview_router)
     app.include_router(reconstruction_router)
     app.include_router(draft_router)
+    app.include_router(publication_router)
     app.router.routes.append(Route("/mcp", endpoint=MCPAccess(mcp_http, app), methods=["GET", "POST", "DELETE"]))
 
     if dist_dir is not None and (dist_dir / "index.html").is_file():

@@ -3,10 +3,33 @@ from urllib.parse import quote
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse, Response
 
-from .models import ActionRequest, CreateDraftRequest
+from .models import ActionRequest, CreateDraftRequest, PublishRequest
 
 
 router = APIRouter(prefix="/api/component-drafts", tags=["组件草稿"])
+publication_router = APIRouter(prefix="/api/published-components", tags=["组件发布库"])
+
+
+@publication_router.get("")
+def list_publications(request: Request):
+    return JSONResponse(request.app.state.publications.list(), headers={"Cache-Control": "no-store"})
+
+
+@publication_router.get("/{publication_id}")
+def publication(request: Request, publication_id: str):
+    return JSONResponse(request.app.state.publications.detail(publication_id), headers={"Cache-Control": "no-store"})
+
+
+@publication_router.get("/{publication_id}/download")
+def publication_download(request: Request, publication_id: str):
+    return Response(request.app.state.publications.package(publication_id), media_type="application/octet-stream", headers={
+        "Content-Disposition": f'attachment; filename="{publication_id}.rwpart"', "Cache-Control": "no-store",
+    })
+
+
+@router.post("/{draft_id}/publish")
+def publish_draft(request: Request, draft_id: str, body: PublishRequest):
+    return JSONResponse(request.app.state.publications.publish(draft_id, body.expectedRevision), headers={"Cache-Control": "no-store"})
 
 
 @router.get("")
