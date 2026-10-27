@@ -6,10 +6,10 @@ import json
 from zipfile import BadZipFile, ZipFile
 
 from pydantic import ValidationError
-import urllib3
 
 from ..config import MinioSettings
-from ..library import PublishedTemplate
+from ..library import LibraryError, PublishedTemplate
+from ..published_storage import PublishedStorage
 from .models import ComponentDocument
 from .repository import DraftRepository
 from .service import ComponentError
@@ -29,65 +29,39 @@ def storage_errors(method):
 
 
 class ComponentPublications:
-    def __init__(self, drafts: DraftRepository, settings: MinioSettings):
-        from minio import Minio
-
+    def __init__(self, drafts: DraftRepository, settings: MinioSettings, storage: PublishedStorage | None = None):
         self.drafts = drafts
         self.settings = settings
-        self.client = None
-        if settings.configured:
-            if not settings.prefix.startswith(settings.read_prefix + "/"):
-                return
-            try:
-                self.client = Minio(settings.endpoint, access_key=settings.access_key, secret_key=settings.secret_key,
-                                    secure=settings.secure, http_client=urllib3.PoolManager(
-                                        timeout=urllib3.Timeout(connect=3, read=10), retries=False))
-            except ValueError:
-                # A malformed storage address must not prevent draft editing.
-                self.client = None
+        self.storage = storage or PublishedStorage(settings)
 
     def _require_storage(self):
-        if self.client is None:
-            raise ComponentError(503, "REMOTE_STORAGE_NOT_CONFIGURED")
+        try:
+            self.storage.require_write()
+        except LibraryError as error:
+            raise ComponentError(error.status, error.code) from None
 
     def _read(self, key: str) -> bytes:
-        response = self.client.get_object(self.settings.bucket, key)
         try:
-            return response.read()
-        finally:
-            response.close()
-            response.release_conn()
+            return self.storage.read(key)
+        except LibraryError as error:
+            raise ComponentError(error.status, error.code) from None
 
     def _put(self, key: str, payload: bytes, content_type: str):
-        self.client.put_object(self.settings.bucket, key, BytesIO(payload), length=len(payload), content_type=content_type)
+        try:
+            self.storage.put(key, payload, content_type)
+        except LibraryError as error:
+            raise ComponentError(error.status, error.code) from None
 
     @staticmethod
     def _public(metadata: dict) -> dict:
         return PublishedTemplate.model_validate(metadata).model_dump(exclude_unset=True)
 
     def _metadata(self) -> list[dict]:
-        self._require_storage()
-        items = {}
-        for obj in self.client.list_objects(self.settings.bucket, prefix=self.settings.read_prefix + "/", recursive=True):
-            if not obj.object_name.endswith("/metadata.json"):
-                continue
-            try:
-                metadata = json.loads(self._read(obj.object_name))
-                if metadata.get("templateKind", "part") != "component":
-                    continue
-                identifier = metadata["publicationId"]
-                if not identifier or any(char in identifier for char in ("/", "\\")):
-                    raise ValueError("invalid publication id")
-                directory = obj.object_name.removesuffix("/metadata.json")
-                if directory.rsplit("/", 1)[-1] != identifier or metadata.get("objectKey") != directory + "/template.rwpart":
-                    raise ValueError("invalid object key")
-                self._public(metadata)
-                if identifier in items and items[identifier]["sha256"] != metadata["sha256"]:
-                    raise ValueError("conflicting publication id")
-                items[identifier] = metadata
-            except (ValueError, KeyError, TypeError, ValidationError):
-                raise ComponentError(502, "REMOTE_STORAGE_INTEGRITY_ERROR") from None
-        return sorted(items.values(), key=lambda item: item["createdAt"], reverse=True)
+        try:
+            return [{**record.publication.model_dump(exclude_unset=True), "objectKey": record.object_key}
+                    for record in self.storage.records("component")]
+        except LibraryError as error:
+            raise ComponentError(error.status, error.code) from None
 
     @storage_errors
     def list(self) -> dict:
@@ -95,13 +69,18 @@ class ComponentPublications:
         return {"items": items, "count": len(items)}
 
     def _package(self, publication_id: str) -> tuple[bytes, dict]:
-        metadata = next((item for item in self._metadata() if item["publicationId"] == publication_id), None)
-        if metadata is None:
+        try:
+            record = next((item for item in self.storage.records("component")
+                           if item.publication.publicationId == publication_id), None)
+        except LibraryError as error:
+            raise ComponentError(error.status, error.code) from None
+        if record is None:
             raise ComponentError(404, "COMPONENT_PUBLICATION_NOT_FOUND")
-        payload = self._read(metadata["objectKey"])
-        if len(payload) != metadata["size"] or hashlib.sha256(payload).hexdigest().lower() != metadata["sha256"].lower():
-            raise ComponentError(502, "REMOTE_STORAGE_INTEGRITY_ERROR")
-        return payload, metadata
+        metadata = {**record.publication.model_dump(exclude_unset=True), "objectKey": record.object_key}
+        try:
+            return self.storage.package(record), metadata
+        except LibraryError as error:
+            raise ComponentError(error.status, error.code) from None
 
     @storage_errors
     def package(self, publication_id: str) -> bytes:

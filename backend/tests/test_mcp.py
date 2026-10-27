@@ -9,14 +9,25 @@ import httpx
 from fastapi.testclient import TestClient
 
 from backend.app.main import create_app
-from backend.app.config import Settings
+from backend.app.config import MinioSettings, Settings
 
 
 class MCPTests(unittest.TestCase):
     def setUp(self):
         directory = TemporaryDirectory()
         self.addCleanup(directory.cleanup)
-        environment = patch.dict(os.environ, {"COMPONENT_DRAFT_DB": str(Path(directory.name) / "drafts.sqlite3"), "COMPONENT_MCP_TOKEN": "", "RUIWARE_PUBLIC_API_KEY": ""})
+        environment = patch.dict(os.environ, {
+            "COMPONENT_DRAFT_DB": str(Path(directory.name) / "drafts.sqlite3"),
+            "COMPONENT_MCP_TOKEN": "",
+            "RUIWARE_PUBLIC_API_KEY": "",
+            "RUIWARE_MINIO_ENDPOINT": "",
+            "RUIWARE_MINIO_ACCESS_KEY": "",
+            "RUIWARE_MINIO_SECRET_KEY": "",
+            "RUIWARE_MINIO_BUCKET": "",
+            "RUIWARE_MINIO_PREFIX": "",
+            "RUIWARE_MINIO_READ_PREFIX": "",
+            "RUIWARE_MINIO_SECURE": "",
+        })
         environment.start()
         self.addCleanup(environment.stop)
 
@@ -140,6 +151,40 @@ class MCPTests(unittest.TestCase):
             result = self.call(client, "component_search_templates", {})
             self.assertTrue(result["isError"])
             self.assertEqual(result["structuredContent"]["error"]["code"], "COMPONENT_LIBRARY_NOT_CONFIGURED")
+
+    def test_minio_search_details_and_preview_without_parts_platform(self):
+        from io import BytesIO
+        from backend.tests.storage_helpers import MemoryMinio
+        from backend.tests.test_preview import package, metadata
+
+        payload = package()
+        publication = metadata(payload)
+        storage = MemoryMinio()
+        settings = Settings(draft_db=Path(os.environ["COMPONENT_DRAFT_DB"]),
+                            minio=MinioSettings(endpoint="minio.test", access_key="test", secret_key="test"))
+        directory = "publishers/another-member/" + publication["publicationId"]
+        record = {**publication, "objectKey": directory + "/template.rwpart"}
+        for key, content in ((record["objectKey"], payload), (directory + "/metadata.json", json.dumps(record).encode())):
+            storage.put_object(settings.minio.bucket, key, BytesIO(content), len(content))
+
+        def no_http(request):
+            self.fail("MinIO reads must not contact the parts platform")
+
+        with patch("minio.Minio", return_value=storage), TestClient(
+            create_app(settings, transport=httpx.MockTransport(no_http), dist_dir=None),
+            base_url="http://127.0.0.1:8020", client=("127.0.0.1", 12345),
+        ) as client:
+            result = self.call(client, "component_search_templates", {"query": publication["code"]})
+            self.assertFalse(result.get("isError", False), result)
+            self.assertEqual(result["structuredContent"]["coverage"],
+                             {"source": "minio", "fetched": 1, "completeLibrary": True})
+            args = {"publicationId": publication["publicationId"], "sha256": publication["sha256"]}
+            detail = self.call(client, "component_get_template", args)
+            self.assertEqual(detail["structuredContent"]["sha256"], publication["sha256"])
+            preview = self.call(client, "component_get_template_preview", args)
+            self.assertFalse(preview.get("isError", False), preview)
+            self.assertEqual(preview["structuredContent"]["model"]["source"], "package")
+            self.assertEqual(client.get("/api/published-templates").json()["count"], 1)
 
 
 if __name__ == "__main__":

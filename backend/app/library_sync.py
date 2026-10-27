@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 import httpx
 
 from .components.service import ComponentError
-from .library import LibraryError, PublishedTemplate, read_published_library
+from .library import LibraryError, read_published_library
 from .preview import DOWNLOAD_TIMEOUT_SECONDS, MAX_DOWNLOAD_BYTES, download, read_package
 from . import reconstruction
 
@@ -57,10 +57,14 @@ class LibrarySync:
         items = []
         failed = False
         try:
-            library = await read_published_library(state.http, state.settings)
-            for publication in library.items:
-                if publication.templateKind != 'part':
-                    continue
+            use_minio = state.settings.minio.read_configured
+            if use_minio:
+                records = await asyncio.to_thread(state.published_storage.records, 'part')
+            else:
+                library = await read_published_library(state.http, state.settings)
+                records = [item for item in library.items if item.templateKind == 'part']
+            for record in records:
+                publication = record.publication if use_minio else record
                 if not re.fullmatch(r'[A-Za-z0-9_.-]{1,128}', publication.publicationId) or publication.publicationId in {'.', '..'}:
                     raise LibraryError(502, 'LIBRARY_INVALID_RESPONSE')
                 try:
@@ -69,8 +73,15 @@ class LibrarySync:
                         if publication.size > MAX_DOWNLOAD_BYTES:
                             raise LibraryError(502, 'PACKAGE_TOO_LARGE')
                         async with asyncio.timeout(DOWNLOAD_TIMEOUT_SECONDS):
-                            payload = await download(state.http, state.settings,
-                                                     f'/api/public/v1/templates/{quote(publication.publicationId, safe="")}/download', MAX_DOWNLOAD_BYTES)
+                            if use_minio:
+                                payload = await asyncio.to_thread(state.published_storage.package, record)
+                            else:
+                                payload = await download(
+                                    state.http,
+                                    state.settings,
+                                    f'/api/public/v1/templates/{quote(publication.publicationId, safe="")}/download',
+                                    MAX_DOWNLOAD_BYTES,
+                                )
                         self.cache.save_package(publication, payload)
                     # Validate current metadata even when identical bytes already have a model.
                     # A bad identity must never overwrite a previous good model result.
@@ -119,18 +130,20 @@ class LibrarySync:
             self.errors.append('LIBRARY_UPSTREAM_ERROR')
 
     async def sync_components(self):
-        service = self.app.state.publications
+        state = self.app.state
+        service = state.publications
         items = []
         failed = False
         try:
-            library = await asyncio.to_thread(service.list)
-            for item in library['items']:
+            records = await asyncio.to_thread(state.published_storage.records, 'component')
+            for record in records:
+                publication = record.publication
+                item = publication.model_dump(exclude_unset=True)
                 try:
-                    publication = PublishedTemplate.model_validate(item)
                     payload = self.cache.package(publication)
                     missing = payload is None
                     if payload is None:
-                        payload = await asyncio.to_thread(service.package, publication.publicationId)
+                        payload = await asyncio.to_thread(state.published_storage.package, record)
                     await asyncio.to_thread(service._parse_package, payload, item)
                     if missing:
                         self.cache.save_package(publication, payload)

@@ -12,7 +12,10 @@ class MemoryMinio:
     def __init__(self):
         self.objects = {}
         self.fail_metadata = False
+        self.fail_get = set()
+        self.fail_list = False
         self.writes = []
+        self.reads = []
 
     def put_object(self, bucket_name, object_name, data, length, **kwargs):
         if self.fail_metadata and object_name.endswith('/metadata.json'):
@@ -23,9 +26,14 @@ class MemoryMinio:
         self.writes.append(object_name)
 
     def get_object(self, bucket_name, object_name):
+        self.reads.append(object_name)
+        if object_name in self.fail_get:
+            raise ConnectionError('private connection details must not reach the user')
         return ObjectResponse(self.objects[bucket_name, object_name])
 
     def list_objects(self, bucket_name, prefix, recursive):
+        if self.fail_list:
+            raise ConnectionError('private connection details must not reach the user')
         return [SimpleNamespace(object_name=key) for bucket, key in self.objects if bucket == bucket_name and key.startswith(prefix)]
 
 

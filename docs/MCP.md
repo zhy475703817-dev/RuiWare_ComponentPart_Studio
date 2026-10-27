@@ -43,7 +43,7 @@
 | `COMPONENT_MCP_TOKEN` | 空 | MCP 入站访问令牌；为空时仅接受本机回环连接 |
 | `COMPONENT_PUBLIC_BASE_URL` | `http://127.0.0.1:8020` | MCP 返回模型 URL 的服务来源，同时加入 MCP Host/Origin 允许列表；只填写来源，不带路径 |
 
-已有的 `RUIWARE_TEMPLATE_API_URL`、`RUIWARE_PUBLIC_API_KEY` 配置继续用于上游只读发布库。
+发布库查询与预览复用组件后端的 `RUIWARE_MINIO_*` 连接，直接读取共享 bucket，无需启动零部件平台。`RUIWARE_TEMPLATE_API_URL`、`RUIWARE_PUBLIC_API_KEY` 仅在未配置 MinIO 读取连接时用于旧 HTTP 兼容模式；这些凭据均不填入 MCP 客户端。
 
 远程部署需要设置实际 HTTPS 来源和 MCP 令牌，并在反向代理对**网页及所有 REST 接口**配置访问控制。MCP 令牌仅保护 `/mcp`，本版没有用户账户或按用户隔离草稿。不要把同一后端的草稿接口当成多租户服务。
 
@@ -70,7 +70,7 @@
 | `component_validate_draft` | 返回对应修订号的 `pass / fail / pending` 检查 |
 | `component_export_draft` | 返回兼容 `component-1.0` 的 JSON，不代表正式发布 |
 
-发布库搜索仅覆盖上游最近最多 **1000** 条记录；响应 `coverage` 明确标注读取范围，`count` 是该范围内匹配数，不能解释为完整发布库总量。模型地址可供客户端另行下载；工具不会返回大型 STL 文本，也不会直接操控网页相机。
+发布库搜索直接扫描配置的 MinIO 读取目录内全部零部件发布记录，`coverage` 返回 `source: "minio"`、实际 `fetched` 和 `completeLibrary: true`，完整范围指当前账号可读的配置目录。旧 HTTP 模式仍仅覆盖最近最多 **1000** 条，返回 `source: "legacy-http"`、`upstreamLimit: 1000` 和 `completeLibrary: false`。`count` 是当前来源范围内的匹配数。模型地址可供客户端另行下载；工具不会返回大型 STL 文本，也不会直接操控网页相机。
 
 工程文档的内部结构是 `definition / assembly / ports / ...`，导出的兼容格式则是 `name / stages / ...`。两者用途不同；`component_create_draft(document=...)` 接收前者，不能直接传入导出文件。导入只保存已有工程数据，不会下载并转换零部件为装配成员。
 

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
 import test from 'node:test';
-import { fetchAvailableTemplates, fetchPublishedTemplates, fetchReusableTemplates, parsePublishedTemplates, readCachedLibrary } from '../src/library/publishedLibrary.ts';
+import { fetchAvailableTemplates, fetchPublishedTemplates, fetchReusableTemplates, formatLibraryError, parsePublishedTemplates, readCachedLibrary } from '../src/library/publishedLibrary.ts';
 import { componentPublicationMember } from '../src/library/componentPublications.ts';
 import { createComponentDocument } from '../src/domain/component.ts';
 
@@ -27,11 +27,22 @@ test('本地发布库只读取快照，检查更新和应用更新使用明确�
   await readCachedLibrary(signal,'sync');
   await readCachedLibrary(signal,'apply');
   assert.deepEqual(calls,[['/api/template-library','GET'],['/api/template-library/sync','POST'],['/api/template-library/apply','POST']]);
-  snapshot.errors = ['LIBRARY_UNREACHABLE','private-debug-information'];
-  assert.ok((await readCachedLibrary(signal)).error.includes('无法连接零部件平台'));
+  snapshot.errors = ['REMOTE_STORAGE_UNAVAILABLE','private-debug-information'];
+  assert.ok((await readCachedLibrary(signal)).error.includes('共享发布库'));
   assert.ok(!(await readCachedLibrary(signal)).error.includes('private-debug-information'));
   snapshot.updateCount=-1;
   await assert.rejects(readCachedLibrary(signal),/数据格式不正确/);
+});
+
+test('已有缓存时明确说明当前仍显示缓存模板', () => {
+  assert.equal(
+    formatLibraryError('共享发布库暂时无法访问，请稍后重试或检查服务连接。', true),
+    '当前显示已缓存模板，暂时无法检查更新。共享发布库暂时无法访问，请稍后重试或检查服务连接。',
+  );
+  assert.equal(
+    formatLibraryError('发布库服务暂时不可用，请稍后重试。', false),
+    '发布库服务暂时不可用，请稍后重试。',
+  );
 });
 
 test('保留不同发布版本并按发布时间排序', () => {
@@ -112,7 +123,7 @@ test('检查返回格式错误或连接失败时不能将模板放入列表，�
   await assert.rejects(fetchAvailableTemplates(new AbortController().signal,items=>updates.push(items)),/数据格式不正确/);
   assert.ok(updates.every(items=>items.length===0));
   reply=()=>Response.json({error:{code:'LIBRARY_UNREACHABLE'}},{status:502});
-  await assert.rejects(fetchAvailableTemplates(new AbortController().signal),/无法连接/);
+  await assert.rejects(fetchAvailableTemplates(new AbortController().signal),/共享发布库暂时无法访问/);
   const controller=new AbortController();
   reply=()=>{controller.abort();return Response.json({available:true});};
   await assert.rejects(fetchAvailableTemplates(controller.signal,items=>updates.push(items)),{name:'AbortError'});
@@ -141,7 +152,7 @@ test('零部件服务失败时仍展示已发布组件，不对结构版本执�
     if(url==='/api/published-templates') return Response.json({error:{code:'LIBRARY_UNREACHABLE'}},{status:502});
     throw new Error('unexpected model check');
   });
-  await assert.rejects(fetchReusableTemplates(new AbortController().signal,items=>updates.push(items)),/无法连接/);
+  await assert.rejects(fetchReusableTemplates(new AbortController().signal,items=>updates.push(items)),/共享发布库暂时无法访问/);
   assert.equal(updates.at(-1)[0].publicationId,'component-1');
   assert.equal(requests.length,2);
 });

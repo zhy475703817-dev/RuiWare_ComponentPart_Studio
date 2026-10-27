@@ -34,6 +34,54 @@ class SharedPublicationTests(unittest.TestCase):
     def publish(self, client, draft):
         return client.post(f"/api/component-drafts/{draft['draftId']}/publish", json={'expectedRevision': draft['document']['revision']})
 
+    def seed_metadata(self, publication_id, *, kind='part', code='OMEGA-POST', version=1,
+                      source_revision=7, created_at='2026-10-25T00:00:00Z'):
+        directory = f'publishers/test-user/{publication_id}'
+        payload = f'package-{publication_id}'.encode()
+        metadata = {
+            'templateKind': kind,
+            'publicationId': publication_id,
+            'templateId': f'draft-{publication_id}',
+            'version': version,
+            'code': code,
+            'name': 'Ω型立柱',
+            'createdAt': created_at,
+            'sha256': hashlib.sha256(payload).hexdigest(),
+            'size': len(payload),
+            'objectKey': f'{directory}/template.rwpart',
+        }
+        if source_revision is not None:
+            metadata['sourceRevision'] = source_revision
+        self.objects.objects['shared-templates', metadata['objectKey']] = payload
+        self.objects.objects['shared-templates', f'{directory}/metadata.json'] = json.dumps(metadata).encode()
+        return metadata
+
+    def test_part_history_keeps_only_latest_release_for_same_identity(self):
+        self.seed_metadata('omega-old', created_at='2026-10-24T00:00:00Z')
+        self.seed_metadata('omega-new', created_at='2026-10-25T00:00:00Z')
+        with self.client('deduplicate-part') as client:
+            response = client.get('/api/published-templates')
+            historical = client.app.state.published_storage.record('part', 'omega-old')
+            old_package = client.app.state.published_storage.package(historical)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()['count'], 1)
+        self.assertEqual(response.json()['items'][0]['publicationId'], 'omega-new')
+        self.assertEqual(old_package, b'package-omega-old')
+        self.assertIn(('shared-templates', 'publishers/test-user/omega-old/metadata.json'), self.objects.objects)
+
+    def test_missing_part_identity_fields_falls_back_to_publication_id_and_components_stay_distinct(self):
+        self.seed_metadata('omega-missing-a', source_revision=None, created_at='2026-10-24T00:00:00Z')
+        self.seed_metadata('omega-missing-b', source_revision=None, created_at='2026-10-25T00:00:00Z')
+        self.seed_metadata('component-a', kind='component', created_at='2026-10-24T00:00:00Z')
+        self.seed_metadata('component-b', kind='component', created_at='2026-10-25T00:00:00Z')
+        with self.client('identity-fallback') as client:
+            parts = client.get('/api/published-templates')
+            components = client.get('/api/published-components')
+        self.assertEqual(parts.status_code, 200, parts.text)
+        self.assertEqual(parts.json()['count'], 2)
+        self.assertEqual(components.status_code, 200, components.text)
+        self.assertEqual(components.json()['count'], 2)
+
     def test_another_database_reads_downloads_and_nests_remote_component(self):
         with self.client('author') as author:
             draft = author.post('/api/component-drafts', json={'name': '共享底座'}).json()

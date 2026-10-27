@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import { AlertTriangle, Boxes, Plus, RefreshCw, Search } from "lucide-react";
-import { readCachedLibrary, publicationKey } from "./publishedLibrary";
+import { formatLibraryError, readCachedLibrary, publicationKey } from "./publishedLibrary";
 import type { PublishedTemplate } from "./publishedLibrary";
 
 const formatDate = (value: string) => new Date(value).toLocaleString("zh-CN", { hour12: false });
@@ -49,7 +49,7 @@ export function PublishedTemplateLibrary({ onPreview, onAdd, memberPublicationId
       setUpdatedAt(result.checkedAt === null ? "" : new Date(result.checkedAt * 1000).toISOString());
       syncing = result.syncing;
     } catch (cause) {
-      if (!controller.signal.aborted) setError(cause instanceof TypeError ? "无法连接组件平台服务，请检查服务是否运行后重试。" : cause instanceof Error ? cause.message : "读取发布库失败，请重试。");
+      if (!controller.signal.aborted) setError(cause instanceof TypeError ? "无法读取共享发布库，请检查组件平台服务是否运行后重试。" : cause instanceof Error ? cause.message : "读取共享发布库失败，请重试。");
     } finally {
       if (!controller.signal.aborted) {
         setLoading(syncing);
@@ -78,7 +78,7 @@ export function PublishedTemplateLibrary({ onPreview, onAdd, memberPublicationId
     <label className="library-search"><Search size={14}/><input aria-label="搜索模板名称或编码" placeholder="搜索名称或编码" value={query} onChange={event => setQuery(event.target.value)}/></label>
     <div className="library-status" role="status" aria-live="polite">{loading ? initialized || items.length ? "正在检查模板更新…" : "正在准备模板…" : updatedAt ? `上次检查：${formatDate(updatedAt)}` : "尚未连接发布库"}</div>
     {updateCount > 0 && <div className="library-update" role="status"><span>发现 {updateCount} 项模板更新</span><button className="ghost" onClick={() => void refresh("apply")}>更新列表</button></div>}
-    {error && <div className="library-error" role="alert"><AlertTriangle size={15}/><div><b>{items.length ? "暂时无法检查模板更新" : "发布库暂未完整加载"}</b><p>{error}</p><button className="ghost" onClick={() => void refresh("sync")} disabled={loading}>重试</button></div></div>}
+    {error && <div className="library-error" role="alert"><AlertTriangle size={15}/><div><b>{items.length ? "暂时无法检查模板更新" : "发布库暂未完整加载"}</b><p>{formatLibraryError(error, items.length > 0)}</p><button className="ghost" onClick={() => void refresh("sync")} disabled={loading}>重试</button></div></div>}
     {!loading && !error && initialized && items.length === 0 && <p className="library-empty">暂无可用模板。</p>}
     {!loading && items.length > 0 && visible.length === 0 && <p className="library-empty">没有匹配的模板，请调整搜索内容。</p>}
     <div aria-busy={loading}>{visible.map(item => <Fragment key={publicationKey(item)}>
@@ -102,6 +102,5 @@ export function PublishedTemplateLibrary({ onPreview, onAdd, memberPublicationId
       {selected.templateKind === "component" && <a className="ghost publication-download" href={`/api/published-components/${encodeURIComponent(selected.publicationId)}/download`} download>下载组件包</a>}
       <p className="hint">加入时固定此发布版本；后续发布不会自动替换已有成员。</p></section>}
     </Fragment>)}</div>
-    {items.length === 1000 && <p className="hint">当前接口最多返回最近 1000 条发布记录。</p>}
   </section>;
 }

@@ -55,14 +55,56 @@ class LibraryCacheTests(unittest.TestCase):
         self.settings = Settings(api_url='http://parts.test', api_key='test-secret',
                                  draft_db=Path(self.tmp.name) / 'components.sqlite3',
                                  minio=MinioSettings(endpoint='minio.test', access_key='test', secret_key='test', prefix='publishers/test'))
-        self.minio = patch('minio.Minio', return_value=MemoryMinio()).start()
+        self.storage = MemoryMinio()
+        self.minio = patch('minio.Minio', return_value=self.storage).start()
         self.worker = patch('backend.app.reconstruction._run_worker', return_value=STL).start()
         self.addCleanup(patch.stopall)
         self.payloads = {'version-1': reconstructable_package()}
         self.records = [metadata(self.payloads['version-1'])]
+        self.part_keys = set()
         self.calls = []
         self.offline = False
         self.fail_download = False
+        self.fail_ids = set()
+
+    def _write_part_records(self):
+        """Mirror the current published part catalog into the shared bucket."""
+        for key in self.part_keys:
+            self.storage.objects.pop((self.settings.minio.bucket, key), None)
+            self.storage.fail_get.discard(key)
+        self.part_keys.clear()
+        for record in self.records:
+            identifier = record['publicationId']
+            object_key = f"{self.settings.minio.prefix}/{identifier}/template.rwpart"
+            metadata_record = {**record, 'templateKind': 'part', 'objectKey': object_key}
+            metadata_key = object_key.removesuffix('/template.rwpart') + '/metadata.json'
+            payload = self.payloads[identifier]
+            for key, content in ((object_key, payload), (metadata_key, json.dumps(metadata_record).encode())):
+                self.storage.put_object(self.settings.minio.bucket, key, io.BytesIO(content), len(content))
+                self.part_keys.add(key)
+            if self.fail_download or identifier in self.fail_ids:
+                self.storage.fail_get.add(object_key)
+
+    def test_parts_load_from_minio_when_parts_platform_is_unavailable(self):
+        self.offline = True
+
+        with self.client() as client:
+            body = self.settled(client)
+            self.assertEqual([item['publicationId'] for item in body['items']], ['version-1'])
+            self.assertEqual(body['errors'], [])
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.worker.call_count, 1)
+
+    def test_cache_sync_uses_legacy_http_only_when_minio_is_not_configured(self):
+        settings = Settings(api_url='http://parts.test', api_key='test-secret',
+                            draft_db=Path(self.tmp.name) / 'http-cache.sqlite3',
+                            minio=MinioSettings())
+        self.offline = False
+
+        with self.client(settings) as client:
+            body = self.settled(client)
+            self.assertEqual([item['publicationId'] for item in body['items']], ['version-1'])
+            self.assertEqual(self.calls, ['/api/public/v1/templates', '/api/public/v1/templates/version-1/download'])
 
     def upstream(self, request):
         self.calls.append(request.url.path)
@@ -81,6 +123,7 @@ class LibraryCacheTests(unittest.TestCase):
         return TestClient(create_app(settings or self.settings, transport=httpx.MockTransport(self.upstream), dist_dir=None))
 
     def settled(self, client, refresh=False):
+        self._write_part_records()
         if refresh:
             response = client.post('/api/template-library/sync')
         else:
@@ -98,15 +141,13 @@ class LibraryCacheTests(unittest.TestCase):
             body = self.settled(client)
             self.assertEqual(body['count'], 1, body)
         self.assertEqual(self.worker.call_count, 1)
-        self.assertEqual(self.calls.count('/api/public/v1/templates'), 1)
-        self.assertEqual(self.calls.count('/api/public/v1/templates/version-1/download'), 1)
-        self.assertNotIn('/api/public/v1/templates/version-1', self.calls)
+        self.assertEqual(self.calls, [])
         self.offline = True
         with self.client() as client:
             first = client.get('/api/template-library').json()
             self.assertEqual(first['count'], 1)
             body = self.settled(client)
-            self.assertIn('LIBRARY_UNREACHABLE', body['errors'])
+            self.assertEqual(body['errors'], [])
             before = len(self.calls)
             digest = self.records[0]['sha256']
             prefix = '/api/published-templates/version-1'
@@ -135,7 +176,8 @@ class LibraryCacheTests(unittest.TestCase):
             self.assertEqual(body['count'], 2)
             self.assertEqual(body['updateCount'], 2)
             self.assertEqual(client.post('/api/template-library/apply').json()['count'], 0)
-        self.assertEqual(self.calls.count('/api/public/v1/templates/version-1/download'), 1)
+        package_key = f"{self.settings.minio.prefix}/version-1/template.rwpart"
+        self.assertEqual(self.storage.reads.count(package_key), 1)
 
     def test_invalid_templates_stay_hidden_and_transient_failure_can_retry(self):
         self.payloads['version-1'] = reconstructable_package(False)
@@ -174,15 +216,16 @@ class LibraryCacheTests(unittest.TestCase):
         from dataclasses import replace
         with self.client() as client:
             self.assertEqual(self.settled(client)['count'], 1)
-        downloads = self.calls.count('/api/public/v1/templates/version-1/download')
+        package_key = f"{self.settings.minio.prefix}/version-1/template.rwpart"
+        downloads = self.storage.reads.count(package_key)
         with patch('backend.app.library_cache.engine_version', return_value='new-engine'):
             with self.client() as client:
                 self.assertEqual(self.settled(client)['count'], 1)
         self.assertEqual(self.worker.call_count, 2)
-        self.assertEqual(self.calls.count('/api/public/v1/templates/version-1/download'), downloads)
+        self.assertEqual(self.storage.reads.count(package_key), downloads)
         self.offline = True
         with self.client(replace(self.settings, api_key='another-user')) as client:
-            self.assertEqual(self.settled(client)['count'], 0)
+            self.assertEqual(self.settled(client)['count'], 1)
 
     def test_cached_model_never_bypasses_package_identity_and_metadata_refresh(self):
         with self.client() as client:
@@ -199,7 +242,8 @@ class LibraryCacheTests(unittest.TestCase):
             self.assertEqual(body['updateCount'], 1, 'invalid identity must be excluded from pending catalog')
             self.assertEqual(client.post('/api/template-library/apply').json()['count'], 0)
         self.assertEqual(self.worker.call_count, 1)
-        self.assertEqual(self.calls.count('/api/public/v1/templates/version-1/download'), 1)
+        package_key = f"{self.settings.minio.prefix}/version-1/template.rwpart"
+        self.assertEqual(self.storage.reads.count(package_key), 1)
 
     def test_invalid_identity_does_not_poison_another_publication_with_same_bytes(self):
         self.payloads['invalid-id'] = self.payloads['version-1']
@@ -214,20 +258,22 @@ class LibraryCacheTests(unittest.TestCase):
             draft = client.post('/api/component-drafts', json={'name': '缓存组件'}).json()
             published = client.post(f"/api/component-drafts/{draft['draftId']}/publish", json={'expectedRevision': 1}).json()
             self.settled(client)
-            service = client.app.state.publications
-            records = service.list()
-            records['items'][0]['version'] += 1
-            with patch.object(service, 'list', return_value=records):
-                body = self.settled(client, refresh=True)
-                self.assertIn('REMOTE_STORAGE_INTEGRITY_ERROR', body['errors'])
-                self.assertEqual(body['updateCount'], 0)
-            records['items'][0]['version'] -= 1
-            records['items'][0]['name'] = '更新后的组件名称'
-            with patch.object(service, 'list', return_value=records):
-                self.settled(client, refresh=True)
-                client.post('/api/template-library/apply')
-                detail = client.get('/api/published-components/' + published['publicationId'])
-                self.assertEqual(detail.json()['name'], '更新后的组件名称')
+            record = client.app.state.published_storage.records('component')[0]
+            metadata_key = record.object_key.rsplit('/', 1)[0] + '/metadata.json'
+            storage_key = (self.settings.minio.bucket, metadata_key)
+            current = json.loads(self.storage.objects[storage_key])
+            current['version'] += 1
+            self.storage.objects[storage_key] = json.dumps(current).encode()
+            body = self.settled(client, refresh=True)
+            self.assertIn('REMOTE_STORAGE_INTEGRITY_ERROR', body['errors'])
+            self.assertEqual(body['updateCount'], 0)
+            current['version'] -= 1
+            current['name'] = '更新后的组件名称'
+            self.storage.objects[storage_key] = json.dumps(current, ensure_ascii=False).encode()
+            self.settled(client, refresh=True)
+            client.post('/api/template-library/apply')
+            detail = client.get('/api/published-components/' + published['publicationId'])
+            self.assertEqual(detail.json()['name'], '更新后的组件名称')
 
     def test_corrupt_cache_is_repaired_without_losing_drafts(self):
         import sqlite3
@@ -241,7 +287,8 @@ class LibraryCacheTests(unittest.TestCase):
             self.assertEqual(body['errors'], [])
             self.assertEqual(client.get('/api/component-drafts/' + draft['draftId']).status_code, 200)
             self.assertEqual(self.worker.call_count, 2)
-            self.assertEqual(self.calls.count('/api/public/v1/templates/version-1/download'), 2)
+            package_key = f"{self.settings.minio.prefix}/version-1/template.rwpart"
+            self.assertEqual(self.storage.reads.count(package_key), 2)
 
     def test_force_check_during_sync_queues_one_additional_run(self):
         from backend.app.library_sync import LibrarySync
@@ -274,14 +321,8 @@ class LibraryCacheTests(unittest.TestCase):
     def test_failed_package_does_not_block_healthy_later_templates(self):
         self.payloads['version-2'] = self.payloads['version-1']
         self.records.append({**self.records[0], 'publicationId': 'version-2', 'version': 2})
-        upstream = self.upstream
-
-        def partial(request):
-            if request.url.path.endswith('/version-1/download'):
-                return httpx.Response(503, json={'error': {'code': 'REMOTE_STORAGE_UNAVAILABLE'}})
-            return upstream(request)
-
-        with TestClient(create_app(self.settings, transport=httpx.MockTransport(partial), dist_dir=None)) as client:
+        self.fail_ids.add('version-1')
+        with TestClient(create_app(self.settings, transport=httpx.MockTransport(self.upstream), dist_dir=None)) as client:
             body = self.settled(client)
             self.assertEqual([item['publicationId'] for item in body['items']], ['version-2'])
             self.assertFalse(body['initialized'])

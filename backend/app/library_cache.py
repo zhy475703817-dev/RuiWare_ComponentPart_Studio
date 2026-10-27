@@ -29,9 +29,12 @@ class LibraryCache:
     def __init__(self, path: Path, settings: Settings):
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        # Credentials only enter a digest; changing access scope never reuses another cache.
-        source = (settings.api_url, settings.api_key, settings.minio.endpoint, settings.minio.bucket,
-                  settings.minio.read_prefix, settings.minio.secure, settings.minio.access_key, settings.minio.secret_key)
+        # Partition by publication source; rotating MinIO credentials keeps
+        # cached packages from the same bucket. HTTP remains a legacy fallback.
+        source = (("minio", settings.minio.endpoint, settings.minio.bucket,
+                   settings.minio.read_prefix, settings.minio.secure)
+                  if settings.minio.read_configured else
+                  ("http", settings.api_url, settings.api_key))
         self.namespace = hashlib.sha256(json.dumps(source).encode()).hexdigest()
         self.engine = engine_version()
         with closing(self._connect()) as db, db:

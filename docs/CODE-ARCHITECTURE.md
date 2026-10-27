@@ -18,6 +18,7 @@ src/viewport/ComponentViewport.tsx 真实 STL 展示、相机适配、网格和�
 src/styles/workspace.css         工作台样式
 backend/app/config.py             后端环境配置，密钥仅留在 Python
 backend/app/library.py            发布库响应模型、只读调用和 API 路由
+backend/app/published_storage.py  共享 MinIO 发布记录、包校验与上传边界
 backend/app/library_cache.py      SQLite 发布包、默认模型和活动/待应用列表快照
 backend/app/library_sync.py       后台增量同步、模型准入及缓存列表 API
 backend/app/preview.py            包下载校验、安全 ZIP 读取、模型缓存和预览路由
@@ -35,7 +36,9 @@ tests/                           Node 原生领域和前端列表测试
 
 前端依赖方向：`app → stages / library / viewport / domain`，`stages → domain（类型）`，`viewport → domain / library（类型）`。`domain` 不导入 React、DOM、网络、服务端配置或 Three.js。后端 Python 模块不进入浏览器构建。
 
-运行链路：`浏览器 → Vite :5180 /api 转发 → FastAPI :8020 → 零部件平台 :8010`。FastAPI 通过 httpx 异步调用固定发布列表路径，10 秒超时、拒绝重定向，使用 Pydantic 校验响应并移除契约之外的字段。FastAPI 生命周期创建并关闭 HTTP 客户端；业务异常保留原错误码和安全提示，不返回上游内部详情。配置来自根目录 `.env`、`.env.local` 和系统环境变量，系统环境变量优先。
+运行链路：`浏览器 → Vite :5180 /api 转发 → FastAPI :8020 → SQLite 快照`，后台直接从共享 MinIO 读取零部件和组件发布记录、按需下载并校验包，准备待应用的新列表。两类发布使用同一个 bucket，以 `templateKind` 区分，旧记录默认是零部件；无需启动零部件平台。`metadata.json` 是发布完成标记，包路径须与记录处于同一发布目录，包大小和 SHA-256 必须一致。读取仅需存储连接与读取目录，组件发布另外要求成员写入目录。
+
+仅在未配置 MinIO 读取连接时，零部件回退到旧 HTTP 发布接口，保留最近 1000 条限制、超时和拒绝重定向行为。MinIO 连接故障不会切换来源，已有缓存保留。业务异常保留安全错误码，不返回 SDK 内部详情或密钥。配置来自根目录 `.env`、`.env.local` 和系统环境变量，系统环境变量优先。
 
 FastAPI 提供 `/api/health`、`/api/published-templates`、兼容 STL 预览接口，以及 `/api/published-templates/{id}/reconstruction` 和 `/api/published-templates/{id}/reconstruction/model` 本地重建接口；健康检查不联系零部件平台。发布包重建先固定发布哈希并验证整包，再将白名单定义交给项目内固定版本 CAD 引擎；建模在受并发限制的子进程中完成，临时输出完成后清理。前端只收到 STL 和用户可调参数。开发与预览由 Vite 转发 `/api`，不开放跨域。构建完成后也可由 FastAPI 直接提供 `dist`，详情见 README 与 `PART-PREVIEW.md`。
 

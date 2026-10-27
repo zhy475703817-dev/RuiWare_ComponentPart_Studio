@@ -88,7 +88,7 @@ const messages: Record<string, string> = {
   REMOTE_TEMPLATE_NOT_FOUND: "该发布版本已不存在，请刷新发布库。",
   REMOTE_STORAGE_INTEGRITY_ERROR: "共享发布库中的模板包校验失败。",
   LIBRARY_TIMEOUT: "读取零件超时，请重试。",
-  LIBRARY_UNREACHABLE: "无法连接零部件平台，请检查服务后重试。",
+  LIBRARY_UNREACHABLE: "共享发布库暂时无法访问，请检查 MinIO 服务或网络连接后重试。",
   PUBLIC_API_KEY_INVALID: "发布库连接密钥不正确，请检查组件后端配置。",
   COMPONENT_LIBRARY_NOT_CONFIGURED: "组件后端尚未配置发布库连接密钥。",
 };

@@ -17,6 +17,7 @@ from .components.service import ComponentError
 from .library import LibraryError, router
 from .library_cache import LibraryCache
 from .library_sync import LibrarySync, router as cached_library_router
+from .published_storage import PublishedStorage
 from .preview import PreviewCache, router as preview_router
 from .reconstruction import ReconstructionCache, router as reconstruction_router
 from .mcp.server import MCPAccess, create_mcp
@@ -43,7 +44,8 @@ def create_app(
         app.state.reconstruction_slots = asyncio.Semaphore(1)
         app.state.reconstruction_cache = ReconstructionCache()
         app.state.drafts = DraftRepository(draft_db or resolved_settings.draft_db)
-        app.state.publications = ComponentPublications(app.state.drafts, resolved_settings.minio)
+        app.state.published_storage = PublishedStorage(resolved_settings.minio)
+        app.state.publications = ComponentPublications(app.state.drafts, resolved_settings.minio, app.state.published_storage)
         app.state.library_cache = LibraryCache(draft_db or resolved_settings.draft_db, resolved_settings)
         app.state.library_sync = LibrarySync(app)
         async with httpx.AsyncClient(timeout=10, follow_redirects=False, trust_env=False, transport=transport) as client:

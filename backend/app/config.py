@@ -22,6 +22,10 @@ class MinioSettings:
     def configured(self) -> bool:
         return all((self.endpoint, self.access_key, self.secret_key, self.bucket, self.prefix, self.read_prefix))
 
+    @property
+    def read_configured(self) -> bool:
+        return all((self.endpoint, self.access_key, self.secret_key, self.bucket, self.read_prefix))
+
 
 @dataclass(frozen=True)
 class Settings:

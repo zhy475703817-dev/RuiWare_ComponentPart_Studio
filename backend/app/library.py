@@ -128,4 +128,11 @@ router = APIRouter(prefix="/api", tags=["发布库"])
 @router.get("/published-templates", response_model=PublishedLibrary, response_model_exclude_unset=True, summary="读取已发布零部件模板库")
 async def published_templates(request: Request, response: Response) -> PublishedLibrary:
     response.headers["Cache-Control"] = "no-store"
+    storage = getattr(request.app.state, "published_storage", None)
+    if storage is not None and storage.client is not None:
+        try:
+            records = await asyncio.to_thread(storage.records, "part")
+        except LibraryError:
+            raise
+        return PublishedLibrary(items=[record.publication for record in records], count=len(records))
     return await read_published_library(request.app.state.http, request.app.state.settings)

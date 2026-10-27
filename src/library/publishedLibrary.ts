@@ -18,7 +18,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export function parsePublishedTemplates(value: unknown): PublishedTemplate[] {
-  const invalid = () => new Error("发布库返回的数据格式不正确，请检查零部件平台接口。");
+  const invalid = () => new Error("发布库返回的数据格式不正确，请检查共享发布库。");
   if (!isRecord(value) || !Array.isArray(value.items) || value.count !== value.items.length) throw invalid();
   const ids = new Set<string>();
   const items = value.items.map((item: unknown) => {
@@ -43,15 +43,19 @@ const errorMessages: Record<string, string> = {
   COMPONENT_LIBRARY_NOT_CONFIGURED: "尚未配置发布库连接密钥，请按接入说明完成本机配置后重启组件平台。",
   COMPONENT_LIBRARY_INVALID_URL: "发布库服务地址配置不正确，请检查本机配置后重启组件平台。",
   COMPONENT_LIBRARY_INVALID_KEY: "发布库连接密钥格式不正确，请使用不含换行的英文字符密钥并重启组件后端。",
-  PUBLIC_API_NOT_CONFIGURED: "零部件平台尚未启用发布库读取接口，请配置接口密钥后重启零部件平台。",
+  PUBLIC_API_NOT_CONFIGURED: "共享发布库读取未启用，请检查 MinIO 配置后重启组件平台。",
   PUBLIC_API_KEY_INVALID: "发布库连接密钥不正确，请确认两个平台配置的密钥一致。",
   REMOTE_STORAGE_NOT_CONFIGURED: "尚未配置共享发布库，请检查 MinIO 配置后重启组件平台。",
   REMOTE_STORAGE_UNAVAILABLE: "共享发布库暂时无法访问，请稍后重试或检查服务连接。",
-  LIBRARY_UNREACHABLE: "无法连接零部件平台，请确认零部件平台已启动且服务地址正确。",
+  LIBRARY_UNREACHABLE: "共享发布库暂时无法访问，请检查 MinIO 服务或网络连接后重试。",
   LIBRARY_TIMEOUT: "读取发布库超时，请稍后重试。",
-  LIBRARY_INVALID_RESPONSE: "发布库返回的数据格式不正确，请检查零部件平台接口。",
+  LIBRARY_INVALID_RESPONSE: "发布库返回的数据格式不正确，请检查共享发布库。",
   LIBRARY_UPSTREAM_ERROR: "发布库服务暂时不可用，请稍后重试。",
 };
+
+export function formatLibraryError(error: string, hasCachedItems: boolean): string {
+  return hasCachedItems ? `当前显示已缓存模板，暂时无法检查更新。${error}` : error;
+}
 
 export async function fetchPublishedTemplates(signal: AbortSignal): Promise<PublishedTemplate[]> {
   return parsePublishedTemplates(await libraryResponse("/api/published-templates", signal));
