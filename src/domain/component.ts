@@ -35,8 +35,10 @@ export type ComponentSlot = { id: string; name: string; memberId: string | null;
 export type ComponentParameter = { id: string; label: string; value: number | null; unit: string; min: number; max: number };
 export type ParameterBinding = { id: string; parameterId: string; memberId: string; memberParameterId: string };
 export type ComponentRule = { id: string; expression: string };
-export type ConnectionType = "螺栓连接" | "焊接" | "卡扣连接" | "插接" | "铆接" | "胶接" | "自定义";
+export type ConnectionType = "螺栓连接" | "焊接" | "卡扣连接" | "插接" | "铆接" | "胶接" | "型材槽连接" | "销钉连接" | "插接/卡扣" | "自定义";
 export type EvidenceFile = { id: string; fileName: string; mediaType: string; size: number; sha256: string; dataUrl?: string | null };
+export type ConnectionMethod = { mode: "preset" | "custom"; value: string; details: string };
+export type EvidenceAttachment = { id: string; name: string; mediaType: string; size: number; addedAt: string };
 export type ComponentDefinition = {
   name: string;
   code: string;
@@ -52,6 +54,8 @@ export type ComponentDefinition = {
   componentConnectionCustom: string;
   designConstraints: string;
   evidenceFiles: EvidenceFile[];
+  connectionForms: { internal: ConnectionMethod; interComponent: ConnectionMethod };
+  evidence: EvidenceAttachment[];
 };
 
 export type ComponentDocument = {
@@ -78,7 +82,11 @@ export function createComponentDocument(): ComponentDocument {
       projectCode: "", owner: "", organization: "", searchTags: [],
       partConnectionType: "螺栓连接", partConnectionCustom: "",
       componentConnectionType: "螺栓连接", componentConnectionCustom: "",
-      designConstraints: "", evidenceFiles: [],
+      connectionForms: {
+        internal: { mode: "preset", value: "螺栓连接", details: "" },
+        interComponent: { mode: "preset", value: "插接/卡扣", details: "" },
+      },
+      designConstraints: "", evidenceFiles: [], evidence: [],
     },
     assembly: { members: [], mates: [] }, ports: [], slots: [], bindings: [],
     parameters: [{ id: "componentLength", label: "组件总长", value: 2400, unit: "mm", min: 1000, max: 6000 }],

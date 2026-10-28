@@ -95,7 +95,26 @@ class ComponentRule(ComponentModel):
     expression: str
 
 
-ConnectionType = Literal["螺栓连接", "焊接", "卡扣连接", "插接", "铆接", "胶接", "自定义"]
+ConnectionType = Literal["螺栓连接", "焊接", "卡扣连接", "插接", "铆接", "胶接", "型材槽连接", "销钉连接", "插接/卡扣", "自定义"]
+
+
+class ConnectionMethod(ComponentModel):
+    mode: Literal["preset", "custom"]
+    value: str
+    details: str
+
+
+class EvidenceAttachment(ComponentModel):
+    id: str
+    name: str
+    mediaType: str
+    size: Annotated[int, Field(strict=True, ge=0)]
+    addedAt: str
+
+
+class ComponentConnectionForms(ComponentModel):
+    internal: ConnectionMethod
+    interComponent: ConnectionMethod
 
 
 class EvidenceFile(ComponentModel):
@@ -122,6 +141,11 @@ class ComponentDefinition(ComponentModel):
     componentConnectionCustom: str = ""
     designConstraints: str = ""
     evidenceFiles: list[EvidenceFile] = Field(default_factory=list, max_length=10)
+    connectionForms: ComponentConnectionForms = Field(default_factory=lambda: ComponentConnectionForms(
+        internal=ConnectionMethod(mode="preset", value="螺栓连接", details=""),
+        interComponent=ConnectionMethod(mode="preset", value="插接/卡扣", details=""),
+    ))
+    evidence: list[EvidenceAttachment] = Field(default_factory=list, max_length=10)
 
     @model_validator(mode="after")
     def validate_evidence_files(self):
@@ -130,8 +154,6 @@ class ComponentDefinition(ComponentModel):
         if sum(item.size for item in self.evidenceFiles) > 15 * 1024 * 1024:
             raise ValueError("Evidence files exceed the 15 MB total limit")
         return self
-
-
 class Assembly(ComponentModel):
     members: list[ComponentMember]
     mates: list[Mate]
@@ -176,6 +198,8 @@ class DefinitionPatch(PatchModel):
     componentConnectionCustom: str | None = None
     designConstraints: str | None = None
     evidenceFiles: list[EvidenceFile] | None = None
+    connectionForms: ComponentConnectionForms | None = None
+    evidence: list[EvidenceAttachment] | None = None
 
 
 class MemberPatch(PatchModel):

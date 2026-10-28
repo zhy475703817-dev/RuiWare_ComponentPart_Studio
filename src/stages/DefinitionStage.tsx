@@ -1,11 +1,11 @@
 import { useRef } from "react";
 import { useState } from "react";
 import { Download, FileText, Image as ImageIcon, Paperclip, X } from "lucide-react";
-import type { ComponentDefinition, ConnectionType, EvidenceFile } from "../domain/component";
+import type { ComponentDefinition, ConnectionMethod, ConnectionType, EvidenceFile } from "../domain/component";
 
 type Props = { definition: ComponentDefinition; onChange: (patch: Partial<ComponentDefinition>) => void; draftId?: string | null };
 
-const connectionOptions: ConnectionType[] = ["螺栓连接", "焊接", "卡扣连接", "插接", "铆接", "胶接", "自定义"];
+const connectionOptions: ConnectionType[] = ["螺栓连接", "焊接", "卡扣连接", "插接", "铆接", "胶接", "型材槽连接", "销钉连接", "插接/卡扣"];
 const embeddedFileLimit = 5 * 1024 * 1024;
 
 function formatSize(size: number) {
@@ -21,6 +21,7 @@ export function DefinitionStage({ definition, onChange, draftId }: Props) {
   async function addFiles(files: FileList | null) {
     if (!files?.length) return;
     const additions: EvidenceFile[] = [];
+    const metadata: ComponentDefinition["evidence"] = [];
     let message = "";
     for (const file of Array.from(files)) {
       if (file.size > embeddedFileLimit) { message = `${file.name} 超过单文件 5 MB 限制`; continue; }
@@ -38,11 +39,12 @@ export function DefinitionStage({ definition, onChange, draftId }: Props) {
         const result = await response.json();
         if (!response.ok) throw new Error(result?.error?.code || "文件上传失败");
         additions.push(result as EvidenceFile);
+        metadata.push({ id, name: file.name, mediaType: file.type || "application/octet-stream", size: file.size, addedAt: new Date().toISOString() });
       } catch (error) {
         message = error instanceof Error ? `上传失败：${error.message}` : "文件上传失败";
       }
     }
-    if (additions.length) onChange({ evidenceFiles: [...definition.evidenceFiles, ...additions] });
+    if (additions.length) onChange({ evidenceFiles: [...definition.evidenceFiles, ...additions], evidence: [...definition.evidence, ...metadata] });
     setEvidenceError(message);
     if (fileInput.current) fileInput.current.value = "";
   }
@@ -51,26 +53,47 @@ export function DefinitionStage({ definition, onChange, draftId }: Props) {
     onChange({ searchTags: value.split(/[，,\n]/).map(item => item.trim()).filter(Boolean).slice(0, 100) });
   }
 
-  function updateConnection(key: "partConnectionType" | "componentConnectionType", value: ConnectionType) {
-    onChange({ [key]: value });
+  function updateConnection(which: "internal" | "interComponent", method: ConnectionMethod) {
+    const connectionForms = { ...definition.connectionForms, [which]: method };
+    const type = method.mode === "custom" ? "自定义" : method.value as ConnectionType;
+    if (which === "internal") {
+      onChange({ connectionForms, partConnectionType: type, partConnectionCustom: method.mode === "custom" ? method.value : "" });
+    } else {
+      onChange({ connectionForms, componentConnectionType: type, componentConnectionCustom: method.mode === "custom" ? method.value : "" });
+    }
   }
 
   function removeEvidence(id: string) {
-    onChange({ evidenceFiles: definition.evidenceFiles.filter(file => file.id !== id) });
+    onChange({
+      evidenceFiles: definition.evidenceFiles.filter(file => file.id !== id),
+      evidence: definition.evidence.filter(file => file.id !== id),
+    });
   }
 
-  const connectionField = (label: string, typeKey: "partConnectionType" | "componentConnectionType", customKey: "partConnectionCustom" | "componentConnectionCustom") => (
+  const connectionField = (label: string, which: "internal" | "interComponent") => {
+    const method = definition.connectionForms[which];
+    return (
     <div className="definition-connection">
-      <label>{label}
-        <select value={definition[typeKey]} onChange={event => updateConnection(typeKey, event.target.value as ConnectionType)}>
-          {connectionOptions.map(option => <option key={option} value={option}>{option}</option>)}
+      <label>{label}输入方式
+        <select value={method.mode} onChange={event => {
+          const mode = event.target.value as ConnectionMethod["mode"];
+          const value = mode === "custom" && method.mode === "preset" ? "" : mode === "preset" && !connectionOptions.includes(method.value as ConnectionType) ? connectionOptions[0] : method.value;
+          updateConnection(which, { ...method, mode, value });
+        }}>
+          <option value="preset">默认选项</option><option value="custom">用户自定义</option>
         </select>
       </label>
-      {definition[typeKey] === "自定义" && <label>自定义说明
-        <input value={definition[customKey]} placeholder="请描述连接件、受力方式或接口约定" onChange={event => onChange({ [customKey]: event.target.value })}/>
+      {method.mode === "preset" ? <label>{label}方式
+        <select value={method.value} onChange={event => updateConnection(which, { ...method, value: event.target.value })}>
+          {connectionOptions.map(option => <option key={option} value={option}>{option}</option>)}
+        </select>
+      </label> : <label>{label}自定义方式
+        <input value={method.value} placeholder="输入连接方式" onChange={event => updateConnection(which, { ...method, value: event.target.value })}/>
       </label>}
+      <label>{label}连接说明<textarea value={method.details} placeholder="填写连接位置、紧固件或装配要求" onChange={event => updateConnection(which, { ...method, details: event.target.value })}/></label>
     </div>
-  );
+    );
+  };
 
   return <div className="definition-form">
     <div className="definition-group">
@@ -88,8 +111,8 @@ export function DefinitionStage({ definition, onChange, draftId }: Props) {
 
     <div className="definition-group">
       <h4>连接形式</h4>
-      {connectionField("组件内部零部件连接", "partConnectionType", "partConnectionCustom")}
-      {connectionField("不同组件之间连接", "componentConnectionType", "componentConnectionCustom")}
+      {connectionField("组件内部零部件连接", "internal")}
+      {connectionField("不同组件之间连接", "interComponent")}
     </div>
 
     <div className="definition-group">
