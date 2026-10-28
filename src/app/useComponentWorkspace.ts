@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { ComponentAction } from "../domain/componentReducer";
 import { SharedDraftController, httpDraftApi, initialSharedState } from "./sharedDraft";
 import type { PublishedTemplate } from "../library/publishedLibrary";
+import type { ComponentMember, MemberParameterDefinition, Vector3 } from "../domain/component";
 import type { StageId } from "./stages";
 import { componentPublicationMember, fetchPublishedComponent, publishComponentDraft } from "../library/componentPublications";
 import { loadReconstructionInfo } from "../library/templatePreview";
@@ -84,6 +85,32 @@ export function useComponentWorkspace() {
     setMessage("已删除成员，并清理关联的连接、接口及参数绑定");
   }
 
+  function copyMember(id: string) {
+    const source = document.assembly.members.find(member => member.id === id);
+    if (!source) return;
+    const member: ComponentMember = structuredClone(source);
+    member.id = crypto.randomUUID();
+    member.name = `${source.name} 副本`;
+    member.role = `${source.role} 副本`;
+    member.position = [source.position[0] + 40, source.position[1], source.position[2]];
+    if (!dispatch({ type: "member.add", member })) return;
+    setSelectedMemberId(member.id);
+    setMessage(`已复制 ${source.name}`);
+  }
+
+  function moveMember(id: string, position: Vector3) {
+    dispatch({ type: "member.patch", id, patch: { position } });
+  }
+
+  async function openDraftLink(link: string) {
+    let id = link.trim();
+    if (!id) return;
+    try {
+      id = new URL(id, window.location.href).searchParams.get("draft") || id;
+      await selectDraft(id);
+    } catch { setMessage("链接格式不正确，请粘贴包含 draft 参数的草稿链接。"); }
+  }
+
   function connectFirstInterfaces() {
     const [a, b] = document.assembly.members;
     if (!a || !b) return setMessage("至少加入两个零部件后才能记录内部连接");
@@ -147,10 +174,12 @@ export function useComponentWorkspace() {
         member = componentPublicationMember(publication, crypto.randomUUID());
       } else {
         const info = await loadReconstructionInfo(template, AbortSignal.timeout(20000));
+        const parameterDefinitions: MemberParameterDefinition[] = info.parameters.map(parameter => ({ id: parameter.id, label: parameter.label, unit: parameter.unit,
+          valueType: parameter.valueType, minimum: parameter.minimum, maximum: parameter.maximum, default: parameter.default }));
         member = { id: crypto.randomUUID(), name: template.name, code: template.code, role: template.name,
           template: { publicationId: template.publicationId, templateId: template.templateId, version: template.version, sha256: template.sha256 },
           position: [0, 0, 0] as [number, number, number], rotation: [0, 0, 0] as [number, number, number],
-          parameterValues: Object.fromEntries(info.parameters.map(parameter => [parameter.id, parameter.default])), interfaces: [],
+          parameterValues: Object.fromEntries(info.parameters.map(parameter => [parameter.id, parameter.default])), parameterDefinitions, interfaces: info.interfaces,
         };
       }
       if (workspace !== controller.current || workspace.getSnapshot().draftId !== draftId) throw new Error("草稿已切换，请重新选择模板。");
@@ -177,7 +206,8 @@ export function useComponentWorkspace() {
   const syncMessage = shared.error || (shared.status === "loading" ? "正在读取共享草稿…" : shared.status === "saving" ? "正在保存草稿…" : shared.notice || message);
   return { document, dispatch, stage, setStage, selectedMemberId, selectedMember, setSelectedMemberId, previewTemplate, setPreviewTemplate,
     selectionResetToken, message: syncMessage, setMessage, checks, newDraft, removeMember, connectFirstInterfaces, inheritInterface, exportDraft,
-    shared, editable, selectDraft, copyDraftLink, publishDraft, publishing, adding, addPublishedTemplate, libraryRefreshToken,
+    shared, editable, selectDraft, openDraftLink, copyDraftLink, publishDraft, publishing, adding, addPublishedTemplate, libraryRefreshToken,
+    copyMember, moveMember,
     downloadLocalDraft, dismissAgentChanges: () => controller.current?.dismissAgentChanges(),
     retrySave: () => { void controller.current?.retry().catch(() => {}); },
     reloadDraft: () => { void controller.current?.reload(); },

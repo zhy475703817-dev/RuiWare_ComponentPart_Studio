@@ -14,6 +14,25 @@ export type PartInterface = {
   name: string;
   type: "plane" | "axis" | "point";
   tags: string[];
+  declarationMode?: "staticGeometry" | "featureDerived";
+  interfaceType?: string;
+  locatingType?: string;
+  role?: string;
+  geometryRefs?: string[];
+  parameterRefs?: string[];
+  description?: string;
+  required?: boolean;
+  region?: { mode?: string; uSpan?: number; vSpan?: number; uSpanExpression?: string; vSpanExpression?: string; countExpression?: string };
+};
+
+export type MemberParameterDefinition = {
+  id: string;
+  label: string;
+  unit: string;
+  valueType: string;
+  minimum: number | null;
+  maximum: number | null;
+  default: number | string | boolean;
 };
 
 export type ComponentMember = {
@@ -25,6 +44,7 @@ export type ComponentMember = {
   position: Vector3;
   rotation: Vector3;
   parameterValues: Record<string, ParameterValue>;
+  parameterDefinitions?: MemberParameterDefinition[];
   interfaces: PartInterface[];
 };
 
@@ -34,6 +54,7 @@ export type ComponentPort = { id: string; name: string; source: InterfaceSource;
 export type ComponentSlot = { id: string; name: string; memberId: string | null; required: boolean };
 export type ComponentParameter = { id: string; label: string; value: number | null; unit: string; min: number; max: number };
 export type ParameterBinding = { id: string; parameterId: string; memberId: string; memberParameterId: string };
+export type ComponentPattern = { id: string; label: string; memberIds: string[]; countParameterId: string; spacingParameterId: string; axis: "x" | "y" | "z" };
 export type ComponentRule = { id: string; expression: string };
 export type ConnectionType = "螺栓连接" | "焊接" | "卡扣连接" | "插接" | "铆接" | "胶接" | "型材槽连接" | "销钉连接" | "插接/卡扣" | "自定义";
 export type EvidenceFile = { id: string; fileName: string; mediaType: string; size: number; sha256: string; dataUrl?: string | null };
@@ -70,6 +91,7 @@ export type ComponentDocument = {
   slots: ComponentSlot[];
   parameters: ComponentParameter[];
   bindings: ParameterBinding[];
+  patterns: ComponentPattern[];
   rules: ComponentRule[];
 };
 
@@ -88,7 +110,7 @@ export function createComponentDocument(): ComponentDocument {
       },
       designConstraints: "", evidenceFiles: [], evidence: [],
     },
-    assembly: { members: [], mates: [] }, ports: [], slots: [], bindings: [],
+    assembly: { members: [], mates: [] }, ports: [], slots: [], bindings: [], patterns: [],
     parameters: [{ id: "componentLength", label: "组件总长", value: 2400, unit: "mm", min: 1000, max: 6000 }],
     rules: [{ id: "rule-1", expression: "组件总长必须在 1000~6000 mm 范围内" }],
   };

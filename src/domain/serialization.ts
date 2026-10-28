@@ -15,6 +15,7 @@ export function serializeComponent(document: ComponentDocument): string {
           partTemplateRef: { publicationId: member.template.publicationId, templateId: member.template.templateId, version: member.template.version, sha256: member.template.sha256 },
           name: member.name, code: member.code, role: member.role,
           position: member.position, rotation: member.rotation, parameterValues: member.parameterValues,
+          parameterDefinitions: member.parameterDefinitions || [],
           bindings: { ...member.parameterValues, ...Object.fromEntries(bindings.filter(binding => binding.memberId === member.id).map(binding => [binding.memberParameterId, binding.parameterId])) },
           interfaces: member.interfaces,
         })),
@@ -25,7 +26,7 @@ export function serializeComponent(document: ComponentDocument): string {
       },
       ports: ports.map(port => ({ id: port.id, name: port.name, sourceMemberId: port.source.memberId, sourceInterfaceId: port.source.interfaceId, source: port.source, tags: port.tags })),
       slots, parameters: Object.fromEntries(parameters.map(parameter => [parameter.id, parameter.value])),
-      parameterDefinitions: parameters, bindings, rules,
+      parameterDefinitions: parameters, bindings, patterns: document.patterns, rules,
       validation: validateComponent(document).map(check => ({ name: check.label, passed: check.status === "pass", ...check })),
     },
   }, null, 2);

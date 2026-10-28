@@ -1,13 +1,17 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { PublishedTemplate } from "./publishedLibrary";
 import { loadReconstructionInfo, loadTemplatePreview } from "./templatePreview";
 import type { LoadedPreview, ReconstructionInfo } from "./templatePreview";
 
-export function useTemplatePreview(selected: PublishedTemplate | null) {
+export function useTemplatePreview(selected: PublishedTemplate | null, initialValues: Record<string, unknown> = {}) {
+  const initialValuesKey = JSON.stringify(initialValues);
+  const initialValuesRef = useRef(initialValues);
   const [attempt, setAttempt] = useState(0);
   const [infoState, setInfoState] = useState<{ selected: PublishedTemplate | null; info: ReconstructionInfo | null; error: string }>({ selected: null, info: null, error: "" });
   const [valueState, setValueState] = useState<{ selected: PublishedTemplate | null; values: Record<string, unknown> }>({ selected: null, values: {} });
   const [modelState, setModelState] = useState<{ selected: PublishedTemplate | null; result: LoadedPreview | null; error: string; loading: boolean }>({ selected: null, result: null, error: "", loading: false });
+
+  useEffect(() => { initialValuesRef.current = initialValues; }, [initialValuesKey]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -18,7 +22,7 @@ export function useTemplatePreview(selected: PublishedTemplate | null) {
       void loadReconstructionInfo(selected, controller.signal).then(info => {
         if (controller.signal.aborted) return;
         setInfoState({ selected, info, error: "" });
-        setValueState({ selected, values: Object.fromEntries(info.parameters.map(item => [item.id, item.default])) });
+        setValueState({ selected, values: { ...Object.fromEntries(info.parameters.map(item => [item.id, item.default])), ...initialValuesRef.current } });
       }).catch(error => {
         if (!controller.signal.aborted) {
           const message = error instanceof TypeError ? "无法连接组件后端，请检查服务后重试。" : error instanceof Error ? error.message : "零件读取失败，请重试。";
@@ -30,6 +34,11 @@ export function useTemplatePreview(selected: PublishedTemplate | null) {
 
     return () => controller.abort();
   }, [selected]);
+
+  useEffect(() => {
+    if (!selected || valueState.selected !== selected) return;
+    setValueState(current => ({ selected, values: { ...current.values, ...initialValues } }));
+  }, [selected, initialValuesKey]);
 
   useEffect(() => {
     const info = infoState.selected === selected ? infoState.info : null;

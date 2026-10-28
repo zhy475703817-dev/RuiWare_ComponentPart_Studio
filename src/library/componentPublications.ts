@@ -30,14 +30,25 @@ export const fetchPublishedComponent = (publicationId: string) => request(`/api/
 
 export function componentPublicationMember(publication: ComponentPublication, id: string): ComponentMember {
   const { document } = publication;
+  const parameterDefinitions = document.parameters.map(parameter => ({
+    id: parameter.id, label: parameter.label, unit: parameter.unit, valueType: "number",
+    minimum: parameter.min, maximum: parameter.max, default: parameter.value ?? parameter.min,
+  }));
   return {
     id, name: publication.name, code: publication.code, role: publication.name,
     template: { templateKind: "component", publicationId: publication.publicationId, templateId: publication.templateId, version: publication.version, sha256: publication.sha256 },
     position: [0, 0, 0], rotation: [0, 0, 0],
     parameterValues: Object.fromEntries(document.parameters.filter(parameter => parameter.value !== null).map(parameter => [parameter.id, parameter.value!])),
+    parameterDefinitions,
     interfaces: document.ports.flatMap(port => {
       const source = document.assembly.members.find(member => member.id === port.source.memberId)?.interfaces.find(item => item.id === port.source.interfaceId);
-      return source ? [{ id: port.id, name: port.name, type: source.type, tags: [...port.tags] }] : [];
+      if (!source) return [];
+      const exposed: ComponentMember["interfaces"][number] = { id: port.id, name: port.name, type: source.type, tags: [...port.tags] };
+      for (const key of ["declarationMode", "interfaceType", "locatingType", "role", "geometryRefs", "parameterRefs", "description", "required", "region"] as const) {
+        const value = source[key];
+        if (value !== undefined) exposed[key] = value as never;
+      }
+      return [exposed];
     }),
   };
 }

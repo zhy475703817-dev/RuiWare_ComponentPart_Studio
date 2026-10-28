@@ -4,6 +4,7 @@ import { createComponentDocument } from '../src/domain/component.ts';
 import { componentReducer } from '../src/domain/componentReducer.ts';
 import { validateComponent } from '../src/domain/validation.ts';
 import { serializeComponent } from '../src/domain/serialization.ts';
+import { deriveComponentMetrics, effectiveParameterBounds } from '../src/domain/parameterMetrics.ts';
 
 const template = { publicationId: 'version.1', templateId: 'part.1', version: 3, sha256: 'a'.repeat(64) };
 const member = id => ({
@@ -26,6 +27,72 @@ test('定义、参数及规则编辑共用一份不可变草稿并增加修订',
   assert.equal(draft.revision, original.revision + 3);
   assert.equal(componentReducer(draft, { type: 'parameter.value', id: 'missing', value: 10 }), draft);
   assert.deepEqual(componentReducer(draft, { type: 'reset' }), createComponentDocument());
+});
+
+test('高度指标保留组件参数值，不从其他参数推算几何高度', () => {
+  const metrics = deriveComponentMetrics([
+    { id: 'componentHeight', label: '组件总高', value: 1800, unit: 'mm', min: 500, max: 6000 },
+  ]);
+  assert.equal(metrics.height.value, '1,800 mm');
+  assert.match(metrics.height.note, /组件参数范围/);
+});
+
+test('组件参数绑定会继承成员范围并把值同步到成员参数', () => {
+  const base = createComponentDocument();
+  const boundMember = { ...member('a'), parameterDefinitions: [{ id: 'length', label: '零件长度', unit: 'mm', valueType: 'number', minimum: 1800, maximum: 4200, default: 2400 }] };
+  let draft = componentReducer(base, { type: 'member.add', member: boundMember });
+  const binding = { id: 'b1', parameterId: 'componentLength', memberId: 'a', memberParameterId: 'length' };
+  draft = componentReducer(draft, { type: 'binding.set', id: binding.id, binding });
+  const bounds = effectiveParameterBounds(draft.parameters[0], draft.bindings, draft.assembly.members);
+  assert.equal(bounds.min, 1800);
+  assert.equal(bounds.max, 4200);
+  draft = componentReducer(draft, { type: 'parameter.value', id: 'componentLength', value: 5000 });
+  assert.equal(draft.parameters[0].value, 4200);
+  assert.equal(draft.assembly.members[0].parameterValues.length, 4200);
+  assert.equal(JSON.parse(serializeComponent(draft)).stages.bindings[0].memberParameterId, 'length');
+});
+
+test('整数型成员绑定会把有效范围收敛到整数并同步整数值', () => {
+  const boundMember = { ...member('integer-member'), parameterDefinitions: [{ id: 'count', label: '数量', unit: '件', valueType: 'integer', minimum: 2.2, maximum: 8.7, default: 4 }] };
+  let draft = componentReducer(createComponentDocument(), { type: 'parameter.add', parameter: { id: 'componentCount', label: '组件数量', value: 4, unit: '件', min: 1, max: 20 } });
+  draft = componentReducer(draft, { type: 'member.add', member: boundMember });
+  draft = componentReducer(draft, { type: 'binding.set', id: 'count-binding', binding: { id: 'count-binding', parameterId: 'componentCount', memberId: 'integer-member', memberParameterId: 'count' } });
+  assert.equal(draft.parameters.at(-1).value, 4);
+  draft = componentReducer(draft, { type: 'parameter.value', id: 'componentCount', value: 9.4 });
+  assert.equal(draft.parameters.at(-1).value, 8);
+  assert.equal(draft.assembly.members[0].parameterValues.count, 8);
+  assert.equal(effectiveParameterBounds(draft.parameters.at(-1), draft.bindings, draft.assembly.members).min, 3);
+});
+
+test('组件参数可以新增和删除，并清理关联绑定', () => {
+  const parameter = { id: 'componentWidth', label: '组件宽度', value: 800, unit: 'mm', min: 100, max: 2000 };
+  let draft = componentReducer(createComponentDocument(), { type: 'parameter.add', parameter });
+  const boundMember = { ...member('a'), parameterValues: { width: 900 }, parameterDefinitions: [{ id: 'width', label: '宽度', unit: 'mm', valueType: 'number', minimum: 200, maximum: 1500, default: 900 }] };
+  draft = componentReducer(draft, { type: 'member.add', member: boundMember });
+  assert.equal(draft.parameters.at(-1).id, 'componentWidth');
+  draft = componentReducer(draft, { type: 'binding.set', id: 'b-width', binding: { id: 'b-width', parameterId: 'componentWidth', memberId: 'a', memberParameterId: 'width' } });
+  assert.equal(draft.bindings.length, 1);
+  draft = componentReducer(draft, { type: 'parameter.remove', id: 'componentWidth' });
+  assert.equal(draft.parameters.some(item => item.id === 'componentWidth'), false);
+  assert.equal(draft.bindings.length, 0);
+});
+
+test('通用构成规则按数量、间距和轴保存，并在删除来源时清理成员', () => {
+  let draft = createComponentDocument();
+  draft = componentReducer(draft, { type: 'parameter.add', parameter: { id: 'supportCount', label: '支撑数量', value: 3, unit: '个', min: 1, max: 8 } });
+  draft = componentReducer(draft, { type: 'parameter.add', parameter: { id: 'supportPitch', label: '支撑间距', value: 450, unit: 'mm', min: 0, max: 1200 } });
+  draft = componentReducer(draft, { type: 'member.add', member: member('support') });
+  draft = componentReducer(draft, { type: 'member.add', member: member('brace') });
+  const pattern = { id: 'support-array', label: '支撑阵列', memberIds: ['support', 'brace'], countParameterId: 'supportCount', spacingParameterId: 'supportPitch', axis: 'z' };
+  draft = componentReducer(draft, { type: 'pattern.add', pattern });
+  assert.deepEqual(draft.patterns, [pattern]);
+  const result = JSON.parse(serializeComponent(draft));
+  assert.equal(result.stages.patterns[0].countParameterId, 'supportCount');
+  assert.equal(validateComponent(draft).find(check => check.id === 'patterns').status, 'pass');
+  draft = componentReducer(draft, { type: 'member.remove', id: 'support' });
+  assert.deepEqual(draft.patterns[0].memberIds, ['brace']);
+  draft = componentReducer(draft, { type: 'parameter.remove', id: 'supportCount' });
+  assert.equal(draft.patterns.length, 0);
 });
 
 test('同一发布版本可以添加多个成员，成员值不修改模板和原始输入', () => {

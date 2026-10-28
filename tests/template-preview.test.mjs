@@ -51,9 +51,9 @@ test('重建接口会映射单体平台的接口类型和兼容标签',async t=>
   t.mock.method(globalThis,'fetch',async()=>Response.json(info));
   const result=await loadReconstructionInfo(publication,new AbortController().signal);
   assert.deepEqual(result.interfaces,[
-    {id:'axis',name:'导向轴',type:'axis',tags:['round','interface:connecting','locating:axisCoincident']},
-    {id:'pin',name:'定位孔',type:'point',tags:['hole','interface:locating','locating:pinHole']},
-    {id:'face',name:'安装面',type:'plane',tags:['interface:supporting','locating:faceCoincident']},
+    {id:'axis',name:'导向轴',type:'axis',tags:['round','interface:connecting','locating:axisCoincident'],interfaceType:'connecting',locatingType:'axisCoincident'},
+    {id:'pin',name:'定位孔',type:'point',tags:['hole','interface:locating','locating:pinHole'],interfaceType:'locating',locatingType:'pinHole'},
+    {id:'face',name:'安装面',type:'plane',tags:['interface:supporting','locating:faceCoincident'],interfaceType:'supporting'},
   ]);
 });
 

@@ -132,7 +132,35 @@ export async function loadReconstructionInfo(selected: PublishedTemplate, signal
     if (interfaceType) tags.push(`interface:${interfaceType}`);
     if (locatingType) tags.push(`locating:${locatingType}`);
     interfaceIds.add(item.id);
-    return { id: item.id, name: item.name, type, tags: [...new Set(tags)] };
+    const region = record(item.region) ? {
+      mode: typeof item.region.mode === "string" ? item.region.mode : undefined,
+      uSpan: typeof item.region.uSpan === "number" ? item.region.uSpan : undefined,
+      vSpan: typeof item.region.vSpan === "number" ? item.region.vSpan : undefined,
+      uSpanExpression: typeof item.region.uSpanExpression === "string" ? item.region.uSpanExpression : undefined,
+      vSpanExpression: typeof item.region.vSpanExpression === "string" ? item.region.vSpanExpression : undefined,
+      countExpression: typeof item.region.countExpression === "string" ? item.region.countExpression : undefined,
+    } : undefined;
+    const declarationMode: PartInterface["declarationMode"] = item.declarationMode === "staticGeometry" || item.declarationMode === "featureDerived" ? item.declarationMode : undefined;
+    const role: PartInterface["role"] = item.role === "primary" || item.role === "secondary" || item.role === "tertiary" ? item.role : undefined;
+    const knownInterfaceTypes: NonNullable<PartInterface["interfaceType"]>[] = ["locating", "connecting", "supporting", "adjustable", "processDatum", "other"];
+    const knownLocatingTypes: NonNullable<PartInterface["locatingType"]>[] = ["planeContact", "axisCoincident", "pinHole", "edgeStop", "slotAdjustable", "keyedAntiError"];
+    const geometryRefs = Array.isArray(item.geometryRefs) ? item.geometryRefs.filter((reference): reference is string => typeof reference === "string") : undefined;
+    const parameterRefs = Array.isArray(item.parameterRefs) ? item.parameterRefs.filter((reference): reference is string => typeof reference === "string") : undefined;
+    const parsed: PartInterface = { id: item.id, name: item.name, type, tags: [...new Set(tags)] };
+    const parsedInterfaceType = knownInterfaceTypes.find(value => value === interfaceType);
+    const parsedLocatingType = knownLocatingTypes.find(value => value === locatingType);
+    const description = typeof item.description === "string" ? item.description : undefined;
+    const required = typeof item.required === "boolean" ? item.required : undefined;
+    if (parsedInterfaceType) parsed.interfaceType = parsedInterfaceType;
+    if (parsedLocatingType) parsed.locatingType = parsedLocatingType;
+    if (declarationMode) parsed.declarationMode = declarationMode;
+    if (role) parsed.role = role;
+    if (geometryRefs?.length) parsed.geometryRefs = geometryRefs;
+    if (parameterRefs?.length) parsed.parameterRefs = parameterRefs;
+    if (description) parsed.description = description;
+    if (required !== undefined) parsed.required = required;
+    if (region) parsed.region = region;
+    return parsed;
   });
   return { publication, parameters, interfaces };
 }

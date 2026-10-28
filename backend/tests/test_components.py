@@ -97,6 +97,12 @@ class ComponentTests(unittest.TestCase):
         with TestClient(create_app(dist_dir=None)) as client:
             data = self.create(client)["document"]
         data["assembly"]["members"] = [member("member.a"), member("member.b")]
+        data["assembly"]["members"][0]["parameterDefinitions"] = [{"id": "length", "label": "长度", "unit": "mm", "valueType": "integer", "minimum": 100, "maximum": 5000, "default": 2400}]
+        data["assembly"]["members"][0]["interfaces"][0].update({
+            "interfaceType": "locating", "locatingType": "planeContact", "declarationMode": "featureDerived",
+            "geometryRefs": ["leftFace"], "parameterRefs": ["sectionWidth"], "description": "左端连接面", "required": True,
+            "region": {"mode": "rectangle", "uSpanExpression": "sectionWidth", "vSpanExpression": "sectionHeight", "countExpression": "holeCount"},
+        })
         data["assembly"]["mates"] = [{"id": "ab", "from": source("member.a"), "to": source("member.b"), "relation": "贴合", "offset": 0}]
         data["ports"] = [{"id": "p", "name": "外部接口", "source": source("member.a"), "tags": []}]
         data["slots"] = [{"id": "s", "name": "槽位", "memberId": "member.a", "required": True}]
@@ -126,10 +132,38 @@ console.log(JSON.stringify({document:result,checks:validateComponent(result),exp
         self.assertEqual(document.model_dump(by_alias=True), expected["document"])
         self.assertEqual(validate_component(document), expected["checks"])
         self.assertEqual(serialize_component(document), expected["export"])
+        member_export = expected["export"]["stages"]["assembly"]["members"][0]
+        self.assertEqual(member_export["parameterDefinitions"][0]["minimum"], 100)
+        self.assertEqual(member_export["interfaces"][0]["region"]["mode"], "rectangle")
+        self.assertEqual(member_export["interfaces"][0]["geometryRefs"], ["leftFace"])
+        self.assertEqual(member_export["interfaces"][0]["region"]["countExpression"], "holeCount")
         self.assertEqual(document.assembly.mates, [])
         self.assertEqual(document.ports, [])
         self.assertEqual(document.bindings, [])
         self.assertIsNone(document.slots[0].memberId)
+
+    def test_generic_component_pattern_is_saved_validated_and_cleaned(self):
+        from backend.app.components.models import ComponentAction, ComponentDocument
+        from backend.app.components.service import apply_action, serialize_component, validate_component
+
+        document = create_component_document()
+        data = document.model_dump(by_alias=True)
+        data["parameters"].extend([
+            {"id": "supportCount", "label": "支撑数量", "value": 3, "unit": "个", "min": 1, "max": 8},
+            {"id": "supportPitch", "label": "支撑间距", "value": 450, "unit": "mm", "min": 0, "max": 1200},
+        ])
+        document = ComponentDocument.model_validate(data)
+        document = apply_action(document, ComponentAction.validate_python({"type": "member.add", "member": member("support")}))
+        document = apply_action(document, ComponentAction.validate_python({
+            "type": "pattern.add", "pattern": {
+                "id": "support-array", "label": "支撑阵列", "memberIds": ["support"],
+                "countParameterId": "supportCount", "spacingParameterId": "supportPitch", "axis": "z",
+            },
+        }))
+        self.assertEqual(next(check for check in validate_component(document) if check["id"] == "patterns")["status"], "pass")
+        self.assertEqual(serialize_component(document)["stages"]["patterns"][0]["spacingParameterId"], "supportPitch")
+        document = apply_action(document, ComponentAction.validate_python({"type": "member.remove", "id": "support"}))
+        self.assertEqual(document.patterns, [])
 
     def test_nested_import_validation_and_noop_revision(self):
         with TestClient(create_app(dist_dir=None)) as client:

@@ -1,9 +1,14 @@
 import { useRef } from "react";
 import { useState } from "react";
 import { Download, FileText, Image as ImageIcon, Paperclip, X } from "lucide-react";
-import type { ComponentDefinition, ConnectionMethod, ConnectionType, EvidenceFile } from "../domain/component";
+import type { ComponentDefinition, ComponentMember, ConnectionMethod, ConnectionType, EvidenceFile } from "../domain/component";
 
-type Props = { definition: ComponentDefinition; onChange: (patch: Partial<ComponentDefinition>) => void; draftId?: string | null };
+type Props = {
+  definition: ComponentDefinition;
+  members: ComponentMember[];
+  onChange: (patch: Partial<ComponentDefinition>) => void;
+  draftId?: string | null;
+};
 
 const connectionOptions: ConnectionType[] = ["螺栓连接", "焊接", "卡扣连接", "插接", "铆接", "胶接", "型材槽连接", "销钉连接", "插接/卡扣"];
 const embeddedFileLimit = 5 * 1024 * 1024;
@@ -14,9 +19,17 @@ function formatSize(size: number) {
   return `${(size / 1024 / 1024).toFixed(1)} MB`;
 }
 
-export function DefinitionStage({ definition, onChange, draftId }: Props) {
+export function DefinitionStage({ definition, members, onChange, draftId }: Props) {
   const fileInput = useRef<HTMLInputElement>(null);
   const [evidenceError, setEvidenceError] = useState("");
+  const [tagInput, setTagInput] = useState("");
+
+  function addTag() {
+    const tag = tagInput.trim();
+    if (!tag || definition.searchTags.includes(tag)) return setTagInput("");
+    onChange({ searchTags: [...definition.searchTags, tag] });
+    setTagInput("");
+  }
 
   async function addFiles(files: FileList | null) {
     if (!files?.length) return;
@@ -47,10 +60,6 @@ export function DefinitionStage({ definition, onChange, draftId }: Props) {
     if (additions.length) onChange({ evidenceFiles: [...definition.evidenceFiles, ...additions], evidence: [...definition.evidence, ...metadata] });
     setEvidenceError(message);
     if (fileInput.current) fileInput.current.value = "";
-  }
-
-  function updateTags(value: string) {
-    onChange({ searchTags: value.split(/[，,\n]/).map(item => item.trim()).filter(Boolean).slice(0, 100) });
   }
 
   function updateConnection(which: "internal" | "interComponent", method: ConnectionMethod) {
@@ -105,7 +114,6 @@ export function DefinitionStage({ definition, onChange, draftId }: Props) {
         <label>项目负责人<input value={definition.owner} onChange={event => onChange({ owner: event.target.value })}/></label>
         <label>项目所属组织<input value={definition.organization} onChange={event => onChange({ organization: event.target.value })}/></label>
       </div>
-      <label>项目检索标签<textarea rows={2} value={definition.searchTags.join("，")} placeholder="多个标签用逗号或换行分隔" onChange={event => updateTags(event.target.value)}/></label>
       <label>组件类型<select value={definition.category} onChange={event => onChange({ category: event.target.value })}><option>货架组件</option><option>连接组件</option><option>支撑组件</option></select></label>
     </div>
 
@@ -120,6 +128,28 @@ export function DefinitionStage({ definition, onChange, draftId }: Props) {
       <label>设计说明<textarea rows={4} value={definition.description} onChange={event => onChange({ description: event.target.value })}/></label>
       <label>设计约束与可变范围<textarea rows={5} value={definition.designConstraints} placeholder="描述组合限制、干涉风险、允许的尺寸/数量变化及必须满足的条件" onChange={event => onChange({ designConstraints: event.target.value })}/></label>
     </div>
+
+    <section className="definition-subsection">
+      <h4>成员参数范围与接口</h4>
+      {members.length === 0 ? <p className="empty-text">添加零部件后可查看其参数范围与接口数量</p> : <ul className="definition-member-list">{members.map(member => <li key={member.id}>
+        <b>{member.role}</b><span>{member.interfaces.length} 个接口</span>
+        {member.parameterDefinitions?.length ? <small>{member.parameterDefinitions.map(parameter => `${parameter.label}: ${parameter.minimum ?? "−∞"}~${parameter.maximum ?? "∞"}${parameter.unit ? ` ${parameter.unit}` : ""}`).join(" · ")}</small> : <small>未定义可调参数范围</small>}
+        {member.interfaces.length > 0 && <small>{member.interfaces.map(item => {
+          const region = item.region;
+          const dimensions = region?.uSpan !== undefined && region.vSpan !== undefined ? `${region.uSpan} × ${region.vSpan} mm` : region?.uSpanExpression || region?.vSpanExpression ? `U ${region.uSpanExpression || "?"} × V ${region.vSpanExpression || "?"}` : "尺寸未声明";
+          const mode = [item.declarationMode, item.locatingType, region?.mode, item.required ? "必需" : "可选"].filter(Boolean).join(" / ");
+          const multiplicity = region?.countExpression ? ` · 数量表达式 ${region.countExpression}` : "";
+          const geometry = item.geometryRefs?.length ? ` · 几何 ${item.geometryRefs.join(", ")}` : "";
+          return `${item.name}: ${item.interfaceType || item.type}${mode ? ` / ${mode}` : ""} · ${dimensions}${multiplicity}${geometry}`;
+        }).join("；")}</small>}
+      </li>)}</ul>}
+    </section>
+
+    <section className="definition-subsection">
+      <h4>项目检索标签</h4>
+      <div className="definition-tag-entry"><input value={tagInput} placeholder="输入标签后按 Enter" onChange={event => setTagInput(event.target.value)} onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); addTag(); } }}/><button type="button" className="ghost" onClick={addTag}>添加</button></div>
+      <div className="definition-tags">{definition.searchTags.map(tag => <span key={tag}>{tag}<button type="button" aria-label={`移除标签 ${tag}`} onClick={() => onChange({ searchTags: definition.searchTags.filter(item => item !== tag) })}><X size={13}/></button></span>)}</div>
+    </section>
 
     <div className="definition-group">
       <div className="definition-group-title"><h4>证据与参考</h4><button type="button" className="ghost compact" onClick={() => fileInput.current?.click()}><Paperclip size={13}/>添加文件</button></div>

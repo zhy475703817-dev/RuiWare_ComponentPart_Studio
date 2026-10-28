@@ -33,6 +33,33 @@ class PartInterface(ComponentModel):
     name: str
     type: Literal["plane", "axis", "point"]
     tags: list[str]
+    declarationMode: Literal["staticGeometry", "featureDerived"] | None = None
+    interfaceType: Literal["locating", "connecting", "supporting", "adjustable", "processDatum", "other"] | None = None
+    locatingType: Literal["planeContact", "axisCoincident", "pinHole", "edgeStop", "slotAdjustable", "keyedAntiError"] | None = None
+    role: Literal["primary", "secondary", "tertiary"] | None = None
+    geometryRefs: list[str] | None = None
+    parameterRefs: list[str] | None = None
+    description: str | None = None
+    required: bool | None = None
+    region: dict[str, object] | None = None
+
+    @model_serializer(mode="wrap")
+    def preserve_optional_metadata(self, handler):
+        data = handler(self)
+        for field in ("declarationMode", "interfaceType", "locatingType", "role", "geometryRefs", "parameterRefs", "description", "required", "region"):
+            if field not in self.model_fields_set:
+                data.pop(field, None)
+        return data
+
+
+class MemberParameterDefinition(ComponentModel):
+    id: str
+    label: str
+    unit: str
+    valueType: Literal["number", "integer", "string", "enum", "boolean"]
+    minimum: Number | None
+    maximum: Number | None
+    default: ParameterValue
 
 
 class ComponentMember(ComponentModel):
@@ -44,7 +71,15 @@ class ComponentMember(ComponentModel):
     position: Vector3
     rotation: Vector3
     parameterValues: dict[str, ParameterValue]
+    parameterDefinitions: list[MemberParameterDefinition] = Field(default_factory=list)
     interfaces: list[PartInterface]
+
+    @model_serializer(mode="wrap")
+    def preserve_legacy_members(self, handler):
+        data = handler(self)
+        if "parameterDefinitions" not in self.model_fields_set:
+            data.pop("parameterDefinitions", None)
+        return data
 
 
 class InterfaceSource(ComponentModel):
@@ -88,6 +123,15 @@ class ParameterBinding(ComponentModel):
     parameterId: str
     memberId: str
     memberParameterId: str
+
+
+class ComponentPattern(ComponentModel):
+    id: str
+    label: str
+    memberIds: list[str]
+    countParameterId: str
+    spacingParameterId: str
+    axis: Literal["x", "y", "z"]
 
 
 class ComponentRule(ComponentModel):
@@ -171,6 +215,7 @@ class ComponentDocument(ComponentModel):
     slots: list[ComponentSlot]
     parameters: list[ComponentParameter]
     bindings: list[ParameterBinding]
+    patterns: list[ComponentPattern] = Field(default_factory=list)
     rules: list[ComponentRule]
 
 
@@ -250,6 +295,32 @@ class ParameterValueAction(ComponentModel):
     value: Number | None
 
 
+class ParameterAddAction(ComponentModel):
+    type: Literal["parameter.add"]
+    parameter: ComponentParameter
+
+
+class ParameterRemoveAction(ComponentModel):
+    type: Literal["parameter.remove"]
+    id: str
+
+
+class BindingSetAction(ComponentModel):
+    type: Literal["binding.set"]
+    id: str
+    binding: ParameterBinding | None
+
+
+class PatternAddAction(ComponentModel):
+    type: Literal["pattern.add"]
+    pattern: ComponentPattern
+
+
+class PatternRemoveAction(ComponentModel):
+    type: Literal["pattern.remove"]
+    id: str
+
+
 class RuleExpressionAction(ComponentModel):
     type: Literal["rule.expression"]
     id: str
@@ -258,7 +329,7 @@ class RuleExpressionAction(ComponentModel):
 
 TypedAction = Annotated[
     ResetAction | DefinitionPatchAction | MemberAddAction | MemberPatchAction | MemberRemoveAction
-    | MateAddAction | PortAddAction | ParameterValueAction | RuleExpressionAction,
+    | MateAddAction | PortAddAction | ParameterValueAction | ParameterAddAction | ParameterRemoveAction | BindingSetAction | PatternAddAction | PatternRemoveAction | RuleExpressionAction,
     Field(discriminator="type"),
 ]
 ComponentAction = TypeAdapter(TypedAction)
