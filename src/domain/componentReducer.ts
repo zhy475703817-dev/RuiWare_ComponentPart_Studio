@@ -1,4 +1,4 @@
-import { createComponentDocument, hasInterface } from "./component.ts";
+import { createComponentDocument, getInterface, hasInterface, samePartInterface } from "./component.ts";
 import type { ComponentDefinition, ComponentDocument, ComponentMember, ComponentPattern, ComponentPort, Mate, ParameterBinding } from "./component.ts";
 
 export type ComponentAction =
@@ -51,10 +51,13 @@ export function componentReducer(document: ComponentDocument, action: ComponentA
         ))) return document;
       return next({ assembly: { ...document.assembly, mates: [...document.assembly.mates, structuredClone(mate)] } });
     }
-    case "port.add":
+    case "port.add": {
       if (!hasInterface(document, action.port.source) || document.ports.some(port => port.id === action.port.id ||
         (port.source.memberId === action.port.source.memberId && port.source.interfaceId === action.port.source.interfaceId))) return document;
-      return next({ ports: [...document.ports, structuredClone(action.port)] });
+      const sourceInterface = getInterface(document, action.port.source);
+      if (!sourceInterface || (action.port.interface && !samePartInterface(action.port.interface, sourceInterface))) return document;
+      return next({ ports: [...document.ports, { ...structuredClone(action.port), interface: structuredClone(sourceInterface) }] });
+    }
     case "parameter.value":
       if (!document.parameters.some(parameter => parameter.id === action.id && parameter.value !== action.value)) return document;
       const componentParameter = document.parameters.find(parameter => parameter.id === action.id)!;
@@ -73,7 +76,10 @@ export function componentReducer(document: ComponentDocument, action: ComponentA
       const updatedMembers = document.assembly.members.map(member => {
         const values = { ...member.parameterValues };
         for (const binding of document.bindings.filter(item => item.parameterId === action.id && item.memberId === member.id)) {
-          if (value === null) continue;
+          if (value === null) {
+            delete values[binding.memberParameterId];
+            continue;
+          }
           const definition = member.parameterDefinitions?.find(item => item.id === binding.memberParameterId && item.unit === document.parameters.find(item => item.id === action.id)?.unit && ["number", "integer"].includes(item.valueType));
           const targetMin = Math.max(componentParameter.min, definition?.minimum ?? -Infinity);
           const targetMax = Math.min(componentParameter.max, definition?.maximum ?? Infinity);

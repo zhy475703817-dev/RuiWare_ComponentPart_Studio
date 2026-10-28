@@ -18,7 +18,14 @@ export type ReconstructionParameter = {
   minimum: number | null; maximum: number | null; allowedValues: (number | string | boolean)[];
 };
 export type LoadedPreview = { description: PreviewDescription; geometry: BufferGeometry };
-export type ReconstructionInfo = { publication: PublishedTemplate; parameters: ReconstructionParameter[]; interfaces: PartInterface[] };
+export type ResolvedInterface = {
+  id: string; sourceInterfaceId: string; declarationMode: string; interfaceType: string;
+  geometryRefs: string[]; parameterRefs: string[];
+  region: { mode: "rectangle"; uStart: number; vStart: number; uSpan: number; vSpan: number } | null;
+  sourceFeatureRuleId?: string | null; sourceFeatureId?: string | null;
+};
+export type InterfaceDiagnostic = { severity: "warning" | "error"; code: string; path: string; message: string };
+export type ReconstructionInfo = { publication: PublishedTemplate; parameters: ReconstructionParameter[]; interfaces: PartInterface[]; resolvedInterfaces: ResolvedInterface[]; interfaceDiagnostics: InterfaceDiagnostic[] };
 export type PreviewPhase = "package" | "model";
 const MAX_MODEL_BYTES = 64 * 1024 * 1024;
 
@@ -162,7 +169,14 @@ export async function loadReconstructionInfo(selected: PublishedTemplate, signal
     if (region) parsed.region = region;
     return parsed;
   });
-  return { publication, parameters, interfaces };
+  const resolvedInterfaces = (Array.isArray(value.resolvedInterfaces) ? value.resolvedInterfaces : []).filter(record).map(item => {
+    if (typeof item.id !== "string" || typeof item.sourceInterfaceId !== "string" || typeof item.interfaceType !== "string" || !Array.isArray(item.geometryRefs) || !Array.isArray(item.parameterRefs)) throw new Error("无法读取零件解析后的接口。");
+    const region = item.region;
+    if (region !== null && region !== undefined && (!record(region) || region.mode !== "rectangle" || typeof region.uStart !== "number" || typeof region.vStart !== "number" || typeof region.uSpan !== "number" || typeof region.vSpan !== "number")) throw new Error("无法读取零件接口尺寸。");
+    return item as ResolvedInterface;
+  });
+  const interfaceDiagnostics = (Array.isArray(value.interfaceDiagnostics) ? value.interfaceDiagnostics : []).filter(record).map(item => item as InterfaceDiagnostic);
+  return { publication, parameters, interfaces, resolvedInterfaces, interfaceDiagnostics };
 }
 
 export async function loadTemplatePreview(selected: PublishedTemplate, parameters: Record<string, unknown>, signal: AbortSignal): Promise<LoadedPreview> {

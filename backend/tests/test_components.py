@@ -144,7 +144,7 @@ console.log(JSON.stringify({document:result,checks:validateComponent(result),exp
 
     def test_generic_component_pattern_is_saved_validated_and_cleaned(self):
         from backend.app.components.models import ComponentAction, ComponentDocument
-        from backend.app.components.service import apply_action, serialize_component, validate_component
+        from backend.app.components.service import apply_action, create_component_document, serialize_component, validate_component
 
         document = create_component_document()
         data = document.model_dump(by_alias=True)
@@ -164,6 +164,50 @@ console.log(JSON.stringify({document:result,checks:validateComponent(result),exp
         self.assertEqual(serialize_component(document)["stages"]["patterns"][0]["spacingParameterId"], "supportPitch")
         document = apply_action(document, ComponentAction.validate_python({"type": "member.remove", "id": "support"}))
         self.assertEqual(document.patterns, [])
+
+    def test_inherited_component_port_preserves_interface_contract(self):
+        from backend.app.components.models import ComponentAction
+        from backend.app.components.service import apply_action, create_component_document, serialize_component, validate_component
+
+        document = create_component_document()
+        part = member("upright")
+        part["interfaces"][0].update({
+            "declarationMode": "featureDerived", "interfaceType": "adjustable", "locatingType": "slotAdjustable",
+            "geometryRefs": ["slotFace"], "parameterRefs": ["slotWidth"], "description": "可调长孔",
+            "required": True, "region": {"mode": "rectangle", "uSpanExpression": "slotWidth", "vSpan": 12.0, "countExpression": "slotCount"},
+        })
+        document = apply_action(document, ComponentAction.validate_python({"type": "member.add", "member": part}))
+        document = apply_action(document, ComponentAction.validate_python({
+            "type": "port.add", "port": {"id": "port.adjustable", "name": "可调接口", "source": source("upright"), "tags": ["adjustable"]},
+        }))
+
+        inherited = document.ports[0].interface
+        self.assertIsNotNone(inherited)
+        self.assertEqual(inherited.declarationMode, "featureDerived")
+        self.assertEqual(inherited.geometryRefs, ["slotFace"])
+        self.assertEqual(inherited.region["uSpanExpression"], "slotWidth")
+        self.assertEqual(next(check for check in validate_component(document) if check["id"] == "ports")["status"], "pass")
+        exported = serialize_component(document)["stages"]["ports"][0]
+        self.assertEqual(exported["interface"]["region"]["countExpression"], "slotCount")
+        self.assertEqual(exported["interface"]["interfaceType"], "adjustable")
+        stale_data = document.model_dump(by_alias=True)
+        stale_data["ports"][0]["interface"]["name"] = "旧名称"
+        stale_document = type(document).model_validate(stale_data)
+        self.assertEqual(next(check for check in validate_component(stale_document) if check["id"] == "ports")["status"], "fail")
+
+    def test_clearing_component_parameter_removes_member_override(self):
+        from backend.app.components.models import ComponentAction
+        from backend.app.components.service import apply_action, create_component_document
+
+        part = member("upright")
+        part["parameterDefinitions"] = [{"id": "length", "label": "零件长度", "unit": "mm", "valueType": "number", "minimum": 1800.0, "maximum": 4200.0, "default": 2400.0}]
+        document = apply_action(create_component_document(), ComponentAction.validate_python({"type": "member.add", "member": part}))
+        document = apply_action(document, ComponentAction.validate_python({"type": "binding.set", "id": "length.binding", "binding": {"id": "length.binding", "parameterId": "componentLength", "memberId": "upright", "memberParameterId": "length"}}))
+        document = apply_action(document, ComponentAction.validate_python({"type": "parameter.value", "id": "componentLength", "value": 3600.0}))
+        self.assertEqual(document.assembly.members[0].parameterValues["length"], 3600.0)
+        document = apply_action(document, ComponentAction.validate_python({"type": "parameter.value", "id": "componentLength", "value": None}))
+        self.assertIsNone(document.parameters[0].value)
+        self.assertNotIn("length", document.assembly.members[0].parameterValues)
 
     def test_nested_import_validation_and_noop_revision(self):
         with TestClient(create_app(dist_dir=None)) as client:

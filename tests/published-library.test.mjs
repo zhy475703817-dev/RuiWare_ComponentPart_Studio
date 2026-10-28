@@ -188,3 +188,26 @@ test('加入组件只继承公开接口和参数，实例数据独立且固定�
   assert.deepEqual(document.ports[0].tags,['mount']);
   assert.equal('assembly' in first,false);
 });
+
+test('嵌套组件公开参数继承成员绑定后的范围交集和整数计数语义', () => {
+  const document = createComponentDocument();
+  document.parameters = [
+    { id: 'overallLength', label: '总长', value: 3200, unit: 'mm', min: 1000, max: 6000 },
+    { id: 'bayCount', label: '跨数', value: 4, unit: '跨', min: 1, max: 12 },
+  ];
+  document.assembly.members = [
+    { id: 'beam-a', name: '主梁', parameterDefinitions: [{ id: 'length', label: '梁长', unit: 'mm', valueType: 'number', minimum: 1800, maximum: 4200, default: 3000 }] },
+    { id: 'beam-b', name: '副梁', parameterDefinitions: [{ id: 'length', label: '梁长', unit: 'mm', valueType: 'number', minimum: 2200, maximum: 5000, default: 3000 }] },
+  ];
+  document.bindings = [
+    { id: 'bind-a', parameterId: 'overallLength', memberId: 'beam-a', memberParameterId: 'length' },
+    { id: 'bind-b', parameterId: 'overallLength', memberId: 'beam-b', memberParameterId: 'length' },
+  ];
+  document.patterns = [{ id: 'pattern-1', label: '横向阵列', memberIds: ['beam-a'], countParameterId: 'bayCount', spacingParameterId: 'overallLength', axis: 'x' }];
+
+  const nested = componentPublicationMember({ ...publication, templateKind: 'component', document }, 'nested-1');
+  const length = nested.parameterDefinitions.find(parameter => parameter.id === 'overallLength');
+  const count = nested.parameterDefinitions.find(parameter => parameter.id === 'bayCount');
+  assert.deepEqual([length.minimum, length.maximum, length.valueType, length.default], [2200, 4200, 'number', 3200]);
+  assert.deepEqual([count.minimum, count.maximum, count.valueType, count.default], [1, 12, 'integer', 4]);
+});

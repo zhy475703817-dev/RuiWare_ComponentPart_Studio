@@ -157,6 +157,27 @@ def editable_parameters(draft_data: dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
+def resolved_interfaces(draft_data: dict[str, Any], material: dict[str, Any], overrides: dict[str, Any] | None = None) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Resolve interface occurrences with the same engine context used for model reconstruction."""
+    from backend.engine.template_core import TemplateDraft
+    from backend.engine.template_core.rules import evaluate_template
+
+    draft = TemplateDraft.model_validate(draft_data)
+    external_context = {
+        "material": material.get("record", material),
+        "product": material.get("product", {}),
+        "component": material.get("component", {}),
+        "projectZone": material.get("projectZone", {}),
+        "standard": material.get("standard", {}),
+    }
+    evaluation = evaluate_template(
+        draft.parameterDefinitions, draft.featureRules,
+        overrides=overrides or {}, external_context=external_context,
+        semantic_faces=draft.geometryRecipe.semanticFaces, interfaces=draft.interfaces,
+    )
+    return [item.model_dump(mode="json") for item in evaluation.resolvedInterfaces], [item.model_dump(mode="json") for item in evaluation.diagnostics]
+
+
 def _run_worker(draft_data: dict[str, Any], material: dict[str, Any], overrides: dict[str, Any]) -> bytes:
     from backend.engine.template_core import TemplateDraft, lower_to_plan
 
@@ -290,12 +311,15 @@ async def template_availability(publication_id: str, request: Request, response:
 async def reconstruction_info(publication_id: str, request: Request, response: Response,
                               sha256: str | None = Query(default=None, pattern=SHA256)):
     async with request.app.state.reconstruction_slots:
-        publication, draft, _ = await _read_template(request, publication_id, sha256)
+        publication, draft, material = await _read_template(request, publication_id, sha256)
+    resolved, diagnostics = await asyncio.to_thread(resolved_interfaces, draft, material)
     response.headers["Cache-Control"] = "no-store"
     return {
         "publication": publication.model_dump(mode="json"),
         "parameters": editable_parameters(draft),
         "interfaces": draft.get("interfaces", []),
+        "resolvedInterfaces": resolved,
+        "interfaceDiagnostics": diagnostics,
     }
 
 

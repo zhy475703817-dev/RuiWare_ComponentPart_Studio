@@ -6,6 +6,8 @@ const aliases = {
   length: ["componentLength", "length", "overallLength", "总长", "长度"],
   width: ["componentWidth", "width", "overallWidth", "总宽", "宽度"],
   height: ["componentHeight", "height", "overallHeight", "总高", "高度"],
+  volume: ["componentVolume", "volume", "overallVolume", "体积"],
+  weight: ["componentWeight", "weight", "mass", "重量", "质量"],
 };
 
 function findParameter(parameters: ComponentParameter[], keys: string[]): ComponentParameter | undefined {
@@ -22,16 +24,16 @@ function formatNumber(value: number, unit = ""): string {
   return `${value.toLocaleString("zh-CN", { maximumFractionDigits: digits })}${unit}`;
 }
 
-function parameterMetric(parameters: ComponentParameter[], keys: string[], label: string, bindings: ParameterBinding[], members: ComponentMember[]): Metric {
+function parameterMetric(parameters: ComponentParameter[], keys: string[], label: string, bindings: ParameterBinding[], members: ComponentMember[], missingNote = "需要有效的组件参数值"): Metric {
   const parameter = findParameter(parameters, keys);
   if (!parameter || parameter.value === null || !Number.isFinite(parameter.value)) {
-    return { label, value: "未配置", note: "需要有效的组件参数值" };
+    return { label, value: "未配置", note: missingNote };
   }
   const bounds = effectiveParameterBounds(parameter, bindings, members);
   return {
     label,
     value: formatNumber(parameter.value, ` ${parameter.unit}`),
-    note: `${bounds.min} ～ ${bounds.max} ${parameter.unit}${bounds.sources.length ? `；继承自 ${bounds.sources.join("、")}` : "；组件参数范围"}`,
+    note: `${formatNumber(bounds.min, ` ${parameter.unit}`)} ～ ${formatNumber(bounds.max, ` ${parameter.unit}`)}${bounds.sources.length ? `；继承自 ${bounds.sources.join("、")}` : "；组件参数范围"}`,
   };
 }
 
@@ -40,8 +42,8 @@ export function deriveComponentMetrics(parameters: ComponentParameter[], binding
     length: parameterMetric(parameters, aliases.length, "长度参数", bindings, members),
     width: parameterMetric(parameters, aliases.width, "宽度参数", bindings, members),
     height: parameterMetric(parameters, aliases.height, "高度参数", bindings, members),
-    volume: { label: "体积", value: "不可用", note: "当前没有实体几何" },
-    weight: { label: "重量", value: "不可用", note: "当前没有实体体积和材料密度" },
+    volume: parameterMetric(parameters, aliases.volume, "体积参数", bindings, members, "未配置体积参数；无法仅凭长、宽、高可靠推算"),
+    weight: parameterMetric(parameters, aliases.weight, "重量 / 质量参数", bindings, members, "未配置重量参数；可靠计算还需要实体体积和材料密度"),
   };
 }
 

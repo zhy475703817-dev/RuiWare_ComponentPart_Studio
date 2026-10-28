@@ -83,11 +83,21 @@ def apply_action(document: ComponentDocument, action: TypedAction) -> ComponentD
         data["assembly"]["mates"].append(mate.model_dump(by_alias=True))
     elif action.type == "port.add":
         port = action.port
-        if not has_interface(document, port.source):
+        source_member = next((member for member in document.assembly.members if member.id == port.source.memberId), None)
+        source_interface = next((item for item in (source_member.interfaces if source_member else []) if item.id == port.source.interfaceId), None)
+        if source_interface is None:
             raise ComponentError(422, "INVALID_REFERENCE")
         if any(item.id == port.id or item.source == port.source for item in document.ports):
             raise ComponentError(422, "DUPLICATE_PORT")
-        data["ports"].append(port.model_dump(by_alias=True))
+        # New clients send the source declaration as a snapshot so physical
+        # size, mode, and geometry references remain visible after inheritance.
+        # Reject a mismatched snapshot instead of publishing stale metadata.
+        if port.interface is not None and port.interface != source_interface:
+            raise ComponentError(422, "INTERFACE_SNAPSHOT_MISMATCH")
+        data["ports"].append({
+            **port.model_dump(by_alias=True),
+            "interface": source_interface.model_dump(by_alias=True),
+        })
     elif action.type == "binding.set":
         data["bindings"] = [item for item in data["bindings"] if item["id"] != action.id]
         if action.binding is not None:
@@ -176,16 +186,19 @@ def apply_action(document: ComponentDocument, action: TypedAction) -> ComponentD
             item[field] = min(upper, max(lower, candidate))
         else:
             item[field] = getattr(action, field)
-        if action.type == "parameter.value" and action.value is not None:
+        if action.type == "parameter.value":
             for binding in data["bindings"]:
                 if binding["parameterId"] != action.id:
                     continue
                 member = next((entry for entry in data["assembly"]["members"] if entry["id"] == binding["memberId"]), None)
                 definition = next((entry for entry in (member or {}).get("parameterDefinitions", []) if entry["id"] == binding["memberParameterId"] and entry.get("unit") == item["unit"] and entry.get("valueType") in ("number", "integer")), None)
-                minimum = max(item["min"], definition["minimum"]) if definition and definition.get("minimum") is not None else item["min"]
-                maximum = min(item["max"], definition["maximum"]) if definition and definition.get("maximum") is not None else item["max"]
                 if member is not None:
-                    member["parameterValues"][binding["memberParameterId"]] = min(maximum, max(minimum, item[field]))
+                    if action.value is None:
+                        member["parameterValues"].pop(binding["memberParameterId"], None)
+                    elif definition is not None:
+                        minimum = max(item["min"], definition["minimum"]) if definition.get("minimum") is not None else item["min"]
+                        maximum = min(item["max"], definition["maximum"]) if definition.get("maximum") is not None else item["max"]
+                        member["parameterValues"][binding["memberParameterId"]] = min(maximum, max(minimum, item[field]))
     if data == document.model_dump(by_alias=True):
         return document
     data["revision"] = document.revision + 1
@@ -229,7 +242,10 @@ def validate_component(document: ComponentDocument) -> list[dict]:
         check("members", "装配成员", bool(members) and all(member.id.strip() for member in members) and len(member_ids) == len(members), "请加入零部件，成员标识需唯一"),
         check("references", "固定版本引用", bool(members) and all(member.template.publicationId.strip() and member.template.templateId.strip() and 0 < member.template.version <= 9007199254740991 and re.fullmatch(r"[a-fA-F0-9]{64}", member.template.sha256) for member in members), "成员需引用有效发布版本及模板包校验值"),
         check("mates", "内部连接数据", (len(members) < 2 or bool(mates)) and len({mate.id for mate in mates}) == len(mates) and all(has_interface(document, mate.from_) and has_interface(document, mate.to) and mate.from_.memberId != mate.to.memberId for mate in mates), "请检查连接两端的成员与接口；多成员组件需建立内部连接"),
-        check("ports", "对外接口", bool(document.ports) and all(has_interface(document, port.source) for port in document.ports), "请继承有效的零部件接口"),
+        check("ports", "对外接口", bool(document.ports) and all(
+            has_interface(document, port.source) and (port.interface is None or port.interface == next(
+                item for member in members if member.id == port.source.memberId for item in member.interfaces if item.id == port.source.interfaceId
+            )) for port in document.ports), "请继承有效的零部件接口，并检查接口信息是否仍与来源一致"),
         check("parameters", "参数范围", bool(document.parameters) and len(parameter_ids) == len(document.parameters) and all(parameter.value is not None and parameter.min <= parameter.max and parameter.min <= parameter.value <= parameter.max for parameter in document.parameters), "参数需为范围内的有效数值"),
         check("bindings", "参数绑定来源", all(binding_valid(binding) for binding in document.bindings) and all(
             max([parameter.min, *(definition.minimum for binding in document.bindings if binding.parameterId == parameter.id
@@ -257,14 +273,21 @@ def serialize_component(document: ComponentDocument) -> dict:
         bindings = {**member["parameterValues"], **{binding.memberParameterId: binding.parameterId for binding in document.bindings if binding.memberId == member["id"]}}
         members.append({
             "memberId": member["id"], "partTemplateVersion": template["publicationId"], "partTemplateRef": template,
-            **{key: member.get(key, []) if key == "parameterDefinitions" else member[key] for key in ("name", "code", "role", "position", "rotation", "parameterValues", "parameterDefinitions", "interfaces")}, "bindings": bindings,
+            **{key: member.get(key, []) if key in ("parameterDefinitions", "resolvedInterfaces") else member[key] for key in ("name", "code", "role", "position", "rotation", "parameterValues", "parameterDefinitions", "resolvedInterfaces", "interfaces")}, "bindings": bindings,
         })
     mates = [{
         "id": mate.id, "from": f"{mate.from_.memberId}.{mate.from_.interfaceId}", "to": f"{mate.to.memberId}.{mate.to.interfaceId}",
         "fromRef": mate.from_.model_dump(), "toRef": mate.to.model_dump(), "relation": mate.relation, "offset": mate.offset,
     } for mate in document.assembly.mates]
-    ports = [{"id": port.id, "name": port.name, "sourceMemberId": port.source.memberId, "sourceInterfaceId": port.source.interfaceId,
-              "source": port.source.model_dump(), "tags": port.tags} for port in document.ports]
+    ports = []
+    for port in document.ports:
+        source_member = next((member for member in document.assembly.members if member.id == port.source.memberId), None)
+        source_interface = next((item for item in (source_member.interfaces if source_member else []) if item.id == port.source.interfaceId), None)
+        ports.append({
+            "id": port.id, "name": port.name, "sourceMemberId": port.source.memberId,
+            "sourceInterfaceId": port.source.interfaceId, "source": port.source.model_dump(), "tags": port.tags,
+            "interface": (port.interface or source_interface).model_dump(by_alias=True) if port.interface or source_interface else None,
+        })
     return {
         **{key: data[key] for key in ("schemaVersion", "templateKind", "revision", "unitSystem", "coordinateSystem")},
         "name": document.definition.name,

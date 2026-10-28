@@ -72,13 +72,15 @@ class ComponentMember(ComponentModel):
     rotation: Vector3
     parameterValues: dict[str, ParameterValue]
     parameterDefinitions: list[MemberParameterDefinition] = Field(default_factory=list)
+    resolvedInterfaces: list[dict[str, object]] = Field(default_factory=list)
     interfaces: list[PartInterface]
 
     @model_serializer(mode="wrap")
     def preserve_legacy_members(self, handler):
         data = handler(self)
-        if "parameterDefinitions" not in self.model_fields_set:
-            data.pop("parameterDefinitions", None)
+        for field in ("parameterDefinitions", "resolvedInterfaces"):
+            if field not in self.model_fields_set:
+                data.pop(field, None)
         return data
 
 
@@ -100,6 +102,18 @@ class ComponentPort(ComponentModel):
     name: str
     source: InterfaceSource
     tags: list[str]
+
+    # Keep the resolved source declaration with the inherited component port.
+    # Older drafts omit this snapshot and remain valid through the custom
+    # serializer below.
+    interface: PartInterface | None = None
+
+    @model_serializer(mode="wrap")
+    def preserve_legacy_port(self, handler):
+        data = handler(self)
+        if "interface" not in self.model_fields_set:
+            data.pop("interface", None)
+        return data
 
 
 class ComponentSlot(ComponentModel):

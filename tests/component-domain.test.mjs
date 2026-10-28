@@ -5,6 +5,7 @@ import { componentReducer } from '../src/domain/componentReducer.ts';
 import { validateComponent } from '../src/domain/validation.ts';
 import { serializeComponent } from '../src/domain/serialization.ts';
 import { deriveComponentMetrics, effectiveParameterBounds } from '../src/domain/parameterMetrics.ts';
+import { resolveComponentComposition } from '../src/domain/composition.ts';
 
 const template = { publicationId: 'version.1', templateId: 'part.1', version: 3, sha256: 'a'.repeat(64) };
 const member = id => ({
@@ -37,6 +38,23 @@ test('高度指标保留组件参数值，不从其他参数推算几何高度',
   assert.match(metrics.height.note, /组件参数范围/);
 });
 
+test('体积和重量显示已定义的参数范围，缺少数据时明确标为未配置', () => {
+  const missing = deriveComponentMetrics([]);
+  assert.equal(missing.volume.value, '未配置');
+  assert.match(missing.volume.note, /无法仅凭/);
+  assert.equal(missing.weight.value, '未配置');
+  assert.match(missing.weight.note, /材料密度/);
+
+  const metrics = deriveComponentMetrics([
+    { id: 'componentVolume', label: '组件体积', value: 240000, unit: 'mm³', min: 100000, max: 500000 },
+    { id: 'componentWeight', label: '组件重量', value: 18, unit: 'kg', min: 5, max: 80 },
+  ]);
+  assert.equal(metrics.volume.value, '240,000 mm³');
+  assert.match(metrics.volume.note, /100,000 mm³ ～ 500,000 mm³/);
+  assert.equal(metrics.weight.value, '18 kg');
+  assert.match(metrics.weight.note, /5 kg ～ 80 kg/);
+});
+
 test('组件参数绑定会继承成员范围并把值同步到成员参数', () => {
   const base = createComponentDocument();
   const boundMember = { ...member('a'), parameterDefinitions: [{ id: 'length', label: '零件长度', unit: 'mm', valueType: 'number', minimum: 1800, maximum: 4200, default: 2400 }] };
@@ -50,6 +68,18 @@ test('组件参数绑定会继承成员范围并把值同步到成员参数', ()
   assert.equal(draft.parameters[0].value, 4200);
   assert.equal(draft.assembly.members[0].parameterValues.length, 4200);
   assert.equal(JSON.parse(serializeComponent(draft)).stages.bindings[0].memberParameterId, 'length');
+});
+
+test('清空组件参数时移除绑定覆盖并让零部件回到发布默认值', () => {
+  const boundMember = { ...member('a'), parameterDefinitions: [{ id: 'length', label: '零件长度', unit: 'mm', valueType: 'number', minimum: 1800, maximum: 4200, default: 2400 }] };
+  let draft = componentReducer(createComponentDocument(), { type: 'member.add', member: boundMember });
+  draft = componentReducer(draft, { type: 'binding.set', id: 'b1', binding: { id: 'b1', parameterId: 'componentLength', memberId: 'a', memberParameterId: 'length' } });
+  draft = componentReducer(draft, { type: 'parameter.value', id: 'componentLength', value: 3600 });
+  assert.equal(draft.assembly.members[0].parameterValues.length, 3600);
+  draft = componentReducer(draft, { type: 'parameter.value', id: 'componentLength', value: null });
+  assert.equal(draft.parameters[0].value, null);
+  assert.equal(Object.hasOwn(draft.assembly.members[0].parameterValues, 'length'), false);
+  assert.equal(validateComponent(draft).find(check => check.id === 'parameters').status, 'fail');
 });
 
 test('整数型成员绑定会把有效范围收敛到整数并同步整数值', () => {
@@ -95,6 +125,66 @@ test('通用构成规则按数量、间距和轴保存，并在删除来源时�
   assert.equal(draft.patterns.length, 0);
 });
 
+test('组件构成按参数绑定驱动零部件并重复完整成员组', () => {
+  let draft = createComponentDocument();
+  draft = componentReducer(draft, { type: 'parameter.add', parameter: { id: 'supportCount', label: '支撑数量', value: 3, unit: '个', min: 1, max: 8 } });
+  draft = componentReducer(draft, { type: 'parameter.add', parameter: { id: 'supportPitch', label: '支撑间距', value: 450, unit: 'mm', min: 0, max: 1200 } });
+  draft = componentReducer(draft, { type: 'parameter.add', parameter: { id: 'beamWidth', label: '梁宽', value: 600, unit: 'mm', min: 200, max: 1000 } });
+  const beam = { ...member('beam'), parameterDefinitions: [{ id: 'width', label: '零件宽度', unit: 'mm', valueType: 'number', minimum: 250, maximum: 900, default: 500 }] };
+  const brace = member('brace');
+  brace.position = [25, 0, 0];
+  draft = componentReducer(draft, { type: 'member.add', member: beam });
+  draft = componentReducer(draft, { type: 'member.add', member: brace });
+  draft = componentReducer(draft, { type: 'binding.set', id: 'width-binding', binding: { id: 'width-binding', parameterId: 'beamWidth', memberId: 'beam', memberParameterId: 'width' } });
+  draft = componentReducer(draft, { type: 'pattern.add', pattern: { id: 'support-group', label: '支撑组', memberIds: ['beam', 'brace'], countParameterId: 'supportCount', spacingParameterId: 'supportPitch', axis: 'z' } });
+
+  const instances = resolveComponentComposition(draft, { supportCount: 4.4, supportPitch: 300, beamWidth: 1200 });
+  assert.equal(instances.length, 8);
+  assert.deepEqual(instances.slice(0, 4).map(item => item.position[2]), [0, 300, 600, 900]);
+  assert.deepEqual(instances.slice(4).map(item => item.position), [[25, 0, 0], [25, 0, 300], [25, 0, 600], [25, 0, 900]]);
+  assert.ok(instances.slice(0, 4).every(item => item.parameterValues.width === 900));
+  assert.equal(instances[1].sourceMemberId, 'beam');
+  assert.equal(instances[1].patternInstance, true);
+});
+
+test('嵌套组件保留其内部绑定和构成规则', () => {
+  let nested = createComponentDocument();
+  nested.parameters = [
+    { id: 'memberCount', label: '成员数量', value: 2, unit: '个', min: 1, max: 6 },
+    { id: 'memberPitch', label: '成员间距', value: 200, unit: 'mm', min: 50, max: 1000 },
+    { id: 'railLength', label: '梁长', value: 1000, unit: 'mm', min: 500, max: 2500 },
+  ];
+  const rail = { ...member('rail'), parameterDefinitions: [{ id: 'length', label: '零件长度', unit: 'mm', valueType: 'number', minimum: 500, maximum: 2000, default: 1000 }] };
+  nested.assembly.members = [rail];
+  nested.bindings = [{ id: 'rail-length-binding', parameterId: 'railLength', memberId: 'rail', memberParameterId: 'length' }];
+  nested.patterns = [{ id: 'rail-array', label: '梁组', memberIds: ['rail'], countParameterId: 'memberCount', spacingParameterId: 'memberPitch', axis: 'x' }];
+
+  const wrapper = createComponentDocument();
+  wrapper.parameters = [
+    { id: 'outerCount', label: '外层数量', value: 3, unit: '个', min: 1, max: 8 },
+    { id: 'outerPitch', label: '外层间距', value: 300, unit: 'mm', min: 0, max: 1200 },
+    { id: 'outerRailLength', label: '外层梁长', value: 1400, unit: 'mm', min: 500, max: 2000 },
+  ];
+  const nestedMember = {
+    ...member('nested-component'),
+    template: { ...template, templateKind: 'component' },
+    parameterValues: { memberCount: 2, memberPitch: 200, railLength: 1000 },
+    parameterDefinitions: nested.parameters.map(parameter => ({ id: parameter.id, label: parameter.label, unit: parameter.unit, valueType: ['个'].includes(parameter.unit) ? 'integer' : 'number', minimum: parameter.min, maximum: parameter.max, default: parameter.value })),
+  };
+  wrapper.assembly.members = [nestedMember];
+  wrapper.bindings = [
+    { id: 'count-binding', parameterId: 'outerCount', memberId: 'nested-component', memberParameterId: 'memberCount' },
+    { id: 'pitch-binding', parameterId: 'outerPitch', memberId: 'nested-component', memberParameterId: 'memberPitch' },
+    { id: 'length-binding', parameterId: 'outerRailLength', memberId: 'nested-component', memberParameterId: 'railLength' },
+  ];
+
+  const wrapperMembers = resolveComponentComposition(wrapper);
+  const nestedMembers = resolveComponentComposition(nested, wrapperMembers[0].parameterValues);
+  assert.equal(nestedMembers.length, 3);
+  assert.deepEqual(nestedMembers.map(item => item.position[0]), [0, 300, 600]);
+  assert.ok(nestedMembers.every(item => item.parameterValues.length === 1400));
+});
+
 test('同一发布版本可以添加多个成员，成员值不修改模板和原始输入', () => {
   const input = member('a');
   let draft = componentReducer(createComponentDocument(), { type: 'member.add', member: input });
@@ -133,6 +223,11 @@ test('删除成员清理连接、继承接口和绑定，保留其他成员的�
 test('添加连接及继承接口使用结构化引用并拒绝不存在的来源', () => {
   let draft = createComponentDocument();
   draft.assembly.members = [member('member.a'), member('member.b')];
+  const sourceInterface = {
+    ...draft.assembly.members[0].interfaces[0], declarationMode: 'featureDerived', interfaceType: 'adjustable',
+    geometryRefs: ['slotFace'], parameterRefs: ['slotWidth'], region: { mode: 'rectangle', uSpanExpression: 'slotWidth', vSpan: 12, countExpression: 'slotCount' },
+  };
+  draft.assembly.members[0].interfaces[0] = sourceInterface;
   const mate = { id: 'mate', from: source('member.a'), to: source('member.b'), relation: '贴合', offset: 0 };
   draft = componentReducer(draft, { type: 'mate.add', mate });
   assert.equal(draft.assembly.mates[0].from.interfaceId, 'face.left');
@@ -140,6 +235,11 @@ test('添加连接及继承接口使用结构化引用并拒绝不存在的来�
   const port = { id: 'port', name: '外部接口', source: source('member.a'), tags: [] };
   draft = componentReducer(draft, { type: 'port.add', port });
   assert.equal(draft.ports.length, 1);
+  assert.deepEqual(draft.ports[0].interface, sourceInterface);
+  assert.equal(JSON.parse(serializeComponent(draft)).stages.ports[0].interface.region.countExpression, 'slotCount');
+  assert.equal(componentReducer(draft, { type: 'port.add', port: { id: 'stale', name: '过期接口', source: source('member.b'), tags: [], interface: { ...sourceInterface, name: 'stale' } } }), draft);
+  const staleSnapshot = { ...draft, ports: [{ ...draft.ports[0], interface: { ...sourceInterface, name: '旧名称' } }] };
+  assert.equal(validateComponent(staleSnapshot).find(check => check.id === 'ports').status, 'fail');
   assert.equal(componentReducer(draft, { type: 'port.add', port: { ...port, id: 'again' } }), draft);
 });
 

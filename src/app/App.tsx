@@ -51,6 +51,7 @@ export function App() {
     viewport={<ComponentViewport
       members={members}
        parameters={document.parameters}
+       bindings={document.bindings}
        patterns={document.patterns}
       mateCount={mates.length}
       previewTemplate={workspace.previewTemplate}

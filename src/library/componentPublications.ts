@@ -30,10 +30,28 @@ export const fetchPublishedComponent = (publicationId: string) => request(`/api/
 
 export function componentPublicationMember(publication: ComponentPublication, id: string): ComponentMember {
   const { document } = publication;
-  const parameterDefinitions = document.parameters.map(parameter => ({
-    id: parameter.id, label: parameter.label, unit: parameter.unit, valueType: "number",
-    minimum: parameter.min, maximum: parameter.max, default: parameter.value ?? parameter.min,
-  }));
+  const integerParameterIds = new Set(document.patterns.map(pattern => pattern.countParameterId));
+  const parameterDefinitions = document.parameters.map(parameter => {
+    const valueType = integerParameterIds.has(parameter.id) ? "integer" : "number";
+    let minimum = parameter.min;
+    let maximum = parameter.max;
+    for (const binding of document.bindings.filter(item => item.parameterId === parameter.id)) {
+      const member = document.assembly.members.find(item => item.id === binding.memberId);
+      const definition = member?.parameterDefinitions?.find(item => item.id === binding.memberParameterId && item.unit === parameter.unit && ["number", "integer"].includes(item.valueType));
+      if (!definition) continue;
+      if (definition.minimum !== null) minimum = Math.max(minimum, definition.minimum);
+      if (definition.maximum !== null) maximum = Math.min(maximum, definition.maximum);
+    }
+    if (valueType === "integer") {
+      minimum = Math.ceil(minimum);
+      maximum = Math.floor(maximum);
+    }
+    const value = parameter.value ?? minimum;
+    return {
+      id: parameter.id, label: parameter.label, unit: parameter.unit,
+      valueType, minimum, maximum, default: Math.min(maximum, Math.max(minimum, valueType === "integer" ? Math.round(value) : value)),
+    };
+  });
   return {
     id, name: publication.name, code: publication.code, role: publication.name,
     template: { templateKind: "component", publicationId: publication.publicationId, templateId: publication.templateId, version: publication.version, sha256: publication.sha256 },
@@ -41,9 +59,9 @@ export function componentPublicationMember(publication: ComponentPublication, id
     parameterValues: Object.fromEntries(document.parameters.filter(parameter => parameter.value !== null).map(parameter => [parameter.id, parameter.value!])),
     parameterDefinitions,
     interfaces: document.ports.flatMap(port => {
-      const source = document.assembly.members.find(member => member.id === port.source.memberId)?.interfaces.find(item => item.id === port.source.interfaceId);
+      const source = port.interface || document.assembly.members.find(member => member.id === port.source.memberId)?.interfaces.find(item => item.id === port.source.interfaceId);
       if (!source) return [];
-      const exposed: ComponentMember["interfaces"][number] = { id: port.id, name: port.name, type: source.type, tags: [...port.tags] };
+      const exposed: ComponentMember["interfaces"][number] = { ...structuredClone(source), id: port.id, name: port.name, tags: [...port.tags] };
       for (const key of ["declarationMode", "interfaceType", "locatingType", "role", "geometryRefs", "parameterRefs", "description", "required", "region"] as const) {
         const value = source[key];
         if (value !== undefined) exposed[key] = value as never;

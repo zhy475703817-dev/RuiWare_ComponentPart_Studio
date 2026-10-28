@@ -125,7 +125,7 @@ export function useComponentWorkspace() {
     if (!selectedMember) return setMessage("请先选择一个组件成员");
     const sourceInterface = selectedMember.interfaces.find(item => !document.ports.some(port => port.source.memberId === selectedMember.id && port.source.interfaceId === item.id));
     if (!sourceInterface) return setMessage("该成员没有尚未继承的接口");
-    if (!dispatch({ type: "port.add", port: { id: crypto.randomUUID(), name: `${selectedMember.name}-${sourceInterface.name}`, source: { memberId: selectedMember.id, interfaceId: sourceInterface.id }, tags: [...sourceInterface.tags] } })) return;
+    if (!dispatch({ type: "port.add", port: { id: crypto.randomUUID(), name: `${selectedMember.name}-${sourceInterface.name}`, source: { memberId: selectedMember.id, interfaceId: sourceInterface.id }, tags: [...sourceInterface.tags], interface: structuredClone(sourceInterface) } })) return;
     setStage("interfaces");
     setMessage(`已继承 ${sourceInterface.name} 为组件对外接口`);
   }
@@ -179,7 +179,12 @@ export function useComponentWorkspace() {
         member = { id: crypto.randomUUID(), name: template.name, code: template.code, role: template.name,
           template: { publicationId: template.publicationId, templateId: template.templateId, version: template.version, sha256: template.sha256 },
           position: [0, 0, 0] as [number, number, number], rotation: [0, 0, 0] as [number, number, number],
-          parameterValues: Object.fromEntries(info.parameters.map(parameter => [parameter.id, parameter.default])), parameterDefinitions, interfaces: info.interfaces,
+          parameterValues: Object.fromEntries(info.parameters.map(parameter => [parameter.id, parameter.default])), parameterDefinitions,
+          interfaces: info.resolvedInterfaces.length ? info.resolvedInterfaces.map(resolved => {
+            const item = info.interfaces.find(candidate => candidate.id === resolved.sourceInterfaceId);
+            return { ...(item || { id: resolved.sourceInterfaceId, name: resolved.sourceInterfaceId, type: "plane" as const, tags: [] }), id: resolved.id, name: item ? `${item.name}${resolved.id === item.id ? "" : ` · ${resolved.id.split(".").pop()}`}` : resolved.sourceInterfaceId, tags: [...new Set([...(item?.tags || []), `interface:${resolved.interfaceType}`])], interfaceType: resolved.interfaceType, region: resolved.region || undefined };
+          }) : info.interfaces,
+          resolvedInterfaces: info.resolvedInterfaces,
         };
       }
       if (workspace !== controller.current || workspace.getSnapshot().draftId !== draftId) throw new Error("草稿已切换，请重新选择模板。");

@@ -35,6 +35,18 @@ export type MemberParameterDefinition = {
   default: number | string | boolean;
 };
 
+export type ResolvedPartInterface = {
+  id: string;
+  sourceInterfaceId: string;
+  declarationMode: string;
+  interfaceType: string;
+  geometryRefs: string[];
+  parameterRefs: string[];
+  region: { mode: "rectangle"; uStart: number; vStart: number; uSpan: number; vSpan: number } | null;
+  sourceFeatureRuleId?: string | null;
+  sourceFeatureId?: string | null;
+};
+
 export type ComponentMember = {
   id: string;
   name: string;
@@ -45,12 +57,13 @@ export type ComponentMember = {
   rotation: Vector3;
   parameterValues: Record<string, ParameterValue>;
   parameterDefinitions?: MemberParameterDefinition[];
+  resolvedInterfaces?: ResolvedPartInterface[];
   interfaces: PartInterface[];
 };
 
 export type InterfaceSource = { memberId: string; interfaceId: string };
 export type Mate = { id: string; from: InterfaceSource; to: InterfaceSource; relation: "贴合" | "同轴" | "重合"; offset: number };
-export type ComponentPort = { id: string; name: string; source: InterfaceSource; tags: string[] };
+export type ComponentPort = { id: string; name: string; source: InterfaceSource; tags: string[]; interface?: PartInterface };
 export type ComponentSlot = { id: string; name: string; memberId: string | null; required: boolean };
 export type ComponentParameter = { id: string; label: string; value: number | null; unit: string; min: number; max: number };
 export type ParameterBinding = { id: string; parameterId: string; memberId: string; memberParameterId: string };
@@ -117,5 +130,18 @@ export function createComponentDocument(): ComponentDocument {
 }
 
 export function hasInterface(document: ComponentDocument, source: InterfaceSource): boolean {
-  return document.assembly.members.some(member => member.id === source.memberId && member.interfaces.some(item => item.id === source.interfaceId));
+  return getInterface(document, source) !== undefined;
+}
+
+export function getInterface(document: ComponentDocument, source: InterfaceSource): PartInterface | undefined {
+  return document.assembly.members.find(member => member.id === source.memberId)?.interfaces.find(item => item.id === source.interfaceId);
+}
+
+export function samePartInterface(a: PartInterface | undefined, b: PartInterface | undefined): boolean {
+  const normalize = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(normalize);
+    if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).sort(([left], [right]) => left.localeCompare(right)).map(([key, item]) => [key, normalize(item)]));
+    return value;
+  };
+  return JSON.stringify(normalize(a)) === JSON.stringify(normalize(b));
 }
