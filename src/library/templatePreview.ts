@@ -269,7 +269,7 @@ export function interfacesForReconstruction(info: ReconstructionInfo): PartInter
       name: declaration ? `${declaration.name}${resolved.id === declaration.id ? "" : ` · ${resolved.id.split(".").pop()}`}` : resolved.sourceInterfaceId,
       tags: [...new Set([...(declaration?.tags || []), `interface:${resolved.interfaceType}`])],
       interfaceType,
-      region: resolved.region || undefined,
+      region: resolved.region || declaration?.region,
     };
   });
 }

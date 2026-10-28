@@ -83,6 +83,16 @@ test('接口重建按当前参数请求，并将已解析的零个接口保留�
   assert.deepEqual(interfacesForReconstruction(result),[]);
 });
 
+test('接口实例没有实体尺寸时保留声明尺寸表达式',async t=>{
+  const info={publication,parameters:[],interfaces:[{id:'slot',name:'调节槽',type:'plane',tags:[],interfaceType:'adjustable',region:{mode:'rectangle',uSpanExpression:'slotWidth',vSpanExpression:'slotHeight'}}],resolvedInterfaces:[{id:'slot.1',sourceInterfaceId:'slot',declarationMode:'featureDerived',interfaceType:'adjustable',geometryRefs:[],parameterRefs:[],region:null}],interfaceDiagnostics:[]};
+  t.mock.method(globalThis,'fetch',async()=>Response.json(info));
+  const result=await loadReconstructionInfo(publication,new AbortController().signal);
+  const region=interfacesForReconstruction(result)[0].region;
+  assert.equal(region?.mode,'rectangle');
+  assert.equal(region?.uSpanExpression,'slotWidth');
+  assert.equal(region?.vSpanExpression,'slotHeight');
+});
+
 test('后台解析器无法启动时立即拒绝预览请求，不阻塞队列',async t=>{
   const previousWorker=globalThis.Worker;
   globalThis.Worker=class { constructor(){throw new Error('worker blocked');} };
