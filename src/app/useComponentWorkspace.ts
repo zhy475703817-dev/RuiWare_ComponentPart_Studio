@@ -3,9 +3,9 @@ import type { ComponentAction } from "../domain/componentReducer";
 import { SharedDraftController, httpDraftApi, initialSharedState } from "./sharedDraft";
 import type { PublishedTemplate } from "../library/publishedLibrary";
 import type { ComponentMember, MemberParameterDefinition, Vector3 } from "../domain/component";
+import { interfacesForReconstruction, loadReconstructionInfo } from "../library/templatePreview";
 import type { StageId } from "./stages";
 import { componentPublicationMember, fetchPublishedComponent, publishComponentDraft } from "../library/componentPublications";
-import { loadReconstructionInfo } from "../library/templatePreview";
 
 const initialMessage = "左侧可浏览已发布零部件，点击模板预览或使用加号加入组件";
 
@@ -180,10 +180,7 @@ export function useComponentWorkspace() {
           template: { publicationId: template.publicationId, templateId: template.templateId, version: template.version, sha256: template.sha256 },
           position: [0, 0, 0] as [number, number, number], rotation: [0, 0, 0] as [number, number, number],
           parameterValues: Object.fromEntries(info.parameters.map(parameter => [parameter.id, parameter.default])), parameterDefinitions,
-          interfaces: info.resolvedInterfaces.length ? info.resolvedInterfaces.map(resolved => {
-            const item = info.interfaces.find(candidate => candidate.id === resolved.sourceInterfaceId);
-            return { ...(item || { id: resolved.sourceInterfaceId, name: resolved.sourceInterfaceId, type: "plane" as const, tags: [] }), id: resolved.id, name: item ? `${item.name}${resolved.id === item.id ? "" : ` · ${resolved.id.split(".").pop()}`}` : resolved.sourceInterfaceId, tags: [...new Set([...(item?.tags || []), `interface:${resolved.interfaceType}`])], interfaceType: resolved.interfaceType, region: resolved.region || undefined };
-          }) : info.interfaces,
+          interfaces: interfacesForReconstruction(info),
           resolvedInterfaces: info.resolvedInterfaces,
         };
       }

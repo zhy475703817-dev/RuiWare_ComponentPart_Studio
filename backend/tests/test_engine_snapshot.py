@@ -183,6 +183,26 @@ class AvailabilityTests(unittest.TestCase):
         self.worker.side_effect = None
         self.assertEqual(self.check().json(), {"available": True})
 
+    @patch("backend.app.reconstruction.resolved_interfaces")
+    def test_reconstruction_resolves_interfaces_with_current_parameter_values(self, resolve):
+        resolve.return_value = ([{"id": "hole.1"}], [])
+        query = json.dumps({"length": 800})
+        response = self.client.get(
+            f"/api/published-templates/version-1/reconstruction?sha256={self.publication.sha256}&parameters={query}"
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["resolvedInterfaces"], [{"id": "hole.1"}])
+        self.assertTrue(response.json()["resolvedInterfacesAvailable"])
+        resolve.assert_called_once_with(self.draft, {"record": {"thickness": 2}}, {"length": 800})
+
+        resolve.reset_mock()
+        invalid = self.client.get(
+            f"/api/published-templates/version-1/reconstruction?sha256={self.publication.sha256}&parameters="
+            + json.dumps({"innerBendRadius": 25})
+        )
+        self.assertEqual(invalid.status_code, 422)
+        resolve.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

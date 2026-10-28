@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import { Canvas, useThree } from "@react-three/fiber";
 import { Grid, OrbitControls } from "@react-three/drei";
 import { AlertTriangle, Boxes, Copy, Eye, Trash2 } from "lucide-react";
-import { DoubleSide, Vector3 as ThreeVector3 } from "three";
+import { DoubleSide, Plane, Vector3 as ThreeVector3 } from "three";
 import type { BufferGeometry, PerspectiveCamera } from "three";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 import type { ComponentMember, ComponentParameter, ComponentPattern, ParameterBinding, Vector3 } from "../domain/component";
@@ -15,12 +15,13 @@ import { useTemplatePreview } from "../library/useTemplatePreview";
 type VisualMember = ComponentMember & { sourceMemberId?: string; patternInstance?: boolean };
 
 function DraggableGroup({ member, selected, onSelect, onMove, movable = true, children }: { member: ComponentMember; selected: boolean; onSelect: () => void; onMove: (position: Vector3) => void; movable?: boolean; children: ReactNode }) {
-  const dragging = useRef(false); const start = useRef(new ThreeVector3()); const origin = useRef(member.position); const positionRef = useRef<Vector3>(member.position); const [localPosition, setLocalPosition] = useState<Vector3>(member.position);
+  const dragging = useRef(false); const start = useRef(new ThreeVector3()); const dragPoint = useRef(new ThreeVector3()); const dragPlane = useRef(new Plane()); const origin = useRef(member.position); const positionRef = useRef<Vector3>(member.position); const [localPosition, setLocalPosition] = useState<Vector3>(member.position);
   useEffect(() => { origin.current = member.position; positionRef.current = member.position; setLocalPosition(member.position); }, [member.position]);
   return <group position={localPosition} rotation={member.rotation}
-    onPointerDown={event => { event.stopPropagation(); onSelect(); if (!movable) return; dragging.current = true; start.current.copy(event.point); origin.current = member.position; }}
-    onPointerMove={event => { if (!dragging.current) return; event.stopPropagation(); const delta = event.point.clone().sub(start.current); const next: Vector3 = [origin.current[0] + delta.x, origin.current[1] + delta.y, origin.current[2]]; positionRef.current = next; setLocalPosition(next); }}
-    onPointerUp={event => { event.stopPropagation(); if (dragging.current) onMove(positionRef.current); dragging.current = false; }}
+    onPointerDown={event => { event.stopPropagation(); onSelect(); if (!movable) return; dragging.current = true; origin.current = member.position; dragPlane.current.set(new ThreeVector3(0, 0, 1), -member.position[2]); if (!event.ray.intersectPlane(dragPlane.current, start.current)) start.current.copy(event.point); (event.target as unknown as { setPointerCapture?: (pointerId: number) => void }).setPointerCapture?.(event.pointerId); }}
+    onPointerMove={event => { if (!dragging.current) return; event.stopPropagation(); const hit = event.ray.intersectPlane(dragPlane.current, dragPoint.current) || dragPoint.current.copy(event.point); const delta = hit.clone().sub(start.current); const next: Vector3 = [origin.current[0] + delta.x, origin.current[1] + delta.y, origin.current[2]]; positionRef.current = next; setLocalPosition(next); }}
+    onPointerUp={event => { event.stopPropagation(); if (dragging.current) onMove(positionRef.current); dragging.current = false; (event.target as unknown as { releasePointerCapture?: (pointerId: number) => void }).releasePointerCapture?.(event.pointerId); }}
+    onPointerCancel={event => { dragging.current = false; (event.target as unknown as { releasePointerCapture?: (pointerId: number) => void }).releasePointerCapture?.(event.pointerId); }}
     onPointerMissed={() => { dragging.current = false; }}>
     {children}
   </group>;
@@ -31,9 +32,10 @@ function partTemplate(member: ComponentMember): PublishedTemplate {
 }
 
 function PartMesh({ member, materialColor, position = [0, 0, 0] as Vector3 }: { member: ComponentMember; materialColor?: string; position?: Vector3 }) {
-  const preview = useTemplatePreview(partTemplate(member), member.parameterValues);
+  const template = useMemo(() => partTemplate(member), [member.template.publicationId, member.template.templateId, member.template.version, member.template.sha256, member.code, member.name]);
+  const preview = useTemplatePreview(template, member.parameterValues);
   if (!preview.result?.geometry) return null;
-  return <mesh geometry={preview.result.geometry} position={position} rotation={member.rotation}>
+  return <mesh geometry={preview.result.geometry} position={position} rotation={member.rotation} dispose={null}>
     <meshStandardMaterial color={materialColor || "#7394b0"} metalness={.18} roughness={.55} side={DoubleSide}/>
   </mesh>;
 }
@@ -57,12 +59,12 @@ function NestedComponentVisual({ member, selected = false }: { member: Component
 }
 
 function MemberModel({ member, selected, onSelect, onMove }: { member: VisualMember; selected: boolean; onSelect: () => void; onMove: (position: Vector3) => void }) {
-  const preview = useTemplatePreview(partTemplate(member), member.parameterValues);
-  if (!preview.result?.geometry) return null;
+  const template = useMemo(() => partTemplate(member), [member.template.publicationId, member.template.templateId, member.template.version, member.template.sha256, member.code, member.name]);
+  const preview = useTemplatePreview(template, member.parameterValues);
   return <DraggableGroup member={member} selected={selected} onSelect={onSelect} onMove={onMove} movable={!member.patternInstance}>
-    <mesh geometry={preview.result.geometry}>
-      <meshStandardMaterial color={selected ? "#c89532" : "#7394b0"} metalness={.18} roughness={.55} side={DoubleSide}/>
-    </mesh>
+    {preview.result?.geometry
+      ? <mesh geometry={preview.result.geometry} dispose={null}><meshStandardMaterial color={selected ? "#c89532" : "#7394b0"} metalness={.18} roughness={.55} side={DoubleSide}/></mesh>
+      : <mesh><boxGeometry args={[160, 80, 60]}/><meshBasicMaterial color={selected ? "#c89532" : "#7394b0"} wireframe transparent opacity={.75}/></mesh>}
   </DraggableGroup>;
 }
 

@@ -309,16 +309,44 @@ async def template_availability(publication_id: str, request: Request, response:
 
 @router.get("/{publication_id}/reconstruction", summary="读取模板参数")
 async def reconstruction_info(publication_id: str, request: Request, response: Response,
-                              sha256: str | None = Query(default=None, pattern=SHA256)):
+                              sha256: str | None = Query(default=None, pattern=SHA256),
+                              parameters: str = Query(default="{}", max_length=MAX_REQUEST_BYTES)):
+    try:
+        overrides = json.loads(parameters, parse_constant=lambda _: (_ for _ in ()).throw(ValueError()))
+    except (ValueError, TypeError, RecursionError):
+        raise LibraryError(422, "PARAMETER_INVALID") from None
+    if not isinstance(overrides, dict) or len(overrides) > 64 or any(not isinstance(key, str) or len(key) > 128 for key in overrides):
+        raise LibraryError(422, "PARAMETER_INVALID")
     async with request.app.state.reconstruction_slots:
         publication, draft, material = await _read_template(request, publication_id, sha256)
-    resolved, diagnostics = await asyncio.to_thread(resolved_interfaces, draft, material)
+    definitions = {item["id"]: item for item in editable_parameters(draft)}
+    for key, value in overrides.items():
+        definition = definitions.get(key)
+        if definition is None:
+            raise LibraryError(422, "PARAMETER_INVALID")
+        value_type = definition["valueType"]
+        if value_type in {"number", "integer"}:
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or (isinstance(value, float) and not math.isfinite(value)) or (isinstance(value, int) and abs(value) > 1e308):
+                raise LibraryError(422, "PARAMETER_INVALID")
+            if value_type == "integer" and isinstance(value, float) and not value.is_integer():
+                raise LibraryError(422, "PARAMETER_INVALID")
+            if definition["minimum"] is not None and value < definition["minimum"]:
+                raise LibraryError(422, "PARAMETER_INVALID")
+            if definition["maximum"] is not None and value > definition["maximum"]:
+                raise LibraryError(422, "PARAMETER_INVALID")
+        elif value_type == "boolean":
+            if not isinstance(value, bool):
+                raise LibraryError(422, "PARAMETER_INVALID")
+        elif not isinstance(value, str) or (definition["allowedValues"] and value not in definition["allowedValues"]):
+            raise LibraryError(422, "PARAMETER_INVALID")
+    resolved, diagnostics = await asyncio.to_thread(resolved_interfaces, draft, material, overrides)
     response.headers["Cache-Control"] = "no-store"
     return {
         "publication": publication.model_dump(mode="json"),
         "parameters": editable_parameters(draft),
         "interfaces": draft.get("interfaces", []),
         "resolvedInterfaces": resolved,
+        "resolvedInterfacesAvailable": True,
         "interfaceDiagnostics": diagnostics,
     }
 

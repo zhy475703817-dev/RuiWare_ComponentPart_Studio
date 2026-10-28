@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { parsePreviewDescription, parseStlGeometry, loadReconstructionInfo, loadTemplatePreview } from '../src/library/templatePreview.ts';
+import { parsePreviewDescription, parseStlGeometry, interfacesForReconstruction, loadReconstructionInfo, loadTemplatePreview } from '../src/library/templatePreview.ts';
 
 const publication = { publicationId: 'v-1', templateId: 'd-1', version: 1, code: 'TEST', name: '预览件', createdAt: '2026-10-17T00:00:00Z', sha256: 'a'.repeat(64), size: 100, downloadUrl: '/unused' };
 const stl = new TextEncoder().encode('solid test\nfacet normal 0 0 1\nouter loop\nvertex 0 0 0\nvertex 100 0 0\nvertex 0 50 25\nendloop\nendfacet\nendsolid test');
@@ -70,6 +70,29 @@ test('读取重建信息时保留默认参数下展开的接口实例和实体�
   assert.equal(result.interfaces[0].parameterRefs[0],'slotWidth');
   assert.equal(result.resolvedInterfaces.length,2);
   assert.deepEqual([result.resolvedInterfaces[0].region.uSpan,result.resolvedInterfaces[0].region.vSpan],[100,12]);
+});
+
+test('接口重建按当前参数请求，并将已解析的零个接口保留为零',async t=>{
+  const info={publication,parameters:[],interfaces:[{id:'slot',name:'安装孔',type:'plane',tags:[],interfaceType:'connecting'}],resolvedInterfaces:[],interfaceDiagnostics:[]};
+  let requestedUrl='';
+  t.mock.method(globalThis,'fetch',async url=>{requestedUrl=String(url);return Response.json(info);});
+  const result=await loadReconstructionInfo(publication,new AbortController().signal,{holeCount:0});
+  const query=new URL(requestedUrl,'http://local').searchParams;
+  assert.deepEqual(JSON.parse(query.get('parameters')),{holeCount:0});
+  assert.equal(result.resolvedInterfacesAvailable,true);
+  assert.deepEqual(interfacesForReconstruction(result),[]);
+});
+
+test('后台解析器无法启动时立即拒绝预览请求，不阻塞队列',async t=>{
+  const previousWorker=globalThis.Worker;
+  globalThis.Worker=class { constructor(){throw new Error('worker blocked');} };
+  t.after(()=>{if(previousWorker===undefined)delete globalThis.Worker;else globalThis.Worker=previousWorker;});
+  t.mock.method(globalThis,'fetch',async()=>new Response(stl,{headers:{'X-RuiWare-SHA256':hash}}));
+  const requests=await Promise.allSettled([
+    loadTemplatePreview(publication,{},new AbortController().signal),
+    loadTemplatePreview(publication,{},new AbortController().signal),
+  ]);
+  assert.equal(requests.every(result=>result.status==='rejected'&&/后台模型解析/.test(result.reason.message)),true);
 });
 
 test('模型字节校验失败或请求取消时不会产生可用预览',async t=>{
