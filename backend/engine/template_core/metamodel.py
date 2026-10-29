@@ -354,6 +354,9 @@ class PartInterface(BaseModel):
     region: InterfaceRegion | None = None
     parameterRefs: list[str] = Field(default_factory=list)
     compatibilityTags: list[str] = Field(default_factory=list)
+    connectionGender: Literal["male", "female", "neutral"] | None = None
+    interfaceSize: dict[str, Any] | None = None
+    connectionMethod: str | None = None
     description: str = ""
     required: bool = False
     reviewed: bool = False

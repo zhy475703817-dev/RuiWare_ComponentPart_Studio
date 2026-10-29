@@ -237,6 +237,18 @@ export async function loadReconstructionInfo(selected: PublishedTemplate, signal
     const parsedLocatingType = knownLocatingTypes.find(value => value === locatingType);
     const description = typeof item.description === "string" ? item.description : undefined;
     const required = typeof item.required === "boolean" ? item.required : undefined;
+    const rawGender = typeof item.connectionGender === "string" ? item.connectionGender : item.gender;
+    const connectionGender = rawGender === "male" || rawGender === "female" || rawGender === "neutral" ? rawGender : undefined;
+    const connectionMethod = typeof item.connectionMethod === "string" ? item.connectionMethod : undefined;
+    const rawSize = record(item.interfaceSize) ? item.interfaceSize : record(item.size) ? item.size : undefined;
+    const interfaceSize = rawSize ? {
+      diameter: typeof rawSize.diameter === "number" && rawSize.diameter > 0 ? rawSize.diameter : undefined,
+      width: typeof rawSize.width === "number" && rawSize.width > 0 ? rawSize.width : undefined,
+      height: typeof rawSize.height === "number" && rawSize.height > 0 ? rawSize.height : undefined,
+      depth: typeof rawSize.depth === "number" && rawSize.depth > 0 ? rawSize.depth : undefined,
+      tolerance: typeof rawSize.tolerance === "number" && rawSize.tolerance >= 0 ? rawSize.tolerance : undefined,
+      unit: typeof rawSize.unit === "string" ? rawSize.unit : undefined,
+    } : undefined;
     if (parsedInterfaceType) parsed.interfaceType = parsedInterfaceType;
     if (parsedLocatingType) parsed.locatingType = parsedLocatingType;
     if (declarationMode) parsed.declarationMode = declarationMode;
@@ -245,6 +257,9 @@ export async function loadReconstructionInfo(selected: PublishedTemplate, signal
     if (parameterRefs?.length) parsed.parameterRefs = parameterRefs;
     if (description) parsed.description = description;
     if (required !== undefined) parsed.required = required;
+    if (connectionGender) parsed.connectionGender = connectionGender;
+    if (connectionMethod) parsed.connectionMethod = connectionMethod;
+    if (interfaceSize && [interfaceSize.diameter, interfaceSize.width, interfaceSize.height, interfaceSize.depth].some(value => value !== undefined)) parsed.interfaceSize = interfaceSize;
     if (region) parsed.region = region;
     return parsed;
   });

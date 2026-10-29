@@ -22,6 +22,11 @@ export type PartInterface = {
   parameterRefs?: string[];
   description?: string;
   required?: boolean;
+  /** Connection gender used by compatibility analysis. Legacy templates may encode this in tags. */
+  connectionGender?: "male" | "female" | "neutral";
+  /** Physical connection envelope. Values are millimetres unless a unit is provided. */
+  interfaceSize?: { diameter?: number; width?: number; height?: number; depth?: number; tolerance?: number; unit?: string };
+  connectionMethod?: string;
   region?: { mode?: string; uSpan?: number; vSpan?: number; uSpanExpression?: string; vSpanExpression?: string; countExpression?: string };
 };
 
@@ -124,7 +129,11 @@ export function createComponentDocument(): ComponentDocument {
       designConstraints: "", evidenceFiles: [], evidence: [],
     },
     assembly: { members: [], mates: [] }, ports: [], slots: [], bindings: [], patterns: [],
-    parameters: [{ id: "componentLength", label: "组件总长", value: 2400, unit: "mm", min: 1000, max: 6000 }],
+    parameters: [
+      { id: "componentLength", label: "组件总长", value: 2400, unit: "mm", min: 1000, max: 6000 },
+      { id: "componentWidth", label: "组件总宽", value: 600, unit: "mm", min: 100, max: 3000 },
+      { id: "componentHeight", label: "组件总高", value: 1800, unit: "mm", min: 300, max: 8000 },
+    ],
     rules: [{ id: "rule-1", expression: "组件总长必须在 1000~6000 mm 范围内" }],
   };
 }

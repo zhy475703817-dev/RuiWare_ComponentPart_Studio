@@ -1,12 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Download, FileText, Image as ImageIcon, Paperclip, X } from "lucide-react";
 import type { ComponentDefinition, ComponentMember, ConnectionMethod, ConnectionType, EvidenceFile } from "../domain/component";
+import { interfaceGender } from "../domain/interfaceCompatibility";
 import { interfacesForReconstruction, loadReconstructionInfo } from "../library/templatePreview";
 import type { PublishedTemplate } from "../library/publishedLibrary";
 
 type Props = {
   definition: ComponentDefinition;
   members: ComponentMember[];
+  selectedMemberId: string | null;
+  hoveredMemberId: string | null;
+  compatibleMemberIds: Set<string>;
+  onSelectMember: (id: string) => void;
+  onHoverMember: (id: string | null) => void;
   onChange: (patch: Partial<ComponentDefinition>) => void;
   draftId?: string | null;
 };
@@ -19,10 +25,10 @@ const declarationModeLabels: Record<string, string> = { staticGeometry: "固定�
 const regionModeLabels: Record<string, string> = { rectangle: "矩形范围" };
 
 function summarizeInterfaces(members: ComponentMember[]) {
-  const groups = new Map<string, { count: number; dimensions: Set<string>; modes: Set<string> }>();
+  const groups = new Map<string, { count: number; dimensions: Set<string>; modes: Set<string>; genders: Set<string>; methods: Set<string> }>();
   for (const member of members) for (const item of member.interfaces) {
       const kind = item.interfaceType || item.type;
-      const group = groups.get(kind) || { count: 0, dimensions: new Set<string>(), modes: new Set<string>() };
+      const group = groups.get(kind) || { count: 0, dimensions: new Set<string>(), modes: new Set<string>(), genders: new Set<string>(), methods: new Set<string>() };
       group.count += 1;
       const region = item.region;
       const dimensions = region?.uSpan !== undefined && region.vSpan !== undefined
@@ -31,6 +37,13 @@ function summarizeInterfaces(members: ComponentMember[]) {
           ? `U ${region.uSpanExpression || "?"} × V ${region.vSpanExpression || "?"}`
           : "未声明";
       group.dimensions.add(dimensions);
+      const size = item.interfaceSize;
+      if (size && [size.diameter, size.width, size.height, size.depth].some(value => value !== undefined)) {
+        const physical = [size.diameter !== undefined ? `直径 ${size.diameter}` : "", size.width !== undefined ? `宽 ${size.width}` : "", size.height !== undefined ? `高 ${size.height}` : "", size.depth !== undefined ? `深 ${size.depth}` : ""].filter(Boolean).join(" × ");
+        if (physical) group.dimensions.add(`${physical}${size.unit ? ` ${size.unit}` : " mm"}`);
+      }
+      group.genders.add(interfaceGender(item) === "male" ? "公" : interfaceGender(item) === "female" ? "母" : "中性/未声明");
+      if (item.connectionMethod) group.methods.add(item.connectionMethod);
       if (item.locatingType) group.modes.add(locatingTypeLabels[item.locatingType] || item.locatingType);
       if (item.declarationMode) group.modes.add(declarationModeLabels[item.declarationMode] || item.declarationMode);
       if (region?.mode) group.modes.add(regionModeLabels[region.mode] || region.mode);
@@ -40,7 +53,7 @@ function summarizeInterfaces(members: ComponentMember[]) {
     kind: interfaceTypeLabels[kind] || kind,
     count: group.count,
     dimensions: [...group.dimensions].join(" / "),
-    modes: [...group.modes].join("、") || "未声明",
+    modes: [...group.modes, ...[...group.genders].map(gender => `公母：${gender}`), ...[...group.methods].map(method => `连接：${method}`)].join("、") || "未声明",
   }));
 }
 
@@ -50,7 +63,7 @@ function formatSize(size: number) {
   return `${(size / 1024 / 1024).toFixed(1)} MB`;
 }
 
-export function DefinitionStage({ definition, members, onChange, draftId }: Props) {
+export function DefinitionStage({ definition, members, selectedMemberId, hoveredMemberId, compatibleMemberIds, onSelectMember, onHoverMember, onChange, draftId }: Props) {
   const fileInput = useRef<HTMLInputElement>(null);
   const [evidenceError, setEvidenceError] = useState("");
   const [tagInput, setTagInput] = useState("");
@@ -211,7 +224,7 @@ export function DefinitionStage({ definition, members, onChange, draftId }: Prop
       {members.length === 0 ? <p className="empty-text">添加零部件后可查看其参数范围与接口数量</p> : <>
         {resolvedInterfaceState.key !== memberInterfaceKey && <p className="empty-text">正在按当前零件参数更新接口信息…</p>}
         {resolvedInterfaceState.key === memberInterfaceKey && resolvedInterfaceState.warning && <p className="empty-text">部分接口信息暂时无法更新，当前显示最近读取的数据。</p>}
-        <ul className="definition-member-list">{displayMembers.map(member => <li key={member.id}>
+        <ul className="definition-member-list">{displayMembers.map(member => <li key={member.id} className={`${selectedMemberId === member.id ? "selected" : ""} ${hoveredMemberId === member.id ? "hovered" : ""} ${compatibleMemberIds.has(member.id) ? "compatible-candidate" : ""}`} role="button" tabIndex={0} aria-pressed={selectedMemberId === member.id} onClick={() => onSelectMember(member.id)} onMouseEnter={() => onHoverMember(member.id)} onMouseLeave={() => onHoverMember(null)} onKeyDown={event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onSelectMember(member.id); } }}>
         <b>{member.role || member.name}</b><span>{member.interfaces.length} 个接口</span>
         {member.parameterDefinitions?.length ? <small>可调范围：{member.parameterDefinitions.map(parameter => `${parameter.label}: ${parameter.minimum ?? "无下限"} ～ ${parameter.maximum ?? "无上限"}${parameter.unit ? ` ${parameter.unit}` : ""}`).join(" · ")}</small> : <small>未定义可调参数范围</small>}
       </li>)}</ul>

@@ -62,7 +62,7 @@ export function componentPublicationMember(publication: ComponentPublication, id
       const source = port.interface || document.assembly.members.find(member => member.id === port.source.memberId)?.interfaces.find(item => item.id === port.source.interfaceId);
       if (!source) return [];
       const exposed: ComponentMember["interfaces"][number] = { ...structuredClone(source), id: port.id, name: port.name, tags: [...port.tags] };
-      for (const key of ["declarationMode", "interfaceType", "locatingType", "role", "geometryRefs", "parameterRefs", "description", "required", "region"] as const) {
+      for (const key of ["declarationMode", "interfaceType", "locatingType", "role", "geometryRefs", "parameterRefs", "description", "required", "connectionGender", "interfaceSize", "connectionMethod", "region"] as const) {
         const value = source[key];
         if (value !== undefined) exposed[key] = value as never;
       }

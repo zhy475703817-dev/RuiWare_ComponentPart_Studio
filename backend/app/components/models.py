@@ -41,12 +41,15 @@ class PartInterface(ComponentModel):
     parameterRefs: list[str] | None = None
     description: str | None = None
     required: bool | None = None
+    connectionGender: Literal["male", "female", "neutral"] | None = None
+    interfaceSize: dict[str, object] | None = None
+    connectionMethod: str | None = None
     region: dict[str, object] | None = None
 
     @model_serializer(mode="wrap")
     def preserve_optional_metadata(self, handler):
         data = handler(self)
-        for field in ("declarationMode", "interfaceType", "locatingType", "role", "geometryRefs", "parameterRefs", "description", "required", "region"):
+        for field in ("declarationMode", "interfaceType", "locatingType", "role", "geometryRefs", "parameterRefs", "description", "required", "connectionGender", "interfaceSize", "connectionMethod", "region"):
             if field not in self.model_fields_set:
                 data.pop(field, None)
         return data

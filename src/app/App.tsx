@@ -14,6 +14,7 @@ import { WorkspaceLayout } from "./WorkspaceLayout";
 import { useComponentWorkspace } from "./useComponentWorkspace";
 import { AgentChanges } from "./AgentChanges";
 import { STAGES } from "./stages";
+import { compatibleMemberIds } from "../domain/interfaceCompatibility";
 import "../styles/workspace.css";
 import "../styles/definition-stage.css";
 import "../styles/pattern-stage.css";
@@ -21,16 +22,18 @@ import "../styles/pattern-stage.css";
 export function App() {
   const [draftLink, setDraftLink] = useState("");
   const [dragTemplate, setDragTemplate] = useState<PublishedTemplate | null>(null);
+  const [hoveredMemberId, setHoveredMemberId] = useState<string | null>(null);
   const workspace = useComponentWorkspace();
   const { document, dispatch, stage, checks } = workspace;
   const { members, mates } = document.assembly;
+  const compatibleIds = compatibleMemberIds(members, workspace.selectedMemberId);
 
   function renderStage() {
     switch (stage) {
-      case "definition": return <DefinitionStage definition={document.definition} members={members} draftId={workspace.shared.draftId} onChange={patch => dispatch({ type: "definition.patch", patch })}/>;
+      case "definition": return <DefinitionStage definition={document.definition} members={members} draftId={workspace.shared.draftId} selectedMemberId={workspace.selectedMemberId} hoveredMemberId={hoveredMemberId} compatibleMemberIds={compatibleIds} onSelectMember={workspace.setSelectedMemberId} onHoverMember={setHoveredMemberId} onChange={patch => dispatch({ type: "definition.patch", patch })}/>;
       case "assembly": return <AssemblyStage mates={mates} onConnect={workspace.connectFirstInterfaces} onInherit={workspace.inheritInterface}/>;
       case "interfaces": return <InterfacesStage ports={document.ports} slots={document.slots}/>;
-      case "parameters": return <ParametersStage parameters={document.parameters} bindings={document.bindings} patterns={document.patterns} members={members} onChange={(id, value) => dispatch({ type: "parameter.value", id, value })} onBindingChange={(id, binding) => dispatch({ type: "binding.set", id, binding })} onAddParameter={parameter => dispatch({ type: "parameter.add", parameter })} onRemoveParameter={id => dispatch({ type: "parameter.remove", id })} onAddPattern={pattern => dispatch({ type: "pattern.add", pattern })} onRemovePattern={id => dispatch({ type: "pattern.remove", id })}/>;
+      case "parameters": return <ParametersStage parameters={document.parameters} bindings={document.bindings} patterns={document.patterns} members={members} definitionName={document.definition.name} definitionCode={document.definition.code} onChange={(id, value) => dispatch({ type: "parameter.value", id, value })} onBindingChange={(id, binding) => dispatch({ type: "binding.set", id, binding })} onAddParameter={parameter => dispatch({ type: "parameter.add", parameter })} onRemoveParameter={id => dispatch({ type: "parameter.remove", id })} onAddPattern={pattern => dispatch({ type: "pattern.add", pattern })} onRemovePattern={id => dispatch({ type: "pattern.remove", id })}/>;
       case "rules": return <RulesStage rules={document.rules} onChange={(id, expression) => dispatch({ type: "rule.expression", id, expression })}/>;
       case "validation": return <ValidationStage checks={checks} revision={document.revision} onValidate={() => workspace.setMessage(checks.some(check => check.status === "fail") ? "基础数据检查未通过，请处理失败项" : "基础数据检查通过；装配求解和工程规则执行仍待接入")}/>;
       case "publish": return <PublishStage checks={checks} revision={document.revision} onExport={workspace.exportDraft} onPublish={workspace.publishDraft} publishing={workspace.publishing}/>;
@@ -41,8 +44,8 @@ export function App() {
     library={<>
       <PublishedTemplateLibrary onPreview={workspace.setPreviewTemplate} onAdd={workspace.addPublishedTemplate} onDragTemplate={setDragTemplate} memberPublicationIds={members.map(member => member.template.publicationId)} selectionResetToken={workspace.selectionResetToken} refreshToken={workspace.libraryRefreshToken} addDisabled={!workspace.editable}/>
       <div className="panel-title member-title"><span>组件成员</span><small>{members.length}</small></div>
-      {members.length === 0 && <p className="hint">暂无成员，可从发布库加入零部件或组件。</p>}
-      {members.map(member => <div className={`member-row ${workspace.selectedMemberId === member.id ? "selected" : ""}`} key={member.id}>
+      {members.length === 0 && <p className="hint">暂无成员，点击发布库模板旁的加号或从发布详情加入组件。</p>}
+      {members.map(member => <div className={`member-row ${workspace.selectedMemberId === member.id ? "selected" : ""} ${hoveredMemberId === member.id ? "hovered" : ""} ${compatibleIds.has(member.id) ? "compatible-candidate" : ""}`} key={member.id} onMouseEnter={() => setHoveredMemberId(member.id)} onMouseLeave={() => setHoveredMemberId(null)} title={member.name}>
         <button className="member-select" onClick={() => workspace.setSelectedMemberId(member.id)}><span>{member.role}<small>{member.code} · V{member.template.version}</small></span></button>
         <button className="member-remove" onClick={() => workspace.copyMember(member.id)} aria-label={`复制成员 ${member.role}`} title="复制成员"><Copy size={14}/></button>
         <button className="member-remove" onClick={() => workspace.removeMember(member.id)} aria-label={`删除成员 ${member.role}`}><Trash2 size={14}/></button>
@@ -57,6 +60,8 @@ export function App() {
       previewTemplate={workspace.previewTemplate}
       selectedMemberId={workspace.selectedMemberId}
       onSelectMember={workspace.setSelectedMemberId}
+      onHoverMember={setHoveredMemberId}
+      compatibleMemberIds={compatibleIds}
       onMoveMember={workspace.moveMember}
       onCopyMember={workspace.copyMember}
       onRemoveMember={workspace.removeMember}

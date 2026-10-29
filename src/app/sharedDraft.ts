@@ -2,6 +2,7 @@ import { createComponentDocument } from "../domain/component.ts";
 import type { ComponentDocument } from "../domain/component.ts";
 import { componentReducer } from "../domain/componentReducer.ts";
 import type { ComponentAction } from "../domain/componentReducer.ts";
+import { inferEnvelopeDimensions } from "../domain/parameterMetrics.ts";
 import { validateComponent } from "../domain/validation.ts";
 import type { ValidationCheck } from "../domain/validation.ts";
 
@@ -37,6 +38,70 @@ const errorMessage = (error: unknown): string => errorCode(error) === "REVISION_
   : errorCode(error) === "EDIT_STRUCTURE_CONFLICT" ? "Agent 修改了相关结构，无法直接合并。本页输入已保留，请下载本地副本后核对差异。"
   : errorCode(error) === "DRAFT_NOT_FOUND" ? "该草稿已不存在，请选择其他草稿。" : "草稿操作失败。未保存输入已保留，请检查连接后重试。";
 
+const legacyDimensionSpecs = [
+  { id: "componentLength", label: "组件总长", min: 1000, max: 6000, fallback: 2400, axis: "length" as const, aliases: ["componentLength", "length", "overallLength", "总长", "长度"] },
+  { id: "componentWidth", label: "组件总宽", min: 100, max: 3000, fallback: 600, axis: "width" as const, aliases: ["componentWidth", "width", "overallWidth", "总宽", "宽度"] },
+  { id: "componentHeight", label: "组件总高", min: 300, max: 8000, fallback: 1800, axis: "height" as const, aliases: ["componentHeight", "height", "overallHeight", "总高", "高度"] },
+] as const;
+
+function normalizeDraftDocument(document: ComponentDocument): ComponentDocument {
+  const members = Array.isArray(document.assembly?.members) ? document.assembly.members : [];
+  const patterns = Array.isArray(document.patterns) ? document.patterns : [];
+  const sourceParameters = Array.isArray(document.parameters) ? document.parameters : [];
+  const inferred = inferEnvelopeDimensions(sourceParameters, members, patterns);
+  const parameters = [...sourceParameters];
+  const dimensionParameters = legacyDimensionSpecs.map(spec => {
+    const existing = parameters.find(parameter => spec.aliases.some(alias => parameter.id?.toLowerCase() === alias.toLowerCase() || parameter.label?.toLowerCase() === alias.toLowerCase()));
+    const inferredValue = inferred[spec.axis];
+    const value = typeof existing?.value === "number" && Number.isFinite(existing.value) ? existing.value : Math.min(spec.max, Math.max(spec.min, inferredValue ?? spec.fallback));
+    if (existing) {
+      const index = parameters.indexOf(existing);
+      parameters[index] = { ...existing, unit: existing.unit || "mm", min: Number.isFinite(existing.min) ? existing.min : spec.min, max: Number.isFinite(existing.max) ? existing.max : spec.max, value };
+      return parameters[index];
+    }
+    const parameter = { id: spec.id, label: spec.label, value, unit: "mm", min: spec.min, max: spec.max };
+    parameters.push(parameter);
+    return parameter;
+  });
+  const bindings = Array.isArray(document.bindings) ? [...document.bindings] : [];
+  for (const member of members) {
+    for (const spec of legacyDimensionSpecs) {
+      const definition = member.parameterDefinitions?.find(item => spec.aliases.some(alias => item.id?.toLowerCase() === alias.toLowerCase() || item.label?.toLowerCase() === alias.toLowerCase()) && item.unit === "mm" && ["number", "integer"].includes(item.valueType));
+      const parameter = dimensionParameters.find(item => item.id === spec.id || spec.aliases.some(alias => item.id?.toLowerCase() === alias.toLowerCase() || item.label?.toLowerCase() === alias.toLowerCase()));
+      const lowerBound = Math.max(parameter?.min ?? Number.POSITIVE_INFINITY, definition?.minimum ?? Number.POSITIVE_INFINITY);
+      const upperBound = Math.min(parameter?.max ?? Number.NEGATIVE_INFINITY, definition?.maximum ?? Number.NEGATIVE_INFINITY);
+      if (!definition || !parameter || lowerBound > upperBound || bindings.some(binding => binding.parameterId === parameter.id && binding.memberId === member.id && binding.memberParameterId === definition.id)) continue;
+      bindings.push({ id: `${member.id}:${parameter.id}:${definition.id}`, parameterId: parameter.id, memberId: member.id, memberParameterId: definition.id });
+    }
+  }
+  return { ...document, parameters, bindings };
+}
+
+function draftMigrationActions(document: ComponentDocument): ComponentAction[] {
+  const normalized = normalizeDraftDocument(document);
+  const parameterIds = new Set(document.parameters.map(parameter => parameter.id));
+  const bindingIds = new Set(document.bindings.map(binding => binding.id));
+  const valueMigrations = normalized.parameters
+    .filter(parameter => {
+      const existing = document.parameters.find(item => item.id === parameter.id);
+      return existing && existing.value !== parameter.value && parameter.value !== null;
+    })
+    .map(parameter => ({ type: "parameter.value" as const, id: parameter.id, value: parameter.value }));
+  return [
+    ...normalized.parameters
+      .filter(parameter => !parameterIds.has(parameter.id))
+      .map(parameter => ({ type: "parameter.add" as const, parameter })),
+    ...valueMigrations,
+    ...normalized.bindings
+      .filter(binding => !bindingIds.has(binding.id))
+      .map(binding => ({ type: "binding.set" as const, id: binding.id, binding })),
+  ];
+}
+
+function actionIdentity(action: ComponentAction): string {
+  return JSON.stringify(action);
+}
+
 // The server owns persisted data/checks. The reducer only projects queued input so typing stays responsive.
 export class SharedDraftController {
   private api: DraftApi;
@@ -61,6 +126,12 @@ export class SharedDraftController {
     this.listeners.forEach(listener => listener());
   }
   private accept(draft: DraftEnvelope) {
+    const migrationActions = draftMigrationActions(draft.document);
+    const queuedActions = new Set(this.pending.map(actionIdentity));
+    this.pending = [
+      ...migrationActions.filter(action => !queuedActions.has(actionIdentity(action))),
+      ...this.pending,
+    ];
     if (this.confirmed?.draftId === draft.draftId) this.recordChanges(draft);
     else this.publish({ agentChanges: [], changesTruncated: false, userPriority: false });
     this.confirmed = draft;
@@ -122,6 +193,7 @@ export class SharedDraftController {
       }
       if (this.disposed || generation !== this.generation) return;
       this.accept(draft);
+      this.beginSave();
       this.publish({ notice });
       await this.refreshList();
     } catch (error) {

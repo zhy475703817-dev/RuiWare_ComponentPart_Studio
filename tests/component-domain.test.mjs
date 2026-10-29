@@ -38,21 +38,38 @@ test('高度指标保留组件参数值，不从其他参数推算几何高度',
   assert.match(metrics.height.note, /组件参数范围/);
 });
 
-test('体积和重量显示已定义的参数范围，缺少数据时明确标为未配置', () => {
+test('体积由长宽高计算，重量只在存在材料信息时计算', () => {
   const missing = deriveComponentMetrics([]);
   assert.equal(missing.volume.value, '未配置');
-  assert.match(missing.volume.note, /无法仅凭/);
+  assert.match(missing.volume.note, /已放置成员/);
   assert.equal(missing.weight.value, '未配置');
   assert.match(missing.weight.note, /材料密度/);
 
-  const metrics = deriveComponentMetrics([
-    { id: 'componentVolume', label: '组件体积', value: 240000, unit: 'mm³', min: 100000, max: 500000 },
-    { id: 'componentWeight', label: '组件重量', value: 18, unit: 'kg', min: 5, max: 80 },
-  ]);
-  assert.equal(metrics.volume.value, '240,000 mm³');
-  assert.match(metrics.volume.note, /100,000 mm³ ～ 500,000 mm³/);
-  assert.equal(metrics.weight.value, '18 kg');
-  assert.match(metrics.weight.note, /5 kg ～ 80 kg/);
+  const dimensions = [
+    { id: 'componentLength', label: '组件总长', value: 100, unit: 'mm', min: 10, max: 500 },
+    { id: 'componentWidth', label: '组件总宽', value: 50, unit: 'mm', min: 10, max: 200 },
+    { id: 'componentHeight', label: '组件总高', value: 20, unit: 'mm', min: 10, max: 200 },
+  ];
+  const withoutMaterial = deriveComponentMetrics(dimensions, [], [member('a')]);
+  assert.equal(withoutMaterial.volume.label, '包络体积');
+  assert.equal(withoutMaterial.volume.value, '100,000 mm³');
+  assert.match(withoutMaterial.volume.note, /不代表材料实体体积/);
+  assert.equal(withoutMaterial.weight.value, '未配置');
+
+  const withDensity = deriveComponentMetrics([...dimensions, { id: 'materialDensity', label: '材料密度', value: 7850, unit: 'kg/m3', min: 7000, max: 9000 }], [], [member('a')]);
+  assert.equal(withDensity.weight.value, '未配置');
+  assert.match(withDensity.weight.note, /包络体积不用于估算重量/);
+
+  const solidPart = { ...member('solid'), parameterValues: { solidVolume: 100000, density: 7850 }, parameterDefinitions: [
+    { id: 'solidVolume', label: '零件实体体积', unit: 'mm3', valueType: 'number', minimum: 0, maximum: 500000, default: 100000 },
+    { id: 'density', label: '材料密度', unit: 'kg/m3', valueType: 'number', minimum: 7000, maximum: 9000, default: 7850 },
+  ] };
+  const withSolidProperties = deriveComponentMetrics(dimensions, [], [solidPart]);
+  assert.equal(withSolidProperties.weight.value, '0.79 kg');
+
+  const weighedMember = { ...member('b'), parameterValues: { mass: 500 }, parameterDefinitions: [{ id: 'mass', label: '质量', unit: 'g', valueType: 'number', minimum: 0, maximum: 1000, default: 500 }] };
+  const withMass = deriveComponentMetrics(dimensions, [], [weighedMember]);
+  assert.equal(withMass.weight.value, '0.5 kg');
 });
 
 test('组件参数绑定会继承成员范围并把值同步到成员参数', () => {
@@ -99,12 +116,12 @@ test('组件参数可以新增和删除，并清理关联绑定', () => {
   let draft = componentReducer(createComponentDocument(), { type: 'parameter.add', parameter });
   const boundMember = { ...member('a'), parameterValues: { width: 900 }, parameterDefinitions: [{ id: 'width', label: '宽度', unit: 'mm', valueType: 'number', minimum: 200, maximum: 1500, default: 900 }] };
   draft = componentReducer(draft, { type: 'member.add', member: boundMember });
-  assert.equal(draft.parameters.at(-1).id, 'componentWidth');
+  assert.equal(draft.parameters.some(item => item.id === 'componentWidth'), true);
   draft = componentReducer(draft, { type: 'binding.set', id: 'b-width', binding: { id: 'b-width', parameterId: 'componentWidth', memberId: 'a', memberParameterId: 'width' } });
-  assert.equal(draft.bindings.length, 1);
+  assert.equal(draft.bindings.filter(item => item.parameterId === 'componentWidth').length, 1);
   draft = componentReducer(draft, { type: 'parameter.remove', id: 'componentWidth' });
   assert.equal(draft.parameters.some(item => item.id === 'componentWidth'), false);
-  assert.equal(draft.bindings.length, 0);
+  assert.equal(draft.bindings.some(item => item.parameterId === 'componentWidth'), false);
 });
 
 test('通用构成规则按数量、间距和轴保存，并在删除来源时清理成员', () => {

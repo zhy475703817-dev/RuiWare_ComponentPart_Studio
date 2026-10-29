@@ -1,4 +1,5 @@
 import { createComponentDocument, getInterface, hasInterface, samePartInterface } from "./component.ts";
+import { inferEnvelopeDimensions } from "./parameterMetrics.ts";
 import type { ComponentDefinition, ComponentDocument, ComponentMember, ComponentPattern, ComponentPort, Mate, ParameterBinding } from "./component.ts";
 
 export type ComponentAction =
@@ -26,7 +27,46 @@ export function componentReducer(document: ComponentDocument, action: ComponentA
       return next({ definition: { ...document.definition, ...action.patch } });
     case "member.add":
       if (document.assembly.members.some(member => member.id === action.member.id)) return document;
-      return next({ assembly: { ...document.assembly, members: [...document.assembly.members, structuredClone(action.member)] } });
+      {
+        const member = structuredClone(action.member);
+        const dimensionAliases: Record<string, string[]> = {
+          length: ["length", "overallLength", "componentLength", "总长", "长度"],
+          width: ["width", "overallWidth", "componentWidth", "总宽", "宽度"],
+          height: ["height", "overallHeight", "componentHeight", "总高", "高度"],
+        };
+        const existingBindings = document.bindings;
+        const autoBindings: ParameterBinding[] = [];
+        const previousInferred = inferEnvelopeDimensions(document.parameters, document.assembly.members, document.patterns);
+        let parameters = document.parameters.map(parameter => {
+          const aliases = parameter.id.toLowerCase().includes("length") || parameter.label.includes("长") ? dimensionAliases.length
+            : parameter.id.toLowerCase().includes("width") || parameter.label.includes("宽") ? dimensionAliases.width
+              : parameter.id.toLowerCase().includes("height") || parameter.label.includes("高") ? dimensionAliases.height : [];
+          const definition = member.parameterDefinitions?.find(item => aliases.some(alias => item.id.toLowerCase() === alias.toLowerCase() || item.label.toLowerCase() === alias.toLowerCase()) && item.unit === parameter.unit && ["number", "integer"].includes(item.valueType));
+          if (!definition) return parameter;
+          if (!existingBindings.some(binding => binding.parameterId === parameter.id && binding.memberId === member.id && binding.memberParameterId === definition.id)) {
+            autoBindings.push({ id: `${member.id}:${parameter.id}:${definition.id}`, parameterId: parameter.id, memberId: member.id, memberParameterId: definition.id });
+          }
+          if (document.assembly.members.length === 0 && parameter.value !== null && typeof definition.default === "number") {
+            const value = Math.min(definition.maximum ?? parameter.max, Math.max(definition.minimum ?? parameter.min, definition.default));
+            return { ...parameter, value: Math.min(parameter.max, Math.max(parameter.min, value)) };
+          }
+          return parameter;
+        });
+        const members = [...document.assembly.members, member];
+        const inferred = inferEnvelopeDimensions(parameters, members, document.patterns);
+        const defaults: Record<string, number> = { componentLength: 2400, componentWidth: 600, componentHeight: 1800 };
+        parameters = parameters.map(parameter => {
+          const axis = parameter.id.toLowerCase().includes("length") || parameter.label.includes("长") ? "length"
+            : parameter.id.toLowerCase().includes("width") || parameter.label.includes("宽") ? "width"
+              : parameter.id.toLowerCase().includes("height") || parameter.label.includes("高") ? "height" : null;
+          const value = axis ? inferred[axis] : undefined;
+          const previousValue = axis ? previousInferred[axis] : undefined;
+          const untouched = defaults[parameter.id] === parameter.value || parameter.value !== null && previousValue !== undefined && Math.abs(previousValue - parameter.value) < 1e-8;
+          if (value === undefined || !untouched) return parameter;
+          return { ...parameter, value: Math.min(parameter.max, Math.max(parameter.min, value)) };
+        });
+        return next({ assembly: { ...document.assembly, members }, bindings: [...existingBindings, ...autoBindings], parameters });
+      }
     case "member.patch":
       if (!document.assembly.members.some(member => member.id === action.id)) return document;
       return next({ assembly: { ...document.assembly, members: document.assembly.members.map(member => member.id === action.id ? { ...member, ...structuredClone(action.patch) } : member) } });
@@ -120,6 +160,7 @@ export function componentReducer(document: ComponentDocument, action: ComponentA
       const member = document.assembly.members.find(item => item.id === action.binding?.memberId);
       const definition = member?.parameterDefinitions?.find(item => item.id === action.binding?.memberParameterId);
       if (!member || !definition || definition.unit !== document.parameters.find(parameter => parameter.id === action.binding?.parameterId)?.unit || !["number", "integer"].includes(definition.valueType)) return document;
+      if (document.bindings.some(binding => binding.id !== action.id && binding.parameterId === action.binding?.parameterId && binding.memberId === action.binding?.memberId && binding.memberParameterId === action.binding?.memberParameterId)) return document;
       const bindings = [...document.bindings.filter(binding => binding.id !== action.id), structuredClone(action.binding)];
       const parameter = document.parameters.find(item => item.id === action.binding?.parameterId)!;
       const definitions = bindings.filter(binding => binding.parameterId === parameter.id).flatMap(binding => {
