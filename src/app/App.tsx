@@ -1,7 +1,8 @@
 import { Copy, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { PublishedTemplateLibrary } from "../library/PublishedTemplateLibrary";
 import type { PublishedTemplate } from "../library/publishedLibrary";
+import type { InterfaceSelection, ResolvedPartInterface } from "../domain/component";
 import { ComponentViewport } from "../viewport/ComponentViewport";
 import { DefinitionStage } from "../stages/DefinitionStage";
 import { AssemblyStage } from "../stages/AssemblyStage";
@@ -15,6 +16,8 @@ import { useComponentWorkspace } from "./useComponentWorkspace";
 import { AgentChanges } from "./AgentChanges";
 import { STAGES } from "./stages";
 import { compatibleMemberIds } from "../domain/interfaceCompatibility";
+import { hasInterfaceSelection, sameInterfaceSelection, supportsInterfacePreview } from "../domain/interfaceGeometry";
+import { loadReconstructionInfo } from "../library/templatePreview";
 import "../styles/workspace.css";
 import "../styles/definition-stage.css";
 import "../styles/pattern-stage.css";
@@ -24,17 +27,67 @@ export function App() {
   const [dragTemplate, setDragTemplate] = useState<PublishedTemplate | null>(null);
   const [hoveredMemberId, setHoveredMemberId] = useState<string | null>(null);
   const [panelSelectionToken, setPanelSelectionToken] = useState(0);
+  const [selectedInterface, setSelectedInterface] = useState<InterfaceSelection | null>(null);
+  const [interfacePreview, setInterfacePreview] = useState<{ selection: InterfaceSelection; status: "loading" | "ready" | "error"; resolvedInterfaces?: ResolvedPartInterface[] } | undefined>();
+  const interfacePreviewAbort = useRef<AbortController | null>(null);
   const workspace = useComponentWorkspace();
   const { document, dispatch, stage, checks } = workspace;
   const { members, mates } = document.assembly;
   const compatibleIds = compatibleMemberIds(members, workspace.selectedMemberId);
-  const selectPanelMember = (id: string) => { workspace.setSelectedMemberId(id); setPanelSelectionToken(token => token + 1); };
+  const clearInterfacePreview = () => { interfacePreviewAbort.current?.abort(); interfacePreviewAbort.current = null; setSelectedInterface(null); setInterfacePreview(undefined); };
+  const selectPanelMember = (id: string) => { workspace.setSelectedMemberId(id); clearInterfacePreview(); setPanelSelectionToken(token => token + 1); };
+  const selectInterface = (selection: InterfaceSelection) => {
+    interfacePreviewAbort.current?.abort();
+    interfacePreviewAbort.current = null;
+    setSelectedInterface(selection);
+    workspace.setSelectedMemberId(selection.memberId);
+    setPanelSelectionToken(token => token + 1);
+    const member = members.find(item => item.id === selection.memberId);
+    const item = member?.interfaces.find(interfaceItem => interfaceItem.id === selection.interfaceId);
+    if (!member || !item) { setInterfacePreview(undefined); return; }
+    if (supportsInterfacePreview(item, member.resolvedInterfaces)) {
+      setInterfacePreview({ selection, status: "ready", resolvedInterfaces: member.resolvedInterfaces });
+      return;
+    }
+    if (member.template.templateKind === "component") {
+      setInterfacePreview({ selection, status: "error" });
+      return;
+    }
+
+    const controller = new AbortController();
+    interfacePreviewAbort.current = controller;
+    setInterfacePreview({ selection, status: "loading" });
+    const template: PublishedTemplate = {
+      templateKind: "part", publicationId: member.template.publicationId, templateId: member.template.templateId,
+      version: member.template.version, sha256: member.template.sha256, code: member.code, name: member.name,
+      createdAt: new Date(0).toISOString(), size: 0, downloadUrl: "",
+    };
+    void loadReconstructionInfo(template, controller.signal, member.parameterValues).then(info => {
+      if (controller.signal.aborted) return;
+      setInterfacePreview(current => sameInterfaceSelection(current?.selection || null, selection)
+        ? { selection, status: "ready", resolvedInterfaces: info.resolvedInterfaces }
+        : current);
+    }).catch(() => {
+      if (controller.signal.aborted) return;
+      setInterfacePreview(current => sameInterfaceSelection(current?.selection || null, selection)
+        ? { selection, status: "error" }
+        : current);
+    });
+  };
+  const selectViewportMember = (id: string | null) => { workspace.setSelectedMemberId(id); clearInterfacePreview(); setPanelSelectionToken(token => token + 1); };
+
+  useEffect(() => {
+    if (selectedInterface && !hasInterfaceSelection(members, selectedInterface)) clearInterfacePreview();
+  }, [members, selectedInterface]);
+
+  useEffect(() => { clearInterfacePreview(); }, [workspace.shared.draftId]);
+  useEffect(() => () => interfacePreviewAbort.current?.abort(), []);
 
   function renderStage() {
     switch (stage) {
       case "definition": return <DefinitionStage definition={document.definition} members={members} draftId={workspace.shared.draftId} selectedMemberId={workspace.selectedMemberId} hoveredMemberId={hoveredMemberId} compatibleMemberIds={compatibleIds} onSelectMember={selectPanelMember} onHoverMember={setHoveredMemberId} onChange={patch => dispatch({ type: "definition.patch", patch })}/>;
       case "assembly": return <AssemblyStage mates={mates} onConnect={workspace.connectFirstInterfaces} onInherit={workspace.inheritInterface}/>;
-      case "interfaces": return <InterfacesStage ports={document.ports} slots={document.slots}/>;
+      case "interfaces": return <InterfacesStage members={members} ports={document.ports} slots={document.slots} selectedInterface={selectedInterface} interfacePreview={interfacePreview} onSelectInterface={selectInterface}/>;
       case "parameters": return <ParametersStage parameters={document.parameters} bindings={document.bindings} patterns={document.patterns} members={members} definitionName={document.definition.name} definitionCode={document.definition.code} onChange={(id, value) => dispatch({ type: "parameter.value", id, value })} onBindingChange={(id, binding) => dispatch({ type: "binding.set", id, binding })} onAddParameter={parameter => dispatch({ type: "parameter.add", parameter })} onRemoveParameter={id => dispatch({ type: "parameter.remove", id })} onAddPattern={pattern => dispatch({ type: "pattern.add", pattern })} onRemovePattern={id => dispatch({ type: "pattern.remove", id })}/>;
       case "rules": return <RulesStage rules={document.rules} onChange={(id, expression) => dispatch({ type: "rule.expression", id, expression })}/>;
       case "validation": return <ValidationStage checks={checks} revision={document.revision} onValidate={() => workspace.setMessage(checks.some(check => check.status === "fail") ? "基础数据检查未通过，请处理失败项" : "基础数据检查通过；装配求解和工程规则执行仍待接入")}/>;
@@ -61,8 +114,10 @@ export function App() {
       mateCount={mates.length}
       previewTemplate={workspace.previewTemplate}
       selectedMemberId={workspace.selectedMemberId}
+      selectedInterface={selectedInterface}
+      selectedInterfaceResolved={sameInterfaceSelection(interfacePreview?.selection || null, selectedInterface) && interfacePreview?.status === "ready" ? interfacePreview.resolvedInterfaces : undefined}
       panelSelectionToken={panelSelectionToken}
-      onSelectMember={workspace.setSelectedMemberId}
+      onSelectMember={selectViewportMember}
       onHoverMember={setHoveredMemberId}
       compatibleMemberIds={compatibleIds}
       onMoveMember={workspace.moveMember}

@@ -3,22 +3,19 @@ import type { ReactNode } from "react";
 import { Canvas, useThree } from "@react-three/fiber";
 import { Grid, Line, OrbitControls, TransformControls } from "@react-three/drei";
 import { AlertTriangle, Boxes, Copy, Eye, Trash2 } from "lucide-react";
-import { DoubleSide } from "three";
+import { BufferAttribute, BufferGeometry, DoubleSide } from "three";
 import { Vector3 as ThreeVector3 } from "three";
-import type { BufferGeometry, Group, PerspectiveCamera } from "three";
+import type { Group, PerspectiveCamera } from "three";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
-import type { ComponentMember, ComponentParameter, ComponentPattern, ParameterBinding, Vector3 } from "../domain/component";
+import type { ComponentMember, ComponentParameter, ComponentPattern, InterfaceSelection, ParameterBinding, PartInterface, ResolvedPartInterface, Vector3 } from "../domain/component";
+import { interfaceHighlights } from "../domain/interfaceGeometry";
 import { resolveComponentComposition } from "../domain/composition";
 import type { PublishedTemplate } from "../library/publishedLibrary";
 import { fetchPublishedComponent } from "../library/componentPublications";
 import { useTemplatePreview } from "../library/useTemplatePreview";
 
 type VisualMember = ComponentMember & { sourceMemberId?: string; patternInstance?: boolean };
-
-// Published part geometry is stored in engineering units. Keep the grid and all
-// persisted member coordinates unchanged, but enlarge the rendered model so it
-// remains easy to inspect and pick in the viewport.
-const MODEL_DISPLAY_SCALE = 2.4;
+const INTERFACE_HIGHLIGHT_COLOR = "#12b8d4";
 
 function materialText(member: ComponentMember): string {
   const candidate = member as ComponentMember & {
@@ -68,7 +65,7 @@ function CompatibleOutline() {
     [-x, -y, z], [x, -y, z], [x, -y, z], [x, y, z], [x, y, z], [-x, y, z], [-x, y, z], [-x, -y, z],
     [-x, -y, -z], [-x, -y, z], [x, -y, -z], [x, -y, z], [x, y, -z], [x, y, z], [-x, y, -z], [-x, y, z],
   ];
-  return <Line points={points} segments dashed color="#5c9ebc" lineWidth={1.5} scale={MODEL_DISPLAY_SCALE} />;
+  return <Line points={points} segments dashed color="#5c9ebc" lineWidth={1.5} />;
 }
 
 type ScreenPoint = { x: number; y: number };
@@ -103,9 +100,27 @@ function PartMesh({ member, materialColor, position = [0, 0, 0] as Vector3, onSe
   const template = useMemo(() => partTemplate(member), [member.template.publicationId, member.template.templateId, member.template.version, member.template.sha256, member.code, member.name]);
   const preview = useTemplatePreview(template, member.parameterValues);
   if (!preview.result?.geometry) return null;
-  return <mesh geometry={preview.result.geometry} position={position} rotation={member.rotation} scale={MODEL_DISPLAY_SCALE} dispose={null} onClick={event => { event.stopPropagation(); onSelect?.(); onPointerSelect?.({ x: event.nativeEvent.clientX, y: event.nativeEvent.clientY }); }}>
+  return <mesh geometry={preview.result.geometry} position={position} rotation={member.rotation} dispose={null} onClick={event => { event.stopPropagation(); onSelect?.(); onPointerSelect?.({ x: event.nativeEvent.clientX, y: event.nativeEvent.clientY }); }}>
     <PartMaterial member={member} color={materialColor || "#7394b0"}/>
   </mesh>;
+}
+
+function InterfaceMarker({ geometry, item, member, resolvedInterfaces }: { geometry: BufferGeometry | null; item: PartInterface | undefined; member: ComponentMember; resolvedInterfaces?: ResolvedPartInterface[] }) {
+  const markers = useMemo(() => {
+    if (!geometry?.boundingBox || !item) return [];
+    const highlights = interfaceHighlights({ min: geometry.boundingBox.min.toArray() as Vector3, max: geometry.boundingBox.max.toArray() as Vector3 }, item, resolvedInterfaces ?? member.resolvedInterfaces);
+    return highlights.map(highlight => {
+      const [a, b, c, d] = highlight.corners;
+      const markerGeometry = new BufferGeometry();
+      markerGeometry.setAttribute("position", new BufferAttribute(new Float32Array([...a, ...b, ...c, ...a, ...c, ...d]), 3));
+      markerGeometry.computeVertexNormals();
+      return { geometry: markerGeometry, region: highlight.region };
+    });
+  }, [geometry, item, member.resolvedInterfaces, resolvedInterfaces]);
+  useEffect(() => () => markers.forEach(marker => marker.geometry.dispose()), [markers]);
+  return <>{markers.map((marker, index) => <mesh key={index} geometry={marker.geometry} renderOrder={4}>
+    <meshBasicMaterial color={INTERFACE_HIGHLIGHT_COLOR} transparent opacity={marker.region ? .82 : .42} depthWrite={false} side={DoubleSide}/>
+  </mesh>)}</>;
 }
 
 function NestedComponentVisual({ member, selected = false, onSelect, onPointerSelect }: { member: ComponentMember; selected?: boolean; onSelect?: () => void; onPointerSelect?: (point: ScreenPoint) => void }) {
@@ -126,15 +141,16 @@ function NestedComponentVisual({ member, selected = false, onSelect, onPointerSe
   </group>;
 }
 
-function MemberModel({ member, selected, compatible, onSelect, onHover, onMove, onDragStateChange, onPointerSelect, onPointerHover, onPointerHoverEnd }: { member: VisualMember; selected: boolean; compatible?: boolean; onSelect: () => void; onHover?: (hovered: boolean) => void; onMove: (position: Vector3) => void; onDragStateChange?: (dragging: boolean) => void; onPointerSelect?: (point: ScreenPoint) => void; onPointerHover?: (point: ScreenPoint) => void; onPointerHoverEnd?: () => void }) {
+function MemberModel({ member, selected, compatible, selectedInterface, selectedInterfaceResolved, onSelect, onHover, onMove, onDragStateChange, onPointerSelect, onPointerHover, onPointerHoverEnd }: { member: VisualMember; selected: boolean; compatible?: boolean; selectedInterface?: InterfaceSelection | null; selectedInterfaceResolved?: ResolvedPartInterface[]; onSelect: () => void; onHover?: (hovered: boolean) => void; onMove: (position: Vector3) => void; onDragStateChange?: (dragging: boolean) => void; onPointerSelect?: (point: ScreenPoint) => void; onPointerHover?: (point: ScreenPoint) => void; onPointerHoverEnd?: () => void }) {
   const template = useMemo(() => partTemplate(member), [member.template.publicationId, member.template.templateId, member.template.version, member.template.sha256, member.code, member.name]);
   const preview = useTemplatePreview(template, member.parameterValues);
+  const selectedItem = selectedInterface?.memberId === (member.sourceMemberId || member.id) ? member.interfaces.find(item => item.id === selectedInterface.interfaceId) : undefined;
   return <DraggableGroup member={member} selected={selected} compatible={compatible} onSelect={onSelect} onHover={onHover} onMove={onMove} onDragStateChange={onDragStateChange} onPointerSelect={onPointerSelect} onPointerHover={onPointerHover} onPointerHoverEnd={onPointerHoverEnd} movable={!member.patternInstance}>
     {hovered => {
       const color = selected ? "#c89532" : hovered ? "#d9b85f" : compatible ? "#a8cad8" : "#7394b0";
       return preview.result?.geometry
-        ? <mesh geometry={preview.result.geometry} scale={MODEL_DISPLAY_SCALE} dispose={null} onClick={event => { event.stopPropagation(); onSelect(); onPointerSelect?.({ x: event.nativeEvent.clientX, y: event.nativeEvent.clientY }); }}><PartMaterial member={member} color={color}/></mesh>
-        : <mesh scale={MODEL_DISPLAY_SCALE} onClick={event => { event.stopPropagation(); onSelect(); onPointerSelect?.({ x: event.nativeEvent.clientX, y: event.nativeEvent.clientY }); }}><boxGeometry args={[160, 80, 60]}/><meshBasicMaterial color={color} transparent={isTransparentMaterial(member)} opacity={isTransparentMaterial(member) ? .45 : 1}/></mesh>;
+        ? <><mesh geometry={preview.result.geometry} dispose={null} onClick={event => { event.stopPropagation(); onSelect(); onPointerSelect?.({ x: event.nativeEvent.clientX, y: event.nativeEvent.clientY }); }}><PartMaterial member={member} color={color}/></mesh><InterfaceMarker geometry={preview.result.geometry} item={selectedItem} member={member} resolvedInterfaces={selectedInterfaceResolved ?? preview.info?.resolvedInterfaces}/></>
+        : <mesh onClick={event => { event.stopPropagation(); onSelect(); onPointerSelect?.({ x: event.nativeEvent.clientX, y: event.nativeEvent.clientY }); }}><boxGeometry args={[160, 80, 60]}/><meshBasicMaterial color={color} transparent={isTransparentMaterial(member)} opacity={isTransparentMaterial(member) ? .45 : 1}/></mesh>;
     }}
   </DraggableGroup>;
 }
@@ -146,17 +162,15 @@ function ComponentMemberModel({ member, selected, compatible, onSelect, onHover,
   </DraggableGroup>;
 }
 
-function PreviewScene({ members, parameters, bindings, patterns, selectedMemberId, panelSelectionToken, compatibleMemberIds, onSelectMember, onHoverMember, onMoveMember, onPointerSelect, onPointerHover, onPointerHoverEnd, onScreenSelection, onClearSelection, geometry }: { members: ComponentMember[]; parameters: ComponentParameter[]; bindings: ParameterBinding[]; patterns: ComponentPattern[]; selectedMemberId: string | null; panelSelectionToken: number; compatibleMemberIds?: ReadonlySet<string>; onSelectMember: (id: string) => void; onHoverMember?: (id: string | null) => void; onMoveMember: (id: string, position: Vector3) => void; onPointerSelect?: (id: string, point: ScreenPoint) => void; onPointerHover?: (id: string, point: ScreenPoint) => void; onPointerHoverEnd?: (id: string) => void; onScreenSelection?: (id: string, point: ScreenPoint) => void; onClearSelection?: () => void; geometry: BufferGeometry | null }) {
+function PreviewScene({ members, parameters, bindings, patterns, selectedMemberId, selectedInterface, selectedInterfaceResolved, panelSelectionToken, compatibleMemberIds, onSelectMember, onHoverMember, onMoveMember, onPointerSelect, onPointerHover, onPointerHoverEnd, onScreenSelection, onClearSelection, geometry }: { members: ComponentMember[]; parameters: ComponentParameter[]; patterns: ComponentPattern[]; bindings: ParameterBinding[]; selectedMemberId: string | null; selectedInterface?: InterfaceSelection | null; selectedInterfaceResolved?: ResolvedPartInterface[]; panelSelectionToken: number; compatibleMemberIds?: ReadonlySet<string>; onSelectMember: (id: string) => void; onHoverMember?: (id: string | null) => void; onMoveMember: (id: string, position: Vector3) => void; onPointerSelect?: (id: string, point: ScreenPoint) => void; onPointerHover?: (id: string, point: ScreenPoint) => void; onPointerHoverEnd?: (id: string) => void; onScreenSelection?: (id: string, point: ScreenPoint) => void; onClearSelection?: () => void; geometry: BufferGeometry | null }) {
   const { camera, size } = useThree(); const controls = useRef<OrbitControlsImpl>(null); const [cameraEnabled, setCameraEnabled] = useState(true);
   const setDragging = (dragging: boolean) => { setCameraEnabled(!dragging); if (controls.current) controls.current.enabled = !dragging; };
-  const memberRadius = members.length ? Math.max(8, ...members.flatMap(member => [...member.position.map(Math.abs), ...Object.values(member.parameterValues).filter((value): value is number => typeof value === "number" && Number.isFinite(value)).map(Math.abs)])) : 8;
+  const memberRadius = members.length ? Math.max(8, ...members.map(member => Math.hypot(...member.position) + Math.max(0, ...Object.values(member.parameterValues).filter((value): value is number => typeof value === "number" && Number.isFinite(value))) / 2)) : 8;
   const patternRadius = patterns.length ? Math.max(...patterns.map(pattern => (parameters.find(parameter => parameter.id === pattern.spacingParameterId)?.value ?? 0) * Math.max(1, (parameters.find(parameter => parameter.id === pattern.countParameterId)?.value ?? 1) - 1))) : 0;
-  const radius = geometry?.boundingSphere?.radius || Math.max(memberRadius, patternRadius);
-  // Member previews already apply MODEL_DISPLAY_SCALE. Keep the assembly
-  // camera in engineering units so the enlarged meshes occupy more of the
-  // viewport instead of being cancelled out by an equally enlarged camera
-  // distance. A standalone preview still needs the scale factor to fit.
-  const cameraRadius = Math.max(8, radius * (members.length ? 1.1 : MODEL_DISPLAY_SCALE * 1.1));
+  const radius = members.length
+    ? Math.max(memberRadius, patternRadius)
+    : geometry?.boundingSphere?.radius || Math.max(memberRadius, patternRadius);
+  const cameraRadius = Math.max(8, radius * 1.1);
   const renderedMembers = useMemo<VisualMember[]>(() => resolveComponentComposition({ assembly: { members, mates: [] }, parameters, bindings, patterns }, Object.fromEntries(parameters.map(parameter => [parameter.id, parameter.value]))), [members, parameters, bindings, patterns]);
   const screenPosition = useRef(new ThreeVector3());
   const lastPanelSelectionToken = useRef(panelSelectionToken);
@@ -166,6 +180,8 @@ function PreviewScene({ members, parameters, bindings, patterns, selectedMemberI
     if (!selectedMemberId || !onScreenSelection) return;
     const member = renderedMembers.find(item => (item.sourceMemberId || item.id) === selectedMemberId);
     if (!member) return;
+    controls.current?.target.set(...member.position);
+    controls.current?.update();
     screenPosition.current.set(...member.position).project(camera);
     const width = size.width, height = size.height;
     const point = { x: (screenPosition.current.x + 1) / 2 * width, y: (-screenPosition.current.y + 1) / 2 * height };
@@ -177,12 +193,12 @@ function PreviewScene({ members, parameters, bindings, patterns, selectedMemberI
     const compatible = compatibleMemberIds?.has(memberId) || false;
     return member.template.templateKind === "component"
       ? <ComponentMemberModel key={`${member.id}-${index}`} member={member} selected={memberId === selectedMemberId} compatible={compatible} onSelect={() => onSelectMember(memberId)} onPointerSelect={point => onPointerSelect?.(memberId, point)} onPointerHover={point => onPointerHover?.(memberId, point)} onPointerHoverEnd={() => onPointerHoverEnd?.(memberId)} onHover={hovered => onHoverMember?.(hovered ? memberId : null)} onMove={position => onMoveMember(memberId, position)} onDragStateChange={setDragging}/>
-      : <MemberModel key={`${member.id}-${index}`} member={member} selected={memberId === selectedMemberId} compatible={compatible} onSelect={() => onSelectMember(memberId)} onPointerSelect={point => onPointerSelect?.(memberId, point)} onPointerHover={point => onPointerHover?.(memberId, point)} onPointerHoverEnd={() => onPointerHoverEnd?.(memberId)} onHover={hovered => onHoverMember?.(hovered ? memberId : null)} onMove={position => onMoveMember(memberId, position)} onDragStateChange={setDragging}/>;
+      : <MemberModel key={`${member.id}-${index}`} member={member} selected={memberId === selectedMemberId} compatible={compatible} selectedInterface={selectedInterface} selectedInterfaceResolved={selectedInterfaceResolved} onSelect={() => onSelectMember(memberId)} onPointerSelect={point => onPointerSelect?.(memberId, point)} onPointerHover={point => onPointerHover?.(memberId, point)} onPointerHoverEnd={() => onPointerHoverEnd?.(memberId)} onHover={hovered => onHoverMember?.(hovered ? memberId : null)} onMove={position => onMoveMember(memberId, position)} onDragStateChange={setDragging}/>;
   })}<OrbitControls ref={controls} enabled={cameraEnabled} makeDefault minDistance={radius / 100} maxDistance={radius * 100}/></>;
 }
 
-type Props = { members: ComponentMember[]; parameters?: ComponentParameter[]; bindings?: ParameterBinding[]; patterns?: ComponentPattern[]; mateCount: number; previewTemplate: PublishedTemplate | null; selectedMemberId?: string | null; panelSelectionToken?: number; compatibleMemberIds?: ReadonlySet<string>; onSelectMember?: (id: string | null) => void; onHoverMember?: (id: string | null) => void; onMoveMember?: (id: string, position: Vector3) => void; onCopyMember?: (id: string) => void; onRemoveMember?: (id: string) => void; onDropTemplate?: () => void };
-export function ComponentViewport({ members, parameters = [], bindings = [], patterns = [], mateCount, previewTemplate, selectedMemberId = null, panelSelectionToken = 0, compatibleMemberIds, onSelectMember = () => undefined, onHoverMember, onMoveMember = () => undefined, onCopyMember = () => undefined, onRemoveMember = () => undefined, onDropTemplate = () => undefined }: Props) {
+type Props = { members: ComponentMember[]; parameters?: ComponentParameter[]; bindings?: ParameterBinding[]; patterns?: ComponentPattern[]; mateCount: number; previewTemplate: PublishedTemplate | null; selectedMemberId?: string | null; selectedInterface?: InterfaceSelection | null; selectedInterfaceResolved?: ResolvedPartInterface[]; panelSelectionToken?: number; compatibleMemberIds?: ReadonlySet<string>; onSelectMember?: (id: string | null) => void; onHoverMember?: (id: string | null) => void; onMoveMember?: (id: string, position: Vector3) => void; onCopyMember?: (id: string) => void; onRemoveMember?: (id: string) => void; onDropTemplate?: () => void };
+export function ComponentViewport({ members, parameters = [], bindings = [], patterns = [], mateCount, previewTemplate, selectedMemberId = null, selectedInterface = null, selectedInterfaceResolved, panelSelectionToken = 0, compatibleMemberIds, onSelectMember = () => undefined, onHoverMember, onMoveMember = () => undefined, onCopyMember = () => undefined, onRemoveMember = () => undefined, onDropTemplate = () => undefined }: Props) {
   const preview = useTemplatePreview(members.length || previewTemplate?.templateKind === "component" ? null : previewTemplate); const loaded = preview.result;
   const hoverHandler = onHoverMember || ((id: string | null) => { if (id) onSelectMember(id); });
   const [tooltip, setTooltip] = useState<MemberTooltip | null>(null);
@@ -247,5 +263,5 @@ export function ComponentViewport({ members, parameters = [], bindings = [], pat
   const clearSelection = () => { clearTooltipTimers(); tooltipRef.current = null; setTooltip(null); onHoverMember?.(null); onSelectMember(null); };
   const handleViewportPointerLeave = () => { hoverHandler(null); clearHoverTooltip(); };
   const tooltipMember = tooltip ? members.find(member => member.id === tooltip.memberId) : undefined;
-  return <section className="viewport" aria-label="组件三维视图" tabIndex={0} onPointerLeave={handleViewportPointerLeave} onDragOver={event => { if (event.dataTransfer.types.includes("text/plain")) event.preventDefault(); }} onDrop={event => { if (event.dataTransfer.types.includes("text/plain")) { event.preventDefault(); onDropTemplate(); } }} onKeyDown={event => { if (!selectedMemberId) return; if (event.key === "Delete" || event.key === "Backspace") { event.preventDefault(); onRemoveMember(selectedMemberId); } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "d") { event.preventDefault(); onCopyMember(selectedMemberId); } }}><div className="viewport-toolbar"><button className="tool active" type="button"><Eye size={15}/>预览</button><span>从左侧拖入零部件 · 选择后使用操作轴移动 · 滚轮缩放</span>{selectedMemberId && <><button className="tool" type="button" title="复制成员 (Ctrl/Cmd+D)" aria-label="复制选中成员" onClick={() => onCopyMember(selectedMemberId)}><Copy size={14}/></button><button className="tool" type="button" title="删除选中成员 (Delete)" aria-label="删除选中成员" onClick={() => onRemoveMember(selectedMemberId)}><Trash2 size={14}/></button></>}<span className="view-status">{members.length} 个成员 · {patterns.length ? `${patterns.length} 条构成规则` : `${mateCount} 个连接`}</span></div><div className="viewport-scene" ref={sceneRef}><Canvas camera={{ position: [7, 5, 7], up: [0, 0, 1], fov: 42 }} onPointerMissed={clearSelection}><color attach="background" args={["#f5f7f9"]}/><ambientLight intensity={1.8}/><directionalLight position={[4, 6, 5]} intensity={2}/><PreviewScene members={members} parameters={parameters} bindings={bindings} patterns={patterns} selectedMemberId={selectedMemberId} panelSelectionToken={panelSelectionToken} compatibleMemberIds={compatibleMemberIds} onSelectMember={onSelectMember} onHoverMember={hoverHandler} onPointerSelect={handlePointerSelect} onPointerHover={handlePointerHover} onPointerHoverEnd={handlePointerHoverEnd} onScreenSelection={handleScreenSelection} onClearSelection={clearSelection} onMoveMember={onMoveMember} geometry={loaded?.geometry || null}/></Canvas>{tooltip && tooltipMember && <div className="viewport-tooltip" style={{ left: tooltip.point.x, top: tooltip.point.y, opacity: tooltip.opacity }}>{tooltipMember.name}</div>}</div>{!loaded && !members.length && <div className="empty-overlay" role="status"><Boxes size={30}/><b>{previewTemplate ? previewTemplate.name : "浏览已发布零部件"}</b><span>{preview.error || (previewTemplate ? "正在准备模型…" : "点击左侧模板预览零件")}</span>{preview.error && <><AlertTriangle size={18}/><button type="button" className="ghost" onClick={preview.retry}>重试</button></>}</div>}{members.length > 0 && <div className="preview-caption" role="status"><b>组件成员</b><span>选中成员后拖动操作轴可调整位置</span></div>}</section>;
+  return <section className="viewport" aria-label="组件三维视图" tabIndex={0} onPointerLeave={handleViewportPointerLeave} onDragOver={event => { if (event.dataTransfer.types.includes("text/plain")) event.preventDefault(); }} onDrop={event => { if (event.dataTransfer.types.includes("text/plain")) { event.preventDefault(); onDropTemplate(); } }} onKeyDown={event => { if (!selectedMemberId) return; if (event.key === "Delete" || event.key === "Backspace") { event.preventDefault(); onRemoveMember(selectedMemberId); } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "d") { event.preventDefault(); onCopyMember(selectedMemberId); } }}><div className="viewport-toolbar"><button className="tool active" type="button"><Eye size={15}/>预览</button><span>从左侧拖入零部件 · 选择后使用操作轴移动 · 滚轮缩放</span>{selectedMemberId && <><button className="tool" type="button" title="复制成员 (Ctrl/Cmd+D)" aria-label="复制选中成员" onClick={() => onCopyMember(selectedMemberId)}><Copy size={14}/></button><button className="tool" type="button" title="删除选中成员 (Delete)" aria-label="删除选中成员" onClick={() => onRemoveMember(selectedMemberId)}><Trash2 size={14}/></button></>}<span className="view-status">{members.length} 个成员 · {patterns.length ? `${patterns.length} 条构成规则` : `${mateCount} 个连接`}</span></div><div className="viewport-scene" ref={sceneRef}><Canvas camera={{ position: [7, 5, 7], up: [0, 0, 1], fov: 42 }} onPointerMissed={clearSelection}><color attach="background" args={["#f5f7f9"]}/><ambientLight intensity={1.8}/><directionalLight position={[4, 6, 5]} intensity={2}/><PreviewScene members={members} parameters={parameters} bindings={bindings} patterns={patterns} selectedMemberId={selectedMemberId} selectedInterface={selectedInterface} selectedInterfaceResolved={selectedInterfaceResolved} panelSelectionToken={panelSelectionToken} compatibleMemberIds={compatibleMemberIds} onSelectMember={onSelectMember} onHoverMember={hoverHandler} onPointerSelect={handlePointerSelect} onPointerHover={handlePointerHover} onPointerHoverEnd={handlePointerHoverEnd} onScreenSelection={handleScreenSelection} onClearSelection={clearSelection} onMoveMember={onMoveMember} geometry={loaded?.geometry || null}/></Canvas>{tooltip && tooltipMember && <div className="viewport-tooltip" style={{ left: tooltip.point.x, top: tooltip.point.y, opacity: tooltip.opacity }}>{tooltipMember.name}</div>}</div>{!loaded && !members.length && <div className="empty-overlay" role="status"><Boxes size={30}/><b>{previewTemplate ? previewTemplate.name : "浏览已发布零部件"}</b><span>{preview.error || (previewTemplate ? "正在准备模型…" : "点击左侧模板预览零件")}</span>{preview.error && <><AlertTriangle size={18}/><button type="button" className="ghost" onClick={preview.retry}>重试</button></>}</div>}{members.length > 0 && <div className="preview-caption" role="status"><b>组件成员</b><span>选中成员后拖动操作轴可调整位置</span></div>}</section>;
 }

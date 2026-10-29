@@ -9,7 +9,10 @@ import httpx
 from fastapi.testclient import TestClient
 
 from backend.engine.template_core import SemanticFaceLocator, TemplateDraft, lower_to_plan
-from backend.engine.template_core.metamodel import SemanticFaceDefinition
+from backend.engine.template_core.metamodel import (
+    FeatureRule, PartInterface, ResolvedFeature, SemanticFaceDefinition,
+)
+from backend.engine.template_core.rules import resolve_part_interfaces
 from backend.app.config import Settings
 from backend.app.main import create_app
 from backend.app.library import LibraryError, PublishedTemplate
@@ -17,6 +20,29 @@ from backend.tests.test_preview import STL, metadata
 
 
 class EngineSnapshotTests(unittest.TestCase):
+    def test_feature_derived_interfaces_resolve_to_their_feature_footprints(self):
+        interface = PartInterface(
+            id="beam.holes", name="螺栓孔", declarationMode="featureDerived",
+            sourceFeatureRuleId="holeRow", geometryRefs=["part.face.front"],
+        )
+        rule = FeatureRule(id="holeRow", name="孔列", featureType="circularHole")
+        features = [
+            ResolvedFeature(
+                id=f"holeRow.part_face_front.{index:03d}", featureType="circularHole",
+                arguments={"x": x, "z": 120, "diameter": 12}, semanticFaceId="part.face.front",
+                sourceRuleId="holeRow", index=index - 1,
+            )
+            for index, x in enumerate((-40, 40), start=1)
+        ]
+
+        resolved, diagnostics = resolve_part_interfaces([interface], [rule], features)
+
+        self.assertEqual(diagnostics, [])
+        self.assertEqual([item.region.model_dump() for item in resolved], [
+            {"mode": "rectangle", "uStart": -40.0, "vStart": 120.0, "uSpan": 12.0, "vSpan": 12.0},
+            {"mode": "rectangle", "uStart": 40.0, "vStart": 120.0, "uSpan": 12.0, "vSpan": 12.0},
+        ])
+
     def test_semantic_face_locator_accepts_optional_coordinate_frame(self):
         locator = SemanticFaceLocator.model_validate({
             "kind": "profileEdge",

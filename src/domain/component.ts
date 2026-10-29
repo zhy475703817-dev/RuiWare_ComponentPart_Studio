@@ -27,7 +27,7 @@ export type PartInterface = {
   /** Physical connection envelope. Values are millimetres unless a unit is provided. */
   interfaceSize?: { diameter?: number; width?: number; height?: number; depth?: number; tolerance?: number; unit?: string };
   connectionMethod?: string;
-  region?: { mode?: string; uSpan?: number; vSpan?: number; uSpanExpression?: string; vSpanExpression?: string; countExpression?: string };
+  region?: { mode?: string; uStart?: number; vStart?: number; uSpan?: number; vSpan?: number; uSpanExpression?: string; vSpanExpression?: string; countExpression?: string };
 };
 
 export type MemberParameterDefinition = {
@@ -67,6 +67,7 @@ export type ComponentMember = {
 };
 
 export type InterfaceSource = { memberId: string; interfaceId: string };
+export type InterfaceSelection = InterfaceSource;
 export type Mate = { id: string; from: InterfaceSource; to: InterfaceSource; relation: "贴合" | "同轴" | "重合"; offset: number };
 export type ComponentPort = { id: string; name: string; source: InterfaceSource; tags: string[]; interface?: PartInterface };
 export type ComponentSlot = { id: string; name: string; memberId: string | null; required: boolean };

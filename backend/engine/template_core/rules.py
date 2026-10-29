@@ -569,6 +569,35 @@ def _resolve_interface_regions(
     return resolved
 
 
+def _feature_interface_region(feature: ResolvedFeature) -> ResolvedInterfaceRegion | None:
+    """Return the resolved feature footprint in its semantic face U/V frame."""
+    arguments = feature.arguments
+    if feature.featureType == "circularHole":
+        width = height = arguments.get("diameter")
+        u = arguments.get("x")
+        v = arguments.get("z")
+    elif feature.featureType == "straightSlot":
+        width, height = arguments.get("width"), arguments.get("length")
+        u, v = arguments.get("x"), arguments.get("z")
+    elif feature.featureType == "rectangularCutout":
+        width, height = arguments.get("width"), arguments.get("height")
+        u, v = arguments.get("x"), arguments.get("z")
+    else:
+        if len(feature.polygonVertices) < 3:
+            return None
+        us = [point[0] for point in feature.polygonVertices]
+        vs = [point[1] for point in feature.polygonVertices]
+        u, v = (min(us) + max(us)) / 2, (min(vs) + max(vs)) / 2
+        width, height = max(us) - min(us), max(vs) - min(vs)
+
+    values = (u, v, width, height)
+    if any(isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) for value in values):
+        return None
+    if width <= 0 or height <= 0:
+        return None
+    return ResolvedInterfaceRegion(uStart=float(u), vStart=float(v), uSpan=float(width), vSpan=float(height))
+
+
 def evaluate_template(
     definitions: list[ParameterDefinition],
     rules: list[FeatureRule],
@@ -665,6 +694,10 @@ def resolve_part_interfaces(
                 regions = _resolve_interface_regions(
                     interface.region, faces.get(feature.semanticFaceId), evaluation_context,
                 )
+                if interface.region is None or interface.region.mode == "fullFace":
+                    footprint = _feature_interface_region(feature)
+                    if footprint is not None:
+                        regions = [footprint]
                 for region_index, region in enumerate(regions, start=1):
                     resolved.append(ResolvedInterface(
                         id=f"{interface.id}.{suffix}" + (f".region.{region_index:03d}" if len(regions) > 1 else ""),

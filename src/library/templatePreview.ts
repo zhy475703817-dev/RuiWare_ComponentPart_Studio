@@ -220,6 +220,8 @@ export async function loadReconstructionInfo(selected: PublishedTemplate, signal
     interfaceIds.add(item.id);
     const region = record(item.region) ? {
       mode: typeof item.region.mode === "string" ? item.region.mode : undefined,
+      uStart: typeof item.region.uStart === "number" ? item.region.uStart : undefined,
+      vStart: typeof item.region.vStart === "number" ? item.region.vStart : undefined,
       uSpan: typeof item.region.uSpan === "number" ? item.region.uSpan : undefined,
       vSpan: typeof item.region.vSpan === "number" ? item.region.vSpan : undefined,
       uSpanExpression: typeof item.region.uSpanExpression === "string" ? item.region.uSpanExpression : undefined,
@@ -283,7 +285,10 @@ export function interfacesForReconstruction(info: ReconstructionInfo): PartInter
       id: resolved.id,
       name: declaration ? `${declaration.name}${resolved.id === declaration.id ? "" : ` · ${resolved.id.split(".").pop()}`}` : resolved.sourceInterfaceId,
       tags: [...new Set([...(declaration?.tags || []), `interface:${resolved.interfaceType}`])],
+      declarationMode: resolved.declarationMode === "featureDerived" ? "featureDerived" : "staticGeometry",
       interfaceType,
+      geometryRefs: [...resolved.geometryRefs],
+      parameterRefs: [...resolved.parameterRefs],
       region: resolved.region || declaration?.region,
     };
   });

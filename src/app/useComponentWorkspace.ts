@@ -4,7 +4,7 @@ import { SharedDraftController, httpDraftApi, initialSharedState } from "./share
 import type { PublishedTemplate } from "../library/publishedLibrary";
 import type { ComponentMember, MemberParameterDefinition, Vector3 } from "../domain/component";
 import { interfacesForReconstruction, loadReconstructionInfo } from "../library/templatePreview";
-import type { StageId } from "./stages";
+import { STAGES, type StageId } from "./stages";
 import { componentPublicationMember, fetchPublishedComponent, publishComponentDraft } from "../library/componentPublications";
 
 const initialMessage = "左侧可浏览已发布零部件，点击模板预览或使用加号加入组件";
@@ -12,7 +12,10 @@ const initialMessage = "左侧可浏览已发布零部件，点击模板预览�
 export function useComponentWorkspace() {
   const [shared, setShared] = useState(initialSharedState);
   const controller = useRef<SharedDraftController | null>(null);
-  const [stage, setStage] = useState<StageId>("definition");
+  const [stage, setStageState] = useState<StageId>(() => {
+    const requested = new URL(window.location.href).searchParams.get("stage");
+    return STAGES.some(item => item.id === requested) ? requested as StageId : "definition";
+  });
   const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null);
   const [previewTemplate, setPreviewTemplate] = useState<PublishedTemplate | null>(null);
   const [selectionResetToken, setSelectionResetToken] = useState(0);
@@ -53,6 +56,13 @@ export function useComponentWorkspace() {
   }, [shared.dirty]);
 
   function dispatch(action: ComponentAction) { return controller.current?.dispatch(action) ?? false; }
+
+  function setStage(next: StageId) {
+    setStageState(next);
+    const url = new URL(window.location.href);
+    url.searchParams.set("stage", next);
+    window.history.replaceState(null, "", url);
+  }
 
   function resetSelection() {
     setStage("definition");
@@ -118,7 +128,7 @@ export function useComponentWorkspace() {
     if (!from || !to) return setMessage("成员缺少可连接接口，请先读取零部件接口定义");
     if (document.assembly.mates.some(mate => mate.from.memberId === a.id && mate.from.interfaceId === from.id && mate.to.memberId === b.id && mate.to.interfaceId === to.id)) return setMessage("这两个接口已记录连接关系");
     if (!dispatch({ type: "mate.add", mate: { id: crypto.randomUUID(), from: { memberId: a.id, interfaceId: from.id }, to: { memberId: b.id, interfaceId: to.id }, relation: "贴合", offset: 0 } })) return;
-    setMessage("已记录接口贴合关系；装配求解尚未接入，成员位置未改变");
+    setMessage("已记录接口贴合关系；请在预览中确认成员位置，连接关系会随草稿保存");
   }
 
   function inheritInterface() {
@@ -181,7 +191,7 @@ export function useComponentWorkspace() {
           position: [0, 0, 0] as [number, number, number], rotation: [0, 0, 0] as [number, number, number],
           parameterValues: Object.fromEntries(info.parameters.map(parameter => [parameter.id, parameter.default])), parameterDefinitions,
           interfaces: interfacesForReconstruction(info),
-          resolvedInterfaces: info.resolvedInterfaces,
+          ...(info.resolvedInterfacesAvailable ? { resolvedInterfaces: info.resolvedInterfaces } : {}),
         };
       }
       if (workspace !== controller.current || workspace.getSnapshot().draftId !== draftId) throw new Error("草稿已切换，请重新选择模板。");

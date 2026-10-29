@@ -17,11 +17,11 @@ type PreviewCacheEntry = {
 const previewCache = new Map<string, PreviewCacheEntry>();
 let cacheClock = 0;
 
-function cachedReconstruction(selected: PublishedTemplate) {
-  const key = templateKey(selected);
+function cachedReconstruction(selected: PublishedTemplate, values: Record<string, unknown>) {
+  const key = `${templateKey(selected)}|${JSON.stringify(values)}`;
   const existing = reconstructionCache.get(key);
   if (existing) return existing;
-  const promise = loadReconstructionInfo(selected, new AbortController().signal).catch(error => {
+  const promise = loadReconstructionInfo(selected, new AbortController().signal, values).catch(error => {
     reconstructionCache.delete(key);
     throw error;
   });
@@ -82,7 +82,7 @@ export function useTemplatePreview(selected: PublishedTemplate | null, initialVa
     setValueState({ selectedKey, selected, values: {} });
     setModelState({ selectedKey, valueKey: "", selected, result: null, error: "", loading: Boolean(selected) });
     if (selected) {
-      void cachedReconstruction(selected).then(info => {
+      void cachedReconstruction(selected, initialValuesRef.current).then(info => {
         if (controller.signal.aborted) return;
         setInfoState({ selectedKey, selected, info, error: "" });
         setValueState({ selectedKey, selected, values: { ...Object.fromEntries(info.parameters.map(item => [item.id, item.default])), ...initialValuesRef.current } });
@@ -96,7 +96,7 @@ export function useTemplatePreview(selected: PublishedTemplate | null, initialVa
     }
 
     return () => controller.abort();
-  }, [selectedKey]);
+  }, [selectedKey, initialValuesKey]);
 
   useEffect(() => {
     if (!selected || valueState.selectedKey !== selectedKey) return;
