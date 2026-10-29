@@ -8,7 +8,8 @@ from unittest.mock import AsyncMock, patch
 import httpx
 from fastapi.testclient import TestClient
 
-from backend.engine.template_core import TemplateDraft, lower_to_plan
+from backend.engine.template_core import SemanticFaceLocator, TemplateDraft, lower_to_plan
+from backend.engine.template_core.metamodel import SemanticFaceDefinition
 from backend.app.config import Settings
 from backend.app.main import create_app
 from backend.app.library import LibraryError, PublishedTemplate
@@ -16,6 +17,26 @@ from backend.tests.test_preview import STL, metadata
 
 
 class EngineSnapshotTests(unittest.TestCase):
+    def test_semantic_face_locator_accepts_optional_coordinate_frame(self):
+        locator = SemanticFaceLocator.model_validate({
+            "kind": "profileEdge",
+            "coordinateFrame": None,
+            "operationId": "body.main",
+            "profileSketchId": "sketch.section.main",
+            "sourceEntityId": "edge.bottom",
+        })
+
+        self.assertIsNone(locator.coordinateFrame)
+        self.assertNotIn("coordinateFrame", locator.model_dump())
+
+        face = SemanticFaceDefinition(
+            id="part.face.profile",
+            label="型材截面",
+            hostFrame="profile",
+            locator=locator,
+        )
+        self.assertEqual(face.hostFrame, "profile")
+
     def test_user_parameter_changes_lowered_geometry(self):
         draft = TemplateDraft(name="preview")
         length = next(item for item in draft.parameterDefinitions if item.id == "length")

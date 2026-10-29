@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_serializer, model_validator
 
 
 Scalar = int | float | bool | str
@@ -191,10 +191,19 @@ class SemanticFaceLocator(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     kind: Literal["profileEdge", "profileRegion"]
+    coordinateFrame: Literal["global", "profile"] | None = None
     operationId: str = Field(pattern=r"^[A-Za-z0-9_.-]+$")
     profileSketchId: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9_.-]*$")
     sourceEntityId: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9_.-]*$")
     capSide: Literal["start", "end"] | None = None
+
+    @model_serializer(mode="wrap")
+    def serialize_legacy_compatible(self, handler: Any) -> Any:
+        payload = handler(self)
+        # Keep older package JSON stable when no coordinate frame was authored.
+        if payload.get("coordinateFrame") is None:
+            payload.pop("coordinateFrame", None)
+        return payload
 
     @model_validator(mode="after")
     def validate_locator_shape(self) -> "SemanticFaceLocator":
@@ -210,7 +219,7 @@ class SemanticFaceDefinition(BaseModel):
 
     id: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9_.-]*$")
     label: str
-    hostFrame: Literal["negativeY", "positiveY", "negativeX", "positiveX", "negativeZ", "positiveZ"]
+    hostFrame: Literal["negativeY", "positiveY", "negativeX", "positiveX", "negativeZ", "positiveZ", "profile"]
     sourceOperationId: str = "body.main"
     locator: SemanticFaceLocator | None = None
     uStartExpression: str = "-sectionWidth / 2"
@@ -409,7 +418,7 @@ class ResolvedFeature(BaseModel):
     featureType: Literal["circularHole", "straightSlot", "rectangularCutout", "polygonalCutout"]
     arguments: dict[str, Scalar]
     semanticFaceId: str
-    hostFace: Literal["negativeY", "positiveY", "negativeX", "positiveX", "negativeZ", "positiveZ"] = "negativeY"
+    hostFace: Literal["negativeY", "positiveY", "negativeX", "positiveX", "negativeZ", "positiveZ", "profile"] = "negativeY"
     locator: SemanticFaceLocator | None = None
     resolvedSourceEntityId: str | None = None
     resolvedUStart: float | None = None

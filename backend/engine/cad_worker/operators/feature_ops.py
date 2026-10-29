@@ -60,13 +60,34 @@ def _resolved_support_frame(
     longer selects a face by itself.
     """
 
+    normal = _unit(tuple(float(component) for component in support.normal))
+    u_direction = _unit(tuple(float(component) for component in support.uDirection))
+    v_direction = _unit(tuple(float(component) for component in support.vDirection))
+    if host_frame == "profile":
+        if abs(_dot(u_direction, v_direction)) > 1e-7:
+            raise RuntimeError(
+                f"Semantic face source {support.sourceEntityId} has non-orthogonal "
+                "profile support U/V directions"
+            )
+        if abs(_dot(normal, u_direction)) > 1e-7 or abs(_dot(normal, v_direction)) > 1e-7:
+            raise RuntimeError(
+                f"Semantic face source {support.sourceEntityId} profile frame is not planar"
+            )
+        support_origin = tuple(float(component) for component in support.origin)
+        resolved_u_start = (
+            _dot(support_origin, u_direction) if u_start is None else float(u_start)
+        )
+        resolved_v_start = (
+            _dot(support_origin, v_direction) if v_start is None else float(v_start)
+        )
+        return (
+            support_origin, u_direction, v_direction, normal,
+            resolved_u_start, resolved_v_start,
+        )
     try:
         expected_u_direction, expected_v_direction = _HOST_FRAME_UV_DIRECTIONS[host_frame]
     except KeyError as error:
         raise RuntimeError(f"Unsupported semantic host frame: {host_frame}") from error
-    normal = _unit(tuple(float(component) for component in support.normal))
-    u_direction = _unit(tuple(float(component) for component in support.uDirection))
-    v_direction = _unit(tuple(float(component) for component in support.vDirection))
     if (
         _dot(u_direction, expected_u_direction) < 1 - 1e-7
         or _dot(v_direction, expected_v_direction) < 1 - 1e-7
