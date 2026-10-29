@@ -72,8 +72,10 @@ function CompatibleOutline() {
 }
 
 type ScreenPoint = { x: number; y: number };
+type TooltipSource = "pointer" | "panel" | "hover";
+type MemberTooltip = { memberId: string; point: ScreenPoint; opacity: number; source: TooltipSource; token: number };
 
-function DraggableGroup({ member, selected, compatible = false, onSelect, onHover, onMove, onDragStateChange, onPointerSelect, onPointerHover, movable = true, children }: { member: ComponentMember; selected: boolean; compatible?: boolean; onSelect: () => void; onHover?: (hovered: boolean) => void; onMove: (position: Vector3) => void; onDragStateChange?: (dragging: boolean) => void; onPointerSelect?: (point: ScreenPoint) => void; onPointerHover?: (point: ScreenPoint) => void; movable?: boolean; children: (hovered: boolean) => ReactNode }) {
+function DraggableGroup({ member, selected, compatible = false, onSelect, onHover, onMove, onDragStateChange, onPointerSelect, onPointerHover, onPointerHoverEnd, movable = true, children }: { member: ComponentMember; selected: boolean; compatible?: boolean; onSelect: () => void; onHover?: (hovered: boolean) => void; onMove: (position: Vector3) => void; onDragStateChange?: (dragging: boolean) => void; onPointerSelect?: (point: ScreenPoint) => void; onPointerHover?: (point: ScreenPoint) => void; onPointerHoverEnd?: () => void; movable?: boolean; children: (hovered: boolean) => ReactNode }) {
   const groupRef = useRef<Group | null>(null); const [groupObject, setGroupObject] = useState<Group | null>(null); const positionRef = useRef<Vector3>(member.position); const [localPosition, setLocalPosition] = useState<Vector3>(member.position); const [hovered, setHovered] = useState(false);
   const captureGroup = useCallback((group: Group | null) => { groupRef.current = group; setGroupObject(group); }, []);
   useEffect(() => { positionRef.current = member.position; setLocalPosition(member.position); }, [member.position]);
@@ -81,7 +83,7 @@ function DraggableGroup({ member, selected, compatible = false, onSelect, onHove
     <group ref={captureGroup} position={localPosition} rotation={member.rotation}
       onPointerOver={event => { event.stopPropagation(); setHovered(true); onHover?.(true); onPointerHover?.({ x: event.nativeEvent.clientX, y: event.nativeEvent.clientY }); }}
       onPointerMove={event => { event.stopPropagation(); onPointerHover?.({ x: event.nativeEvent.clientX, y: event.nativeEvent.clientY }); }}
-      onPointerOut={event => { event.stopPropagation(); setHovered(false); onHover?.(false); }}
+      onPointerOut={event => { event.stopPropagation(); setHovered(false); onHover?.(false); onPointerHoverEnd?.(); }}
       onClick={event => { event.stopPropagation(); onSelect(); onPointerSelect?.({ x: event.nativeEvent.clientX, y: event.nativeEvent.clientY }); }}>
       {compatible && !selected && <CompatibleOutline />}
       {children(hovered)}
@@ -124,10 +126,10 @@ function NestedComponentVisual({ member, selected = false }: { member: Component
   </group>;
 }
 
-function MemberModel({ member, selected, compatible, onSelect, onHover, onMove, onDragStateChange, onPointerSelect, onPointerHover }: { member: VisualMember; selected: boolean; compatible?: boolean; onSelect: () => void; onHover?: (hovered: boolean) => void; onMove: (position: Vector3) => void; onDragStateChange?: (dragging: boolean) => void; onPointerSelect?: (point: ScreenPoint) => void; onPointerHover?: (point: ScreenPoint) => void }) {
+function MemberModel({ member, selected, compatible, onSelect, onHover, onMove, onDragStateChange, onPointerSelect, onPointerHover, onPointerHoverEnd }: { member: VisualMember; selected: boolean; compatible?: boolean; onSelect: () => void; onHover?: (hovered: boolean) => void; onMove: (position: Vector3) => void; onDragStateChange?: (dragging: boolean) => void; onPointerSelect?: (point: ScreenPoint) => void; onPointerHover?: (point: ScreenPoint) => void; onPointerHoverEnd?: () => void }) {
   const template = useMemo(() => partTemplate(member), [member.template.publicationId, member.template.templateId, member.template.version, member.template.sha256, member.code, member.name]);
   const preview = useTemplatePreview(template, member.parameterValues);
-  return <DraggableGroup member={member} selected={selected} compatible={compatible} onSelect={onSelect} onHover={onHover} onMove={onMove} onDragStateChange={onDragStateChange} onPointerSelect={onPointerSelect} onPointerHover={onPointerHover} movable={!member.patternInstance}>
+  return <DraggableGroup member={member} selected={selected} compatible={compatible} onSelect={onSelect} onHover={onHover} onMove={onMove} onDragStateChange={onDragStateChange} onPointerSelect={onPointerSelect} onPointerHover={onPointerHover} onPointerHoverEnd={onPointerHoverEnd} movable={!member.patternInstance}>
     {hovered => {
       const color = selected ? "#c89532" : hovered ? "#d9b85f" : compatible ? "#a8cad8" : "#7394b0";
       return preview.result?.geometry
@@ -137,14 +139,14 @@ function MemberModel({ member, selected, compatible, onSelect, onHover, onMove, 
   </DraggableGroup>;
 }
 
-function ComponentMemberModel({ member, selected, compatible, onSelect, onHover, onMove, onDragStateChange, onPointerSelect, onPointerHover }: { member: VisualMember; selected: boolean; compatible?: boolean; onSelect: () => void; onHover?: (hovered: boolean) => void; onMove: (position: Vector3) => void; onDragStateChange?: (dragging: boolean) => void; onPointerSelect?: (point: ScreenPoint) => void; onPointerHover?: (point: ScreenPoint) => void }) {
-  return <DraggableGroup member={member} selected={selected} compatible={compatible} onSelect={onSelect} onHover={onHover} onMove={onMove} onDragStateChange={onDragStateChange} onPointerSelect={onPointerSelect} onPointerHover={onPointerHover} movable={!member.patternInstance}>
+function ComponentMemberModel({ member, selected, compatible, onSelect, onHover, onMove, onDragStateChange, onPointerSelect, onPointerHover, onPointerHoverEnd }: { member: VisualMember; selected: boolean; compatible?: boolean; onSelect: () => void; onHover?: (hovered: boolean) => void; onMove: (position: Vector3) => void; onDragStateChange?: (dragging: boolean) => void; onPointerSelect?: (point: ScreenPoint) => void; onPointerHover?: (point: ScreenPoint) => void; onPointerHoverEnd?: () => void }) {
+  return <DraggableGroup member={member} selected={selected} compatible={compatible} onSelect={onSelect} onHover={onHover} onMove={onMove} onDragStateChange={onDragStateChange} onPointerSelect={onPointerSelect} onPointerHover={onPointerHover} onPointerHoverEnd={onPointerHoverEnd} movable={!member.patternInstance}>
     {/* The outer drag group owns the instance transform; avoid applying rotation twice. */}
     {hovered => <NestedComponentVisual member={{ ...member, position: [0, 0, 0], rotation: [0, 0, 0] }} selected={selected || hovered}/>}
   </DraggableGroup>;
 }
 
-function PreviewScene({ members, parameters, bindings, patterns, selectedMemberId, panelSelectionToken, compatibleMemberIds, onSelectMember, onHoverMember, onMoveMember, onPointerSelect, onPointerHover, onScreenSelection, onClearSelection, geometry }: { members: ComponentMember[]; parameters: ComponentParameter[]; bindings: ParameterBinding[]; patterns: ComponentPattern[]; selectedMemberId: string | null; panelSelectionToken: number; compatibleMemberIds?: ReadonlySet<string>; onSelectMember: (id: string) => void; onHoverMember?: (id: string | null) => void; onMoveMember: (id: string, position: Vector3) => void; onPointerSelect?: (id: string, point: ScreenPoint) => void; onPointerHover?: (id: string, point: ScreenPoint) => void; onScreenSelection?: (id: string, point: ScreenPoint) => void; onClearSelection?: () => void; geometry: BufferGeometry | null }) {
+function PreviewScene({ members, parameters, bindings, patterns, selectedMemberId, panelSelectionToken, compatibleMemberIds, onSelectMember, onHoverMember, onMoveMember, onPointerSelect, onPointerHover, onPointerHoverEnd, onScreenSelection, onClearSelection, geometry }: { members: ComponentMember[]; parameters: ComponentParameter[]; bindings: ParameterBinding[]; patterns: ComponentPattern[]; selectedMemberId: string | null; panelSelectionToken: number; compatibleMemberIds?: ReadonlySet<string>; onSelectMember: (id: string) => void; onHoverMember?: (id: string | null) => void; onMoveMember: (id: string, position: Vector3) => void; onPointerSelect?: (id: string, point: ScreenPoint) => void; onPointerHover?: (id: string, point: ScreenPoint) => void; onPointerHoverEnd?: (id: string) => void; onScreenSelection?: (id: string, point: ScreenPoint) => void; onClearSelection?: () => void; geometry: BufferGeometry | null }) {
   const { camera, size } = useThree(); const controls = useRef<OrbitControlsImpl>(null); const [cameraEnabled, setCameraEnabled] = useState(true);
   const setDragging = (dragging: boolean) => { setCameraEnabled(!dragging); if (controls.current) controls.current.enabled = !dragging; };
   const memberRadius = members.length ? Math.max(8, ...members.flatMap(member => [...member.position.map(Math.abs), ...Object.values(member.parameterValues).filter((value): value is number => typeof value === "number" && Number.isFinite(value)).map(Math.abs)])) : 8;
@@ -174,8 +176,8 @@ function PreviewScene({ members, parameters, bindings, patterns, selectedMemberI
     const memberId = member.sourceMemberId || member.id;
     const compatible = compatibleMemberIds?.has(memberId) || false;
     return member.template.templateKind === "component"
-      ? <ComponentMemberModel key={`${member.id}-${index}`} member={member} selected={memberId === selectedMemberId} compatible={compatible} onSelect={() => onSelectMember(memberId)} onPointerSelect={point => onPointerSelect?.(memberId, point)} onPointerHover={point => onPointerHover?.(memberId, point)} onHover={hovered => onHoverMember?.(hovered ? memberId : null)} onMove={position => onMoveMember(memberId, position)} onDragStateChange={setDragging}/>
-      : <MemberModel key={`${member.id}-${index}`} member={member} selected={memberId === selectedMemberId} compatible={compatible} onSelect={() => onSelectMember(memberId)} onPointerSelect={point => onPointerSelect?.(memberId, point)} onPointerHover={point => onPointerHover?.(memberId, point)} onHover={hovered => onHoverMember?.(hovered ? memberId : null)} onMove={position => onMoveMember(memberId, position)} onDragStateChange={setDragging}/>;
+      ? <ComponentMemberModel key={`${member.id}-${index}`} member={member} selected={memberId === selectedMemberId} compatible={compatible} onSelect={() => onSelectMember(memberId)} onPointerSelect={point => onPointerSelect?.(memberId, point)} onPointerHover={point => onPointerHover?.(memberId, point)} onPointerHoverEnd={() => onPointerHoverEnd?.(memberId)} onHover={hovered => onHoverMember?.(hovered ? memberId : null)} onMove={position => onMoveMember(memberId, position)} onDragStateChange={setDragging}/>
+      : <MemberModel key={`${member.id}-${index}`} member={member} selected={memberId === selectedMemberId} compatible={compatible} onSelect={() => onSelectMember(memberId)} onPointerSelect={point => onPointerSelect?.(memberId, point)} onPointerHover={point => onPointerHover?.(memberId, point)} onPointerHoverEnd={() => onPointerHoverEnd?.(memberId)} onHover={hovered => onHoverMember?.(hovered ? memberId : null)} onMove={position => onMoveMember(memberId, position)} onDragStateChange={setDragging}/>;
   })}<OrbitControls ref={controls} enabled={cameraEnabled} makeDefault minDistance={radius / 100} maxDistance={radius * 100}/></>;
 }
 
@@ -183,48 +185,67 @@ type Props = { members: ComponentMember[]; parameters?: ComponentParameter[]; bi
 export function ComponentViewport({ members, parameters = [], bindings = [], patterns = [], mateCount, previewTemplate, selectedMemberId = null, panelSelectionToken = 0, compatibleMemberIds, onSelectMember = () => undefined, onHoverMember, onMoveMember = () => undefined, onCopyMember = () => undefined, onRemoveMember = () => undefined, onDropTemplate = () => undefined }: Props) {
   const preview = useTemplatePreview(members.length || previewTemplate?.templateKind === "component" ? null : previewTemplate); const loaded = preview.result;
   const hoverHandler = onHoverMember || ((id: string | null) => { if (id) onSelectMember(id); });
-  const [tooltip, setTooltip] = useState<{ memberId: string; point: ScreenPoint; opacity: number } | null>(null);
+  const [tooltip, setTooltip] = useState<MemberTooltip | null>(null);
   const tooltipRef = useRef<typeof tooltip>(null);
   const sceneRef = useRef<HTMLDivElement | null>(null);
   const tooltipTimers = useRef<number[]>([]);
+  const tooltipToken = useRef(0);
   const clearTooltipTimers = () => { tooltipTimers.current.forEach(timer => window.clearTimeout(timer)); tooltipTimers.current = []; };
-  const showTooltip = (memberId: string, point: ScreenPoint) => {
+  const showTimedTooltip = (memberId: string, point: ScreenPoint, source: Exclude<TooltipSource, "hover">) => {
     clearTooltipTimers();
-    const next = { memberId, point, opacity: 1 };
+    const token = ++tooltipToken.current;
+    const next = { memberId, point, opacity: 1, source, token };
     tooltipRef.current = next;
     setTooltip(next);
     tooltipTimers.current.push(window.setTimeout(() => setTooltip(current => {
-      if (current?.memberId !== memberId) return current;
+      if (current?.token !== token) return current;
       const fading = { ...current, opacity: 0 };
       tooltipRef.current = fading;
       return fading;
-    }), 4200));
+    }), 3000));
     tooltipTimers.current.push(window.setTimeout(() => setTooltip(current => {
-      if (current?.memberId !== memberId) return current;
+      if (current?.token !== token) return current;
       tooltipRef.current = null;
       return null;
-    }), 5000));
+    }), 3800));
+  };
+  const showHoverTooltip = (memberId: string, point: ScreenPoint) => {
+    const current = tooltipRef.current;
+    if (current?.memberId === memberId && current.source === "hover") {
+      const updated = { ...current, point };
+      tooltipRef.current = updated;
+      setTooltip(updated);
+      return;
+    }
+    clearTooltipTimers();
+    const next = { memberId, point, opacity: 1, source: "hover" as const, token: ++tooltipToken.current };
+    tooltipRef.current = next;
+    setTooltip(next);
+  };
+  const clearHoverTooltip = (memberId?: string) => {
+    const current = tooltipRef.current;
+    if (current?.source !== "hover" || (memberId && current.memberId !== memberId)) return;
+    clearTooltipTimers();
+    tooltipRef.current = null;
+    setTooltip(null);
   };
   useEffect(() => () => clearTooltipTimers(), []);
   const handlePointerSelect = (id: string, point: ScreenPoint) => {
     const rect = sceneRef.current?.getBoundingClientRect();
     onSelectMember(id);
-    showTooltip(id, { x: point.x - (rect?.left || 0), y: point.y - (rect?.top || 0) });
+    showTimedTooltip(id, { x: point.x - (rect?.left || 0), y: point.y - (rect?.top || 0) }, "pointer");
   };
   const handlePointerHover = (id: string, point: ScreenPoint) => {
+    if (selectedMemberId === id) return;
+    if (tooltipRef.current?.memberId === id && tooltipRef.current.source !== "hover") return;
     const rect = sceneRef.current?.getBoundingClientRect();
     const localPoint = { x: point.x - (rect?.left || 0), y: point.y - (rect?.top || 0) };
-    const current = tooltipRef.current;
-    if (current?.memberId === id && current.opacity > 0) {
-      const updated = { ...current, point: localPoint };
-      tooltipRef.current = updated;
-      setTooltip(updated);
-    } else {
-      showTooltip(id, localPoint);
-    }
+    showHoverTooltip(id, localPoint);
   };
-  const handleScreenSelection = (id: string, point: ScreenPoint) => { showTooltip(id, point); };
+  const handlePointerHoverEnd = (id: string) => { if (selectedMemberId !== id) clearHoverTooltip(id); };
+  const handleScreenSelection = (id: string, point: ScreenPoint) => { showTimedTooltip(id, point, "panel"); };
   const clearSelection = () => { clearTooltipTimers(); tooltipRef.current = null; setTooltip(null); onHoverMember?.(null); onSelectMember(null); };
+  const handleViewportPointerLeave = () => { hoverHandler(null); clearHoverTooltip(); };
   const tooltipMember = tooltip ? members.find(member => member.id === tooltip.memberId) : undefined;
-  return <section className="viewport" aria-label="组件三维视图" tabIndex={0} onPointerLeave={() => hoverHandler(null)} onDragOver={event => { if (event.dataTransfer.types.includes("text/plain")) event.preventDefault(); }} onDrop={event => { if (event.dataTransfer.types.includes("text/plain")) { event.preventDefault(); onDropTemplate(); } }} onKeyDown={event => { if (!selectedMemberId) return; if (event.key === "Delete" || event.key === "Backspace") { event.preventDefault(); onRemoveMember(selectedMemberId); } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "d") { event.preventDefault(); onCopyMember(selectedMemberId); } }}><div className="viewport-toolbar"><button className="tool active" type="button"><Eye size={15}/>预览</button><span>从左侧拖入零部件 · 选择后使用操作轴移动 · 滚轮缩放</span>{selectedMemberId && <><button className="tool" type="button" title="复制成员 (Ctrl/Cmd+D)" aria-label="复制选中成员" onClick={() => onCopyMember(selectedMemberId)}><Copy size={14}/></button><button className="tool" type="button" title="删除选中成员 (Delete)" aria-label="删除选中成员" onClick={() => onRemoveMember(selectedMemberId)}><Trash2 size={14}/></button></>}<span className="view-status">{members.length} 个成员 · {patterns.length ? `${patterns.length} 条构成规则` : `${mateCount} 个连接`}</span></div><div className="viewport-scene" ref={sceneRef}><Canvas camera={{ position: [7, 5, 7], up: [0, 0, 1], fov: 42 }} onPointerMissed={clearSelection}><color attach="background" args={["#f5f7f9"]}/><ambientLight intensity={1.8}/><directionalLight position={[4, 6, 5]} intensity={2}/><PreviewScene members={members} parameters={parameters} bindings={bindings} patterns={patterns} selectedMemberId={selectedMemberId} panelSelectionToken={panelSelectionToken} compatibleMemberIds={compatibleMemberIds} onSelectMember={onSelectMember} onHoverMember={hoverHandler} onPointerSelect={handlePointerSelect} onPointerHover={handlePointerHover} onScreenSelection={handleScreenSelection} onClearSelection={clearSelection} onMoveMember={onMoveMember} geometry={loaded?.geometry || null}/></Canvas>{tooltip && tooltipMember && <div className="viewport-tooltip" style={{ left: tooltip.point.x, top: tooltip.point.y, opacity: tooltip.opacity }}>{tooltipMember.name}</div>}</div>{!loaded && !members.length && <div className="empty-overlay" role="status"><Boxes size={30}/><b>{previewTemplate ? previewTemplate.name : "浏览已发布零部件"}</b><span>{preview.error || (previewTemplate ? "正在准备模型…" : "点击左侧模板预览零件")}</span>{preview.error && <><AlertTriangle size={18}/><button type="button" className="ghost" onClick={preview.retry}>重试</button></>}</div>}{members.length > 0 && <div className="preview-caption" role="status"><b>组件成员</b><span>选中成员后拖动操作轴可调整位置</span></div>}</section>;
+  return <section className="viewport" aria-label="组件三维视图" tabIndex={0} onPointerLeave={handleViewportPointerLeave} onDragOver={event => { if (event.dataTransfer.types.includes("text/plain")) event.preventDefault(); }} onDrop={event => { if (event.dataTransfer.types.includes("text/plain")) { event.preventDefault(); onDropTemplate(); } }} onKeyDown={event => { if (!selectedMemberId) return; if (event.key === "Delete" || event.key === "Backspace") { event.preventDefault(); onRemoveMember(selectedMemberId); } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "d") { event.preventDefault(); onCopyMember(selectedMemberId); } }}><div className="viewport-toolbar"><button className="tool active" type="button"><Eye size={15}/>预览</button><span>从左侧拖入零部件 · 选择后使用操作轴移动 · 滚轮缩放</span>{selectedMemberId && <><button className="tool" type="button" title="复制成员 (Ctrl/Cmd+D)" aria-label="复制选中成员" onClick={() => onCopyMember(selectedMemberId)}><Copy size={14}/></button><button className="tool" type="button" title="删除选中成员 (Delete)" aria-label="删除选中成员" onClick={() => onRemoveMember(selectedMemberId)}><Trash2 size={14}/></button></>}<span className="view-status">{members.length} 个成员 · {patterns.length ? `${patterns.length} 条构成规则` : `${mateCount} 个连接`}</span></div><div className="viewport-scene" ref={sceneRef}><Canvas camera={{ position: [7, 5, 7], up: [0, 0, 1], fov: 42 }} onPointerMissed={clearSelection}><color attach="background" args={["#f5f7f9"]}/><ambientLight intensity={1.8}/><directionalLight position={[4, 6, 5]} intensity={2}/><PreviewScene members={members} parameters={parameters} bindings={bindings} patterns={patterns} selectedMemberId={selectedMemberId} panelSelectionToken={panelSelectionToken} compatibleMemberIds={compatibleMemberIds} onSelectMember={onSelectMember} onHoverMember={hoverHandler} onPointerSelect={handlePointerSelect} onPointerHover={handlePointerHover} onPointerHoverEnd={handlePointerHoverEnd} onScreenSelection={handleScreenSelection} onClearSelection={clearSelection} onMoveMember={onMoveMember} geometry={loaded?.geometry || null}/></Canvas>{tooltip && tooltipMember && <div className="viewport-tooltip" style={{ left: tooltip.point.x, top: tooltip.point.y, opacity: tooltip.opacity }}>{tooltipMember.name}</div>}</div>{!loaded && !members.length && <div className="empty-overlay" role="status"><Boxes size={30}/><b>{previewTemplate ? previewTemplate.name : "浏览已发布零部件"}</b><span>{preview.error || (previewTemplate ? "正在准备模型…" : "点击左侧模板预览零件")}</span>{preview.error && <><AlertTriangle size={18}/><button type="button" className="ghost" onClick={preview.retry}>重试</button></>}</div>}{members.length > 0 && <div className="preview-caption" role="status"><b>组件成员</b><span>选中成员后拖动操作轴可调整位置</span></div>}</section>;
 }
