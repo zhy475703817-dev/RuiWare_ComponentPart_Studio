@@ -99,16 +99,16 @@ function partTemplate(member: ComponentMember): PublishedTemplate {
   return { templateKind: "part", publicationId: member.template.publicationId, templateId: member.template.templateId, version: member.template.version, sha256: member.template.sha256, code: member.code, name: member.name, createdAt: new Date(0).toISOString(), size: 0, downloadUrl: "" };
 }
 
-function PartMesh({ member, materialColor, position = [0, 0, 0] as Vector3 }: { member: ComponentMember; materialColor?: string; position?: Vector3 }) {
+function PartMesh({ member, materialColor, position = [0, 0, 0] as Vector3, onSelect, onPointerSelect }: { member: ComponentMember; materialColor?: string; position?: Vector3; onSelect?: () => void; onPointerSelect?: (point: ScreenPoint) => void }) {
   const template = useMemo(() => partTemplate(member), [member.template.publicationId, member.template.templateId, member.template.version, member.template.sha256, member.code, member.name]);
   const preview = useTemplatePreview(template, member.parameterValues);
   if (!preview.result?.geometry) return null;
-  return <mesh geometry={preview.result.geometry} position={position} rotation={member.rotation} scale={MODEL_DISPLAY_SCALE} dispose={null}>
+  return <mesh geometry={preview.result.geometry} position={position} rotation={member.rotation} scale={MODEL_DISPLAY_SCALE} dispose={null} onClick={event => { event.stopPropagation(); onSelect?.(); onPointerSelect?.({ x: event.nativeEvent.clientX, y: event.nativeEvent.clientY }); }}>
     <PartMaterial member={member} color={materialColor || "#7394b0"}/>
   </mesh>;
 }
 
-function NestedComponentVisual({ member, selected = false }: { member: ComponentMember; selected?: boolean }) {
+function NestedComponentVisual({ member, selected = false, onSelect, onPointerSelect }: { member: ComponentMember; selected?: boolean; onSelect?: () => void; onPointerSelect?: (point: ScreenPoint) => void }) {
   const [document, setDocument] = useState<import("../domain/component").ComponentDocument | null>(null);
   useEffect(() => {
     let active = true;
@@ -121,8 +121,8 @@ function NestedComponentVisual({ member, selected = false }: { member: Component
   if (!document) return null;
   return <group position={member.position} rotation={member.rotation}>
     {childMembers.map(child => child.template.templateKind === "component"
-      ? <NestedComponentVisual key={child.id} member={child} selected={selected}/>
-      : <PartMesh key={child.id} member={child} position={child.position} materialColor={selected ? "#c89532" : undefined}/>) }
+      ? <NestedComponentVisual key={child.id} member={child} selected={selected} onSelect={onSelect} onPointerSelect={onPointerSelect}/>
+      : <PartMesh key={child.id} member={child} position={child.position} materialColor={selected ? "#c89532" : undefined} onSelect={onSelect} onPointerSelect={onPointerSelect}/>) }
   </group>;
 }
 
@@ -133,8 +133,8 @@ function MemberModel({ member, selected, compatible, onSelect, onHover, onMove, 
     {hovered => {
       const color = selected ? "#c89532" : hovered ? "#d9b85f" : compatible ? "#a8cad8" : "#7394b0";
       return preview.result?.geometry
-        ? <mesh geometry={preview.result.geometry} scale={MODEL_DISPLAY_SCALE} dispose={null}><PartMaterial member={member} color={color}/></mesh>
-        : <mesh scale={MODEL_DISPLAY_SCALE}><boxGeometry args={[160, 80, 60]}/><meshBasicMaterial color={color} transparent={isTransparentMaterial(member)} opacity={isTransparentMaterial(member) ? .45 : 1}/></mesh>;
+        ? <mesh geometry={preview.result.geometry} scale={MODEL_DISPLAY_SCALE} dispose={null} onClick={event => { event.stopPropagation(); onSelect(); onPointerSelect?.({ x: event.nativeEvent.clientX, y: event.nativeEvent.clientY }); }}><PartMaterial member={member} color={color}/></mesh>
+        : <mesh scale={MODEL_DISPLAY_SCALE} onClick={event => { event.stopPropagation(); onSelect(); onPointerSelect?.({ x: event.nativeEvent.clientX, y: event.nativeEvent.clientY }); }}><boxGeometry args={[160, 80, 60]}/><meshBasicMaterial color={color} transparent={isTransparentMaterial(member)} opacity={isTransparentMaterial(member) ? .45 : 1}/></mesh>;
     }}
   </DraggableGroup>;
 }
@@ -142,7 +142,7 @@ function MemberModel({ member, selected, compatible, onSelect, onHover, onMove, 
 function ComponentMemberModel({ member, selected, compatible, onSelect, onHover, onMove, onDragStateChange, onPointerSelect, onPointerHover, onPointerHoverEnd }: { member: VisualMember; selected: boolean; compatible?: boolean; onSelect: () => void; onHover?: (hovered: boolean) => void; onMove: (position: Vector3) => void; onDragStateChange?: (dragging: boolean) => void; onPointerSelect?: (point: ScreenPoint) => void; onPointerHover?: (point: ScreenPoint) => void; onPointerHoverEnd?: () => void }) {
   return <DraggableGroup member={member} selected={selected} compatible={compatible} onSelect={onSelect} onHover={onHover} onMove={onMove} onDragStateChange={onDragStateChange} onPointerSelect={onPointerSelect} onPointerHover={onPointerHover} onPointerHoverEnd={onPointerHoverEnd} movable={!member.patternInstance}>
     {/* The outer drag group owns the instance transform; avoid applying rotation twice. */}
-    {hovered => <NestedComponentVisual member={{ ...member, position: [0, 0, 0], rotation: [0, 0, 0] }} selected={selected || hovered}/>}
+    {hovered => <NestedComponentVisual member={{ ...member, position: [0, 0, 0], rotation: [0, 0, 0] }} selected={selected || hovered} onSelect={onSelect} onPointerSelect={onPointerSelect}/>}
   </DraggableGroup>;
 }
 
@@ -172,7 +172,7 @@ function PreviewScene({ members, parameters, bindings, patterns, selectedMemberI
     onScreenSelection(selectedMemberId, point);
   }, [camera, onScreenSelection, panelSelectionToken, renderedMembers, selectedMemberId, size.height, size.width]);
   useEffect(() => { const viewCamera = camera as PerspectiveCamera; const vertical = viewCamera.fov * Math.PI / 180; const distance = cameraRadius / Math.sin(vertical / 2) * 1.8; viewCamera.position.set(distance, -distance, distance); viewCamera.up.set(0, 0, 1); viewCamera.near = .001; viewCamera.far = distance + cameraRadius * 100; viewCamera.updateProjectionMatrix(); controls.current?.target.set(0, 0, 0); controls.current?.update(); }, [camera, size.width, size.height, cameraRadius]);
-  return <><Grid args={[10000, 10000]} rotation={[Math.PI / 2, 0, 0]} cellSize={100} cellThickness={.5} sectionSize={1000} sectionThickness={1} fadeDistance={10000} cellColor="#c0c8d0" sectionColor="#8da6be" side={DoubleSide} onClick={event => { event.stopPropagation(); onClearSelection?.(); }}/>{geometry && !renderedMembers.length && <mesh><primitive object={geometry} attach="geometry" dispose={null}/><meshStandardMaterial color="#7394b0" metalness={.18} roughness={.55} side={DoubleSide}/></mesh>}{renderedMembers.map((member, index) => {
+  return <><Grid args={[10000, 10000]} rotation={[Math.PI / 2, 0, 0]} cellSize={100} cellThickness={.5} sectionSize={1000} sectionThickness={1} fadeDistance={10000} cellColor="#c0c8d0" sectionColor="#8da6be" side={DoubleSide}/>{geometry && !renderedMembers.length && <mesh><primitive object={geometry} attach="geometry" dispose={null}/><meshStandardMaterial color="#7394b0" metalness={.18} roughness={.55} side={DoubleSide}/></mesh>}{renderedMembers.map((member, index) => {
     const memberId = member.sourceMemberId || member.id;
     const compatible = compatibleMemberIds?.has(memberId) || false;
     return member.template.templateKind === "component"
