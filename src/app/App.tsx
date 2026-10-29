@@ -23,14 +23,16 @@ export function App() {
   const [draftLink, setDraftLink] = useState("");
   const [dragTemplate, setDragTemplate] = useState<PublishedTemplate | null>(null);
   const [hoveredMemberId, setHoveredMemberId] = useState<string | null>(null);
+  const [panelSelectionToken, setPanelSelectionToken] = useState(0);
   const workspace = useComponentWorkspace();
   const { document, dispatch, stage, checks } = workspace;
   const { members, mates } = document.assembly;
   const compatibleIds = compatibleMemberIds(members, workspace.selectedMemberId);
+  const selectPanelMember = (id: string) => { workspace.setSelectedMemberId(id); setPanelSelectionToken(token => token + 1); };
 
   function renderStage() {
     switch (stage) {
-      case "definition": return <DefinitionStage definition={document.definition} members={members} draftId={workspace.shared.draftId} selectedMemberId={workspace.selectedMemberId} hoveredMemberId={hoveredMemberId} compatibleMemberIds={compatibleIds} onSelectMember={workspace.setSelectedMemberId} onHoverMember={setHoveredMemberId} onChange={patch => dispatch({ type: "definition.patch", patch })}/>;
+      case "definition": return <DefinitionStage definition={document.definition} members={members} draftId={workspace.shared.draftId} selectedMemberId={workspace.selectedMemberId} hoveredMemberId={hoveredMemberId} compatibleMemberIds={compatibleIds} onSelectMember={selectPanelMember} onHoverMember={setHoveredMemberId} onChange={patch => dispatch({ type: "definition.patch", patch })}/>;
       case "assembly": return <AssemblyStage mates={mates} onConnect={workspace.connectFirstInterfaces} onInherit={workspace.inheritInterface}/>;
       case "interfaces": return <InterfacesStage ports={document.ports} slots={document.slots}/>;
       case "parameters": return <ParametersStage parameters={document.parameters} bindings={document.bindings} patterns={document.patterns} members={members} definitionName={document.definition.name} definitionCode={document.definition.code} onChange={(id, value) => dispatch({ type: "parameter.value", id, value })} onBindingChange={(id, binding) => dispatch({ type: "binding.set", id, binding })} onAddParameter={parameter => dispatch({ type: "parameter.add", parameter })} onRemoveParameter={id => dispatch({ type: "parameter.remove", id })} onAddPattern={pattern => dispatch({ type: "pattern.add", pattern })} onRemovePattern={id => dispatch({ type: "pattern.remove", id })}/>;
@@ -46,7 +48,7 @@ export function App() {
       <div className="panel-title member-title"><span>组件成员</span><small>{members.length}</small></div>
       {members.length === 0 && <p className="hint">暂无成员，点击发布库模板旁的加号或从发布详情加入组件。</p>}
       {members.map(member => <div className={`member-row ${workspace.selectedMemberId === member.id ? "selected" : ""} ${hoveredMemberId === member.id ? "hovered" : ""} ${compatibleIds.has(member.id) ? "compatible-candidate" : ""}`} key={member.id} onMouseEnter={() => setHoveredMemberId(member.id)} onMouseLeave={() => setHoveredMemberId(null)} title={member.name}>
-        <button className="member-select" onClick={() => workspace.setSelectedMemberId(member.id)}><span>{member.role}<small>{member.code} · V{member.template.version}</small></span></button>
+        <button className="member-select" onClick={() => selectPanelMember(member.id)}><span>{member.role}<small>{member.code} · V{member.template.version}</small></span></button>
         <button className="member-remove" onClick={() => workspace.copyMember(member.id)} aria-label={`复制成员 ${member.role}`} title="复制成员"><Copy size={14}/></button>
         <button className="member-remove" onClick={() => workspace.removeMember(member.id)} aria-label={`删除成员 ${member.role}`}><Trash2 size={14}/></button>
       </div>)}
@@ -59,6 +61,7 @@ export function App() {
       mateCount={mates.length}
       previewTemplate={workspace.previewTemplate}
       selectedMemberId={workspace.selectedMemberId}
+      panelSelectionToken={panelSelectionToken}
       onSelectMember={workspace.setSelectedMemberId}
       onHoverMember={setHoveredMemberId}
       compatibleMemberIds={compatibleIds}
