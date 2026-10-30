@@ -312,6 +312,30 @@ test('对外接口可按成员逐项开放、取消和改名', () => {
   assert.equal(componentReducer(removed, { type: 'port.remove', id: 'missing' }), removed);
 });
 
+test('槽位支持基准接口、兼容占用、重复防护和成员清理', () => {
+  const first = { ...member('base'), interfaces: [{ ...member('base').interfaces[0], connectionGender: 'male', interfaceSize: { diameter: 10 }, connectionMethod: '插接' }] };
+  const second = { ...member('candidate'), interfaces: [{ ...member('candidate').interfaces[0], connectionGender: 'female', interfaceSize: { diameter: 10 }, connectionMethod: '插接' }] };
+  const incompatible = { ...member('bad'), interfaces: [{ ...member('bad').interfaces[0], connectionGender: 'female', interfaceSize: { diameter: 12 }, connectionMethod: '插接' }] };
+  let draft = { ...createComponentDocument(), assembly: { members: [first, second, incompatible], mates: [] } };
+  draft = componentReducer(draft, { type: 'slot.add', slot: { id: 'slot-a', name: '  安装位  ', required: true, baseInterface: null, memberId: null, interfaceId: null } });
+  assert.equal(draft.slots[0].name, '安装位');
+  draft = componentReducer(draft, { type: 'slot.patch', id: 'slot-a', patch: { required: false } });
+  assert.equal(draft.slots[0].required, false);
+  draft = componentReducer(draft, { type: 'slot.patch', id: 'slot-a', patch: { required: true } });
+  draft = componentReducer(draft, { type: 'slot.patch', id: 'slot-a', patch: { baseInterface: source('base') } });
+  draft = componentReducer(draft, { type: 'slot.patch', id: 'slot-a', patch: { memberId: 'candidate', interfaceId: 'face.left' } });
+  assert.equal(draft.slots[0].memberId, 'candidate');
+  assert.equal(validateComponent(draft).find(check => check.id === 'slots').status, 'pass');
+  assert.equal(componentReducer(draft, { type: 'slot.patch', id: 'slot-a', patch: { memberId: 'bad', interfaceId: 'face.left' } }), draft);
+  const duplicate = componentReducer(draft, { type: 'slot.add', slot: { id: 'slot-b', name: '第二槽位', required: false, baseInterface: source('base'), memberId: null, interfaceId: null } });
+  assert.notEqual(duplicate, draft);
+  assert.equal(componentReducer(duplicate, { type: 'slot.patch', id: 'slot-b', patch: { memberId: 'candidate', interfaceId: 'face.left' } }), duplicate);
+  const removed = componentReducer(draft, { type: 'member.remove', id: 'base' });
+  assert.equal(removed.slots[0].baseInterface, null);
+  assert.equal(removed.slots[0].memberId, 'candidate');
+  assert.equal(validateComponent({ ...removed, slots: [{ id: 'legacy', name: '旧槽位', required: false, memberId: null }] }).find(check => check.id === 'slots').status, 'fail');
+});
+
 test('基础验证检查固定版本、来源、绑定和数值，未执行能力不会显示通过', () => {
   let draft = createComponentDocument();
   draft.assembly.members = [member('a')];

@@ -124,6 +124,8 @@ class ComponentSlot(ComponentModel):
     name: str
     memberId: str | None
     required: bool
+    baseInterface: InterfaceSource | None = None
+    interfaceId: str | None = None
 
 
 class ComponentParameter(ComponentModel):
@@ -303,6 +305,30 @@ class MateAddAction(ComponentModel):
     mate: Mate
 
 
+class SlotAddAction(ComponentModel):
+    type: Literal["slot.add"]
+    slot: ComponentSlot
+
+
+class SlotPatch(ComponentModel):
+    name: str | None = None
+    required: bool | None = None
+    baseInterface: InterfaceSource | None = None
+    memberId: str | None = None
+    interfaceId: str | None = None
+
+
+class SlotPatchAction(ComponentModel):
+    type: Literal["slot.patch"]
+    id: str
+    patch: SlotPatch
+
+
+class SlotRemoveAction(ComponentModel):
+    type: Literal["slot.remove"]
+    id: str
+
+
 class PortAddAction(ComponentModel):
     type: Literal["port.add"]
     port: ComponentPort
@@ -369,7 +395,7 @@ class RuleRemoveAction(ComponentModel):
 
 TypedAction = Annotated[
     ResetAction | DefinitionPatchAction | MemberAddAction | MemberPatchAction | MemberRemoveAction
-    | MateAddAction | PortAddAction | PortRemoveAction | PortRenameAction | ParameterValueAction | ParameterAddAction | ParameterRemoveAction | BindingSetAction | PatternAddAction | PatternRemoveAction | RuleAddAction | RuleRemoveAction | RuleExpressionAction,
+    | MateAddAction | SlotAddAction | SlotPatchAction | SlotRemoveAction | PortAddAction | PortRemoveAction | PortRenameAction | ParameterValueAction | ParameterAddAction | ParameterRemoveAction | BindingSetAction | PatternAddAction | PatternRemoveAction | RuleAddAction | RuleRemoveAction | RuleExpressionAction,
     Field(discriminator="type"),
 ]
 ComponentAction = TypeAdapter(TypedAction)

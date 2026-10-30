@@ -70,7 +70,16 @@ export type InterfaceSource = { memberId: string; interfaceId: string };
 export type InterfaceSelection = InterfaceSource;
 export type Mate = { id: string; from: InterfaceSource; to: InterfaceSource; relation: "贴合" | "同轴" | "重合"; offset: number };
 export type ComponentPort = { id: string; name: string; source: InterfaceSource; tags: string[]; interface?: PartInterface };
-export type ComponentSlot = { id: string; name: string; memberId: string | null; required: boolean };
+export type ComponentSlot = {
+  id: string;
+  name: string;
+  required: boolean;
+  /** Interface in the existing component that defines this replacement slot. */
+  baseInterface: InterfaceSource | null;
+  /** Member currently occupying the slot; interfaceId must be set with it. */
+  memberId: string | null;
+  interfaceId: string | null;
+};
 export type ComponentParameter = { id: string; label: string; value: number | null; unit: string; min: number; max: number };
 export type ParameterBinding = { id: string; parameterId: string; memberId: string; memberParameterId: string };
 export type ComponentPattern = { id: string; label: string; memberIds: string[]; countParameterId: string; spacingParameterId: string; axis: "x" | "y" | "z" };

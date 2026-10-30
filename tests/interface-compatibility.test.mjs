@@ -38,10 +38,13 @@ test('sizes normalize to millimetres and incompatible geometry or missing dimens
     iface('plane', { type: 'plane', connectionGender: 'male', interfaceSize: { width: 10, height: 10 } }),
     iface('axis', { type: 'axis', connectionGender: 'female', interfaceSize: { diameter: 10 } }),
   ).compatible, false);
-  assert.equal(interfacesCompatible(
+  const undeclared = interfacesCompatible(
     iface('unknown-size', { connectionGender: 'male' }),
     iface('unknown-size-mate', { connectionGender: 'female' }),
-  ).sizeMatch, false);
+  );
+  assert.equal(undeclared.sizeMatch, false);
+  assert.equal(undeclared.compatible, true);
+  assert.match(undeclared.reason, /尺寸未声明/);
 });
 
 test('rectangular regions compare independently of their local U/V orientation', () => {

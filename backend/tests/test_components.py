@@ -279,6 +279,41 @@ console.log(JSON.stringify({document:result,checks:validateComponent(result),exp
             self.assertEqual(removed.json()["document"]["ports"], [])
             self.assertEqual(next(check for check in removed.json()["checks"] if check["id"] == "ports")["status"], "fail")
 
+    def test_slot_actions_require_compatible_unique_interfaces_and_export(self):
+        with TestClient(create_app(dist_dir=None)) as client:
+            draft = self.create(client)
+            first = member("base")
+            first["interfaces"][0].update({"connectionGender": "male", "interfaceSize": {"diameter": 10}, "connectionMethod": "插接"})
+            second = member("candidate")
+            second["interfaces"][0].update({"connectionGender": "female", "interfaceSize": {"diameter": 10}, "connectionMethod": "插接"})
+            bad = member("bad")
+            bad["interfaces"][0].update({"connectionGender": "female", "interfaceSize": {"diameter": 12}, "connectionMethod": "插接"})
+            draft = self.action(client, draft, {"type": "member.add", "member": first}).json()
+            draft = self.action(client, draft, {"type": "member.add", "member": second}).json()
+            draft = self.action(client, draft, {"type": "member.add", "member": bad}).json()
+            slot = {"id": "slot.one", "name": "安装位", "required": True, "baseInterface": None, "memberId": None, "interfaceId": None}
+            draft = self.action(client, draft, {"type": "slot.add", "slot": slot}).json()
+            draft = self.action(client, draft, {"type": "slot.patch", "id": "slot.one", "patch": {"required": False}}).json()
+            self.assertFalse(draft["document"]["slots"][0]["required"])
+            draft = self.action(client, draft, {"type": "slot.patch", "id": "slot.one", "patch": {"required": True}}).json()
+            source_base = source("base")
+            draft = self.action(client, draft, {"type": "slot.patch", "id": "slot.one", "patch": {"baseInterface": source_base}}).json()
+            incompatible = self.action(client, draft, {"type": "slot.patch", "id": "slot.one", "patch": {"memberId": "bad", "interfaceId": "face.left"}})
+            self.assertEqual(incompatible.status_code, 422)
+            self.assertEqual(incompatible.json()["error"]["code"], "INCOMPATIBLE_SLOT_INTERFACE")
+            draft = self.action(client, draft, {"type": "slot.patch", "id": "slot.one", "patch": {"memberId": "candidate", "interfaceId": "face.left"}}).json()
+            self.assertEqual(draft["document"]["slots"][0]["interfaceId"], "face.left")
+            persisted = client.get(f"/api/component-drafts/{draft['draftId']}").json()
+            exported = client.get(f"/api/component-drafts/{draft['draftId']}/export").json()
+            self.assertEqual(persisted["document"]["slots"][0]["baseInterface"], source_base)
+            self.assertEqual(exported["stages"]["slots"][0]["interfaceId"], "face.left")
+            duplicate = self.action(client, draft, {"type": "slot.add", "slot": {**slot, "id": "slot.two", "baseInterface": source_base}}).json()
+            duplicate_assignment = self.action(client, duplicate, {"type": "slot.patch", "id": "slot.two", "patch": {"memberId": "candidate", "interfaceId": "face.left"}})
+            self.assertEqual(duplicate_assignment.status_code, 422)
+            self.assertEqual(duplicate_assignment.json()["error"]["code"], "DUPLICATE_SLOT_INTERFACE")
+            removed = self.action(client, duplicate, {"type": "member.remove", "id": "base"}).json()
+            self.assertIsNone(removed["document"]["slots"][0]["baseInterface"])
+
     def test_clearing_component_parameter_removes_member_override(self):
         from backend.app.components.models import ComponentAction
         from backend.app.components.service import apply_action, create_component_document

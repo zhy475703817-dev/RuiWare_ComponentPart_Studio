@@ -1,6 +1,7 @@
 import { createComponentDocument, getInterface, hasInterface, samePartInterface } from "./component.ts";
 import { inferEnvelopeDimensions } from "./parameterMetrics.ts";
-import type { ComponentDefinition, ComponentDocument, ComponentMember, ComponentPattern, ComponentPort, Mate, ParameterBinding } from "./component.ts";
+import { interfacesCompatible } from "./interfaceCompatibility.ts";
+import type { ComponentDefinition, ComponentDocument, ComponentMember, ComponentPattern, ComponentPort, ComponentSlot, InterfaceSource, Mate, ParameterBinding } from "./component.ts";
 
 export type ComponentAction =
   | { type: "reset" }
@@ -9,6 +10,9 @@ export type ComponentAction =
   | { type: "member.patch"; id: string; patch: Partial<Pick<ComponentMember, "role" | "position" | "rotation" | "parameterValues">> }
   | { type: "member.remove"; id: string }
   | { type: "mate.add"; mate: Mate }
+  | { type: "slot.add"; slot: ComponentSlot }
+  | { type: "slot.patch"; id: string; patch: { name?: string; required?: boolean; baseInterface?: InterfaceSource | null; memberId?: string | null; interfaceId?: string | null } }
+  | { type: "slot.remove"; id: string }
   | { type: "port.add"; port: ComponentPort }
   | { type: "port.remove"; id: string }
   | { type: "port.rename"; id: string; name: string }
@@ -93,7 +97,12 @@ export function componentReducer(document: ComponentDocument, action: ComponentA
         ports: document.ports.filter(port => port.source.memberId !== action.id),
         bindings: document.bindings.filter(binding => binding.memberId !== action.id),
         patterns: document.patterns.map(pattern => ({ ...pattern, memberIds: pattern.memberIds.filter(id => id !== action.id) })).filter(pattern => pattern.memberIds.length > 0),
-        slots: document.slots.map(slot => slot.memberId === action.id ? { ...slot, memberId: null } : slot),
+        slots: document.slots.map(slot => ({
+          ...slot,
+          baseInterface: slot.baseInterface?.memberId === action.id ? null : slot.baseInterface ?? null,
+          memberId: slot.memberId === action.id ? null : slot.memberId,
+          interfaceId: slot.memberId === action.id ? null : slot.interfaceId ?? null,
+        })),
       });
     case "mate.add": {
       const mate = action.mate;
@@ -104,6 +113,44 @@ export function componentReducer(document: ComponentDocument, action: ComponentA
         ))) return document;
       return next({ assembly: { ...document.assembly, mates: [...document.assembly.mates, structuredClone(mate)] } });
     }
+    case "slot.add": {
+      const slot = action.slot;
+      if (!slot.id.trim() || !slot.name.trim() || document.slots.some(item => item.id === slot.id)) return document;
+      if ((slot.baseInterface && !hasInterface(document, slot.baseInterface)) || slot.memberId !== null || slot.interfaceId !== null) return document;
+      return next({ slots: [...document.slots, { ...structuredClone(slot), name: slot.name.trim(), baseInterface: slot.baseInterface ? structuredClone(slot.baseInterface) : null }] });
+    }
+    case "slot.patch": {
+      const current = document.slots.find(item => item.id === action.id);
+      if (!current) return document;
+      const patch = action.patch;
+      const name = patch.name === undefined ? current.name : patch.name.trim();
+      if (!name) return document;
+      const baseInterface = patch.baseInterface === undefined ? current.baseInterface : patch.baseInterface;
+      if (baseInterface && !hasInterface(document, baseInterface)) return document;
+      const assignmentPatched = patch.memberId !== undefined || patch.interfaceId !== undefined;
+      if (assignmentPatched && (patch.memberId === undefined || patch.interfaceId === undefined)) return document;
+      let assignment = assignmentPatched
+        ? (patch.memberId === null && patch.interfaceId === null ? null : patch.memberId && patch.interfaceId ? { memberId: patch.memberId, interfaceId: patch.interfaceId } : undefined)
+        : (current.memberId && current.interfaceId ? { memberId: current.memberId, interfaceId: current.interfaceId } : null);
+      const baseChanged = patch.baseInterface !== undefined && JSON.stringify(baseInterface) !== JSON.stringify(current.baseInterface);
+      if (!baseInterface && assignmentPatched && assignment !== null) return document;
+      if (!baseInterface || (baseChanged && !assignmentPatched)) assignment = null;
+      if (assignment === undefined) return document;
+      if (assignment !== null) {
+        if (!baseInterface || !hasInterface(document, assignment) || assignment.memberId === baseInterface.memberId) return document;
+        const base = getInterface(document, baseInterface);
+        const target = getInterface(document, assignment);
+        if (!interfacesCompatible(base, target).compatible) return document;
+        if (document.slots.some(item => item.id !== action.id && item.memberId === assignment.memberId && item.interfaceId === assignment.interfaceId)) return document;
+      }
+      const nextSlot: ComponentSlot = { ...current, name, required: patch.required === undefined ? current.required : patch.required,
+        baseInterface: baseInterface ? structuredClone(baseInterface) : null, memberId: assignment?.memberId ?? null, interfaceId: assignment?.interfaceId ?? null };
+      if (JSON.stringify(nextSlot) === JSON.stringify(current)) return document;
+      return next({ slots: document.slots.map(item => item.id === action.id ? nextSlot : item) });
+    }
+    case "slot.remove":
+      if (!document.slots.some(item => item.id === action.id)) return document;
+      return next({ slots: document.slots.filter(item => item.id !== action.id) });
     case "port.add": {
       if (!hasInterface(document, action.port.source) || document.ports.some(port => port.id === action.port.id ||
         (port.source.memberId === action.port.source.memberId && port.source.interfaceId === action.port.source.interfaceId))) return document;

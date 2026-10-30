@@ -55,14 +55,19 @@ export function interfacesCompatible(a: PartInterface | undefined, b: PartInterf
   const genderMatch = aGender === "neutral" || bGender === "neutral" || aGender !== bGender;
   const typeMatch = a.type === b.type;
   const aSize = sizeSignature(a), bSize = sizeSignature(b);
+  // Some legacy templates declare no physical envelope at all. When both
+  // sides are unknown, geometry type is still useful enough to configure a
+  // slot; a one-sided or conflicting declaration remains incompatible.
+  const sizeUndeclared = !aSize && !bSize;
   const sizeMatch = Boolean(aSize && bSize && aSize.shape === bSize.shape && aSize.values.length === bSize.values.length && aSize.values.every((value, index) => {
     const tolerance = Math.max(aSize.tolerance, bSize.tolerance, 0.01);
     return Math.abs(value - bSize.values[index]) <= tolerance;
   }));
+  const sizeCompatible = sizeUndeclared || sizeMatch;
   const methodA = a.connectionMethod?.trim().toLowerCase(), methodB = b.connectionMethod?.trim().toLowerCase();
   const methodMatch = !methodA || !methodB || methodA === methodB;
-  const compatible = genderMatch && typeMatch && sizeMatch && methodMatch;
-  const reason = !genderMatch ? "公母属性不匹配" : !typeMatch ? "接口几何类型不匹配" : !sizeMatch ? (!aSize || !bSize ? "接口尺寸缺失" : "接口尺寸不匹配") : !methodMatch ? "连接方式不匹配" : aGender === "neutral" || bGender === "neutral" ? "尺寸匹配；公母属性未完整声明" : "尺寸与接口属性匹配";
+  const compatible = genderMatch && typeMatch && sizeCompatible && methodMatch;
+  const reason = !genderMatch ? "公母属性不匹配" : !typeMatch ? "接口几何类型不匹配" : !sizeCompatible ? (!aSize || !bSize ? "接口尺寸缺失" : "接口尺寸不匹配") : !methodMatch ? "连接方式不匹配" : sizeUndeclared ? "几何类型匹配；尺寸未声明" : aGender === "neutral" || bGender === "neutral" ? "尺寸匹配；公母属性未完整声明" : "尺寸与接口属性匹配";
   return { compatible, genderMatch, typeMatch, sizeMatch, methodMatch, reason };
 }
 

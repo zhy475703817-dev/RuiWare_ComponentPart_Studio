@@ -108,6 +108,70 @@ def has_interface(document: ComponentDocument, source: InterfaceSource) -> bool:
                for member in document.assembly.members)
 
 
+def get_interface(document: ComponentDocument, source: InterfaceSource):
+    for member in document.assembly.members:
+        if member.id == source.memberId:
+            return next((item for item in member.interfaces if item.id == source.interfaceId), None)
+    return None
+
+
+def _interface_size(interface):
+    size = interface.interfaceSize or {}
+    unit = str(size.get("unit", "")).strip().lower()
+    scale = {"m": 1000, "meter": 1000, "meters": 1000, "米": 1000, "cm": 10, "centimeter": 10, "centimeters": 10, "厘米": 10,
+             "in": 25.4, "inch": 25.4, "inches": 25.4, "英寸": 25.4, "ft": 304.8, "foot": 304.8, "feet": 304.8, "英尺": 304.8}.get(unit, 1)
+    tolerance = float(size.get("tolerance", 0) or 0) * scale
+    diameter = size.get("diameter")
+    if isinstance(diameter, (int, float)) and diameter > 0:
+        return "round", [diameter * scale], tolerance
+    values = sorted(float(value) * scale for key in ("width", "height", "depth")
+                    if isinstance((value := size.get(key)), (int, float)) and value > 0)
+    if values:
+        return f"rect-{len(values)}", values, tolerance
+    region = interface.region or {}
+    values = sorted(float(value) for key in ("uSpan", "vSpan")
+                    if isinstance((value := region.get(key)), (int, float)) and value > 0)
+    return (f"rect-{len(values)}", values, 0) if values else None
+
+
+def interfaces_compatible(a, b):
+    if a is None or b is None:
+        return False, "接口数据缺失"
+    def gender(interface):
+        if interface.connectionGender:
+            return interface.connectionGender
+        tags = [tag.strip().lower() for tag in interface.tags if tag.strip()]
+        male = {"male", "m", "公", "公头", "插头", "plug", "pin"}
+        female = {"female", "f", "母", "母座", "插座", "socket", "hole"}
+        if any(tag in male or "gender:male" in tag or "公头" in tag for tag in tags):
+            return "male"
+        if any(tag in female or "gender:female" in tag or "母座" in tag for tag in tags):
+            return "female"
+        return "neutral"
+
+    gender_a = gender(a)
+    gender_b = gender(b)
+    if gender_a == "neutral" or gender_b == "neutral":
+        gender_match = True
+    else:
+        gender_match = gender_a != gender_b
+    if not gender_match:
+        return False, "公母属性不匹配"
+    if a.type != b.type:
+        return False, "接口几何类型不匹配"
+    size_a, size_b = _interface_size(a), _interface_size(b)
+    # Legacy templates may omit the physical envelope on both sides. Keep
+    # those same-type interfaces selectable, while rejecting one-sided or
+    # conflicting size declarations.
+    if (size_a is None and size_b is not None) or (size_a is not None and size_b is None) or (size_a and size_b and (size_a[0] != size_b[0] or len(size_a[1]) != len(size_b[1]) or any(abs(left - right) > max(size_a[2], size_b[2], 0.01) for left, right in zip(size_a[1], size_b[1])))):
+        return False, "接口尺寸缺失或不匹配"
+    method_a = (a.connectionMethod or "").strip().lower()
+    method_b = (b.connectionMethod or "").strip().lower()
+    if method_a and method_b and method_a != method_b:
+        return False, "连接方式不匹配"
+    return True, ""
+
+
 def apply_action(document: ComponentDocument, action: TypedAction) -> ComponentDocument:
     action = ComponentAction.validate_python(action)
     data = document.model_dump(by_alias=True)
@@ -181,6 +245,9 @@ def apply_action(document: ComponentDocument, action: TypedAction) -> ComponentD
             for slot in data["slots"]:
                 if slot["memberId"] == action.id:
                     slot["memberId"] = None
+                    slot["interfaceId"] = None
+                if (slot.get("baseInterface") or {}).get("memberId") == action.id:
+                    slot["baseInterface"] = None
     elif action.type == "mate.add":
         mate = action.mate
         if not has_interface(document, mate.from_) or not has_interface(document, mate.to) or mate.from_.memberId == mate.to.memberId:
@@ -188,6 +255,68 @@ def apply_action(document: ComponentDocument, action: TypedAction) -> ComponentD
         if any(item.id == mate.id or (item.from_ == mate.from_ and item.to == mate.to) for item in document.assembly.mates):
             raise ComponentError(422, "DUPLICATE_CONNECTION")
         data["assembly"]["mates"].append(mate.model_dump(by_alias=True))
+    elif action.type == "slot.add":
+        slot = action.slot
+        name = slot.name.strip()
+        if any(item["id"] == slot.id for item in data["slots"]):
+            raise ComponentError(422, "DUPLICATE_ID")
+        if not slot.id.strip() or not name:
+            raise ComponentError(422, "INVALID_SLOT_NAME")
+        if slot.baseInterface is not None and not has_interface(document, slot.baseInterface):
+            raise ComponentError(422, "INVALID_SLOT_REFERENCE")
+        if slot.memberId is not None or slot.interfaceId is not None:
+            raise ComponentError(422, "INVALID_SLOT_REFERENCE")
+        data["slots"].append({**slot.model_dump(by_alias=True), "name": name})
+    elif action.type == "slot.patch":
+        slot_data = next((item for item in data["slots"] if item["id"] == action.id), None)
+        if slot_data is None:
+            raise ComponentError(404, "COMPONENT_ITEM_NOT_FOUND")
+        patch = action.patch.model_dump(by_alias=True, exclude_unset=True)
+        if not patch:
+            return document
+        if "name" in patch:
+            name = (patch["name"] or "").strip()
+            if not name:
+                raise ComponentError(422, "INVALID_SLOT_NAME")
+            patch["name"] = name
+        if "required" in patch and patch["required"] is None:
+            raise ComponentError(422, "INVALID_SLOT_REFERENCE")
+        occupancy_fields = {"memberId", "interfaceId"}
+        occupancy_patched = occupancy_fields.intersection(patch)
+        if occupancy_patched and occupancy_patched != occupancy_fields:
+            raise ComponentError(422, "INVALID_SLOT_REFERENCE")
+        base_changed = "baseInterface" in patch and patch["baseInterface"] != slot_data.get("baseInterface")
+        if base_changed and not occupancy_patched:
+            patch["memberId"] = None
+            patch["interfaceId"] = None
+        if patch.get("baseInterface") is not None and not has_interface(document, InterfaceSource.model_validate(patch["baseInterface"])):
+            raise ComponentError(422, "INVALID_SLOT_REFERENCE")
+        if patch.get("baseInterface", slot_data.get("baseInterface")) is None and occupancy_patched and (patch["memberId"] is not None or patch["interfaceId"] is not None):
+            raise ComponentError(422, "INVALID_SLOT_REFERENCE")
+        slot_data.update(patch)
+        if slot_data.get("baseInterface") is None:
+            slot_data["memberId"] = None
+            slot_data["interfaceId"] = None
+        member_id, interface_id = slot_data.get("memberId"), slot_data.get("interfaceId")
+        if (member_id is None) != (interface_id is None):
+            raise ComponentError(422, "INVALID_SLOT_REFERENCE")
+        if member_id is not None:
+            base_data = slot_data.get("baseInterface")
+            if not base_data:
+                raise ComponentError(422, "INVALID_SLOT_REFERENCE")
+            base = InterfaceSource.model_validate(base_data)
+            target = InterfaceSource(memberId=member_id, interfaceId=interface_id)
+            if not has_interface(document, target) or member_id == base.memberId:
+                raise ComponentError(422, "INVALID_SLOT_REFERENCE")
+            compatible, _ = interfaces_compatible(get_interface(document, base), get_interface(document, target))
+            if not compatible:
+                raise ComponentError(422, "INCOMPATIBLE_SLOT_INTERFACE")
+            if any(item["id"] != action.id and item.get("memberId") == member_id and item.get("interfaceId") == interface_id for item in data["slots"]):
+                raise ComponentError(422, "DUPLICATE_SLOT_INTERFACE")
+    elif action.type == "slot.remove":
+        if not any(item["id"] == action.id for item in data["slots"]):
+            raise ComponentError(404, "COMPONENT_ITEM_NOT_FOUND")
+        data["slots"] = [item for item in data["slots"] if item["id"] != action.id]
     elif action.type == "port.add":
         port = action.port
         name = port.name.strip()
@@ -367,6 +496,23 @@ def validate_component(document: ComponentDocument) -> list[dict]:
                     and spacing is not None and spacing.unit == "mm" and spacing.value is not None
                     and spacing.min >= 0 and spacing.min <= spacing.value <= spacing.max and spacing.value >= 0)
 
+    occupied_slot_interfaces = set()
+    def slot_valid(slot):
+        if not slot.id.strip() or not slot.name.strip() or slot.baseInterface is None or not has_interface(document, slot.baseInterface):
+            return False
+        if slot.memberId is None and slot.interfaceId is None:
+            return not slot.required
+        if not slot.memberId or not slot.interfaceId:
+            return False
+        target = InterfaceSource(memberId=slot.memberId, interfaceId=slot.interfaceId)
+        if slot.memberId == slot.baseInterface.memberId or not has_interface(document, target):
+            return False
+        key = (slot.memberId, slot.interfaceId)
+        if key in occupied_slot_interfaces:
+            return False
+        occupied_slot_interfaces.add(key)
+        return interfaces_compatible(get_interface(document, slot.baseInterface), get_interface(document, target))[0]
+
     return [
         check("definition", "组件名称", bool(document.definition.name.strip()), "请填写组件名称"),
         check("members", "装配成员", bool(members) and all(member.id.strip() for member in members) and len(member_ids) == len(members), "请加入零部件，成员标识需唯一"),
@@ -389,7 +535,7 @@ def validate_component(document: ComponentDocument) -> list[dict]:
             for parameter in document.parameters), "参数绑定引用无效，或与成员参数范围没有交集"),
         check("patterns", "组件构成规则", all(pattern_valid(pattern) for pattern in document.patterns)
               and len({identifier for pattern in document.patterns for identifier in pattern.memberIds}) == sum(len(pattern.memberIds) for pattern in document.patterns), "重复构成规则引用无效成员、参数或重叠成员"),
-        check("slots", "槽位引用", all((not slot.required) if slot.memberId is None else slot.memberId in member_ids for slot in document.slots), "必填槽位未放置成员或引用了失效成员"),
+        check("slots", "槽位引用", len({slot.id for slot in document.slots}) == len(document.slots) and all(slot_valid(slot) for slot in document.slots), "槽位缺少有效基准接口、占用接口不兼容，或必填槽位尚未分配"),
         {"id": "assembly.solve", "label": "装配求解", "status": "pending", "message": "尚未接入装配求解，连接数据不会自动改变成员位置"},
         {"id": "rules.execution", "label": "工程规则执行", "status": "pending", "message": "当前仅保存规则说明，尚未接入规则执行"},
     ]

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { ComponentAction } from "../domain/componentReducer";
 import { SharedDraftController, httpDraftApi, initialSharedState } from "./sharedDraft";
 import type { PublishedTemplate } from "../library/publishedLibrary";
-import type { ComponentMember, MemberParameterDefinition, Vector3 } from "../domain/component";
+import type { ComponentMember, ComponentSlot, InterfaceSource, MemberParameterDefinition, Vector3 } from "../domain/component";
 import { interfacesForReconstruction, loadReconstructionInfo } from "../library/templatePreview";
 import { STAGES, type StageId } from "./stages";
 import { componentPublicationMember, fetchPublishedComponent, publishComponentDraft } from "../library/componentPublications";
@@ -150,6 +150,19 @@ export function useComponentWorkspace() {
     dispatch({ type: "port.rename", id, name });
   }
 
+  function addSlot() {
+    const slot: ComponentSlot = { id: crypto.randomUUID(), name: "新槽位", required: false, baseInterface: null, memberId: null, interfaceId: null };
+    if (dispatch({ type: "slot.add", slot })) setMessage("已新增槽位，请配置基准接口");
+  }
+
+  function patchSlot(id: string, patch: { name?: string; required?: boolean; baseInterface?: InterfaceSource | null; memberId?: string | null; interfaceId?: string | null }) {
+    dispatch({ type: "slot.patch", id, patch });
+  }
+
+  function removeSlot(id: string) {
+    if (dispatch({ type: "slot.remove", id })) setMessage("已删除槽位");
+  }
+
   async function exportDraft() {
     let exported;
     try { exported = await controller.current?.export(); if (!exported) return; }
@@ -227,7 +240,7 @@ export function useComponentWorkspace() {
 
   const syncMessage = shared.error || (shared.status === "loading" ? "正在读取共享草稿…" : shared.status === "saving" ? "正在保存草稿…" : shared.notice || message);
   return { document, dispatch, stage, setStage, selectedMemberId, setSelectedMemberId, previewTemplate, setPreviewTemplate,
-    selectionResetToken, message: syncMessage, setMessage, checks, newDraft, removeMember, connectFirstInterfaces, setInterfaceExposure, renamePort, exportDraft,
+    selectionResetToken, message: syncMessage, setMessage, checks, newDraft, removeMember, connectFirstInterfaces, setInterfaceExposure, renamePort, addSlot, patchSlot, removeSlot, exportDraft,
     shared, editable, selectDraft, openDraftLink, copyDraftLink, publishDraft, publishing, adding, addPublishedTemplate, libraryRefreshToken,
     copyMember, moveMember,
     downloadLocalDraft, dismissAgentChanges: () => controller.current?.dismissAgentChanges(),
