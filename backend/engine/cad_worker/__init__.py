@@ -1,0 +1,2 @@
+"""Isolated OpenCascade worker."""
+
