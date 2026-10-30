@@ -36,6 +36,7 @@ const errorMessage = (error: unknown): string => errorCode(error) === "REVISION_
   ? "其他网页也修改了草稿，或变更历史不完整。本页输入已保留，请下载本地副本并核对最新版本。"
   : errorCode(error) === "EDIT_TARGET_REMOVED" ? "Agent 已删除正在编辑的对象或其引用，无法直接合并。本页输入已保留，请下载本地副本后核对差异。"
   : errorCode(error) === "EDIT_STRUCTURE_CONFLICT" ? "Agent 修改了相关结构，无法直接合并。本页输入已保留，请下载本地副本后核对差异。"
+  : errorCode(error) === "INVALID_PORT_NAME" ? "对外接口名称不能为空。"
   : errorCode(error) === "DRAFT_NOT_FOUND" ? "该草稿已不存在，请选择其他草稿。" : "草稿操作失败。未保存输入已保留，请检查连接后重试。";
 
 const legacyDimensionSpecs = [
@@ -139,6 +140,7 @@ export class SharedDraftController {
     for (const action of this.pending) {
       const next = componentReducer(projection, action);
       const missingTarget = ((action.type === "member.patch" || action.type === "member.remove") && !projection.assembly.members.some(item => item.id === action.id))
+        || ((action.type === "port.remove" || action.type === "port.rename") && !projection.ports.some(item => item.id === action.id))
         || (action.type === "parameter.value" && !projection.parameters.some(item => item.id === action.id))
         || (action.type === "rule.expression" && !projection.rules.some(item => item.id === action.id))
         || (action.type === "rule.remove" && !projection.rules.some(item => item.id === action.id));

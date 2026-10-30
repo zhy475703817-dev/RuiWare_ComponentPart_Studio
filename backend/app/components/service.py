@@ -190,6 +190,9 @@ def apply_action(document: ComponentDocument, action: TypedAction) -> ComponentD
         data["assembly"]["mates"].append(mate.model_dump(by_alias=True))
     elif action.type == "port.add":
         port = action.port
+        name = port.name.strip()
+        if not name:
+            raise ComponentError(422, "INVALID_PORT_NAME")
         source_member = next((member for member in document.assembly.members if member.id == port.source.memberId), None)
         source_interface = next((item for item in (source_member.interfaces if source_member else []) if item.id == port.source.interfaceId), None)
         if source_interface is None:
@@ -202,9 +205,20 @@ def apply_action(document: ComponentDocument, action: TypedAction) -> ComponentD
         if port.interface is not None and port.interface != source_interface:
             raise ComponentError(422, "INTERFACE_SNAPSHOT_MISMATCH")
         data["ports"].append({
-            **port.model_dump(by_alias=True),
+            **{**port.model_dump(by_alias=True), "name": name},
             "interface": source_interface.model_dump(by_alias=True),
         })
+    elif action.type in ("port.remove", "port.rename"):
+        port = next((item for item in data["ports"] if item["id"] == action.id), None)
+        if port is None:
+            raise ComponentError(404, "COMPONENT_ITEM_NOT_FOUND")
+        if action.type == "port.remove":
+            data["ports"] = [item for item in data["ports"] if item["id"] != action.id]
+        else:
+            name = action.name.strip()
+            if not name:
+                raise ComponentError(422, "INVALID_PORT_NAME")
+            port["name"] = name
     elif action.type == "binding.set":
         data["bindings"] = [item for item in data["bindings"] if item["id"] != action.id]
         if action.binding is not None:
@@ -359,7 +373,7 @@ def validate_component(document: ComponentDocument) -> list[dict]:
         check("references", "固定版本引用", bool(members) and all(member.template.publicationId.strip() and member.template.templateId.strip() and 0 < member.template.version <= 9007199254740991 and re.fullmatch(r"[a-fA-F0-9]{64}", member.template.sha256) for member in members), "成员需引用有效发布版本及模板包校验值"),
         check("mates", "内部连接数据", (len(members) < 2 or bool(mates)) and len({mate.id for mate in mates}) == len(mates) and all(has_interface(document, mate.from_) and has_interface(document, mate.to) and mate.from_.memberId != mate.to.memberId for mate in mates), "请检查连接两端的成员与接口；多成员组件需建立内部连接"),
         check("ports", "对外接口", bool(document.ports) and all(
-            has_interface(document, port.source) and (port.interface is None or port.interface == next(
+            bool(port.name.strip()) and has_interface(document, port.source) and (port.interface is None or port.interface == next(
                 item for member in members if member.id == port.source.memberId for item in member.interfaces if item.id == port.source.interfaceId
             )) for port in document.ports), "请继承有效的零部件接口，并检查接口信息是否仍与来源一致"),
         check("parameters", "参数范围", bool(document.parameters) and len(parameter_ids) == len(document.parameters) and all(parameter.value is not None and parameter.min <= parameter.max and parameter.min <= parameter.value <= parameter.max for parameter in document.parameters), "参数需为范围内的有效数值"),

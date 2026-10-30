@@ -25,7 +25,6 @@ export function useComponentWorkspace() {
   const [libraryRefreshToken, setLibraryRefreshToken] = useState(0);
   const { document, checks } = shared;
   const editable = (shared.status === "ready" || shared.status === "saving") && !publishing && !adding;
-  const selectedMember = document.assembly.members.find(member => member.id === selectedMemberId);
 
   useEffect(() => {
     const workspace = new SharedDraftController(httpDraftApi);
@@ -131,13 +130,24 @@ export function useComponentWorkspace() {
     setMessage("已记录接口贴合关系；请在预览中确认成员位置，连接关系会随草稿保存");
   }
 
-  function inheritInterface() {
-    if (!selectedMember) return setMessage("请先选择一个组件成员");
-    const sourceInterface = selectedMember.interfaces.find(item => !document.ports.some(port => port.source.memberId === selectedMember.id && port.source.interfaceId === item.id));
-    if (!sourceInterface) return setMessage("该成员没有尚未继承的接口");
-    if (!dispatch({ type: "port.add", port: { id: crypto.randomUUID(), name: `${selectedMember.name}-${sourceInterface.name}`, source: { memberId: selectedMember.id, interfaceId: sourceInterface.id }, tags: [...sourceInterface.tags], interface: structuredClone(sourceInterface) } })) return;
-    setStage("interfaces");
-    setMessage(`已继承 ${sourceInterface.name} 为组件对外接口`);
+  function setInterfaceExposure(memberId: string, interfaceId: string, exposed: boolean) {
+    const existing = document.ports.find(port => port.source.memberId === memberId && port.source.interfaceId === interfaceId);
+    if (!exposed) {
+      if (existing) dispatch({ type: "port.remove", id: existing.id });
+      return;
+    }
+    if (existing) return;
+    const member = document.assembly.members.find(item => item.id === memberId);
+    const sourceInterface = member?.interfaces.find(item => item.id === interfaceId);
+    if (!member || !sourceInterface) return;
+    dispatch({ type: "port.add", port: {
+      id: crypto.randomUUID(), name: `${member.name}-${sourceInterface.name}`,
+      source: { memberId, interfaceId }, tags: [...sourceInterface.tags], interface: structuredClone(sourceInterface),
+    } });
+  }
+
+  function renamePort(id: string, name: string) {
+    dispatch({ type: "port.rename", id, name });
   }
 
   async function exportDraft() {
@@ -216,8 +226,8 @@ export function useComponentWorkspace() {
   }
 
   const syncMessage = shared.error || (shared.status === "loading" ? "正在读取共享草稿…" : shared.status === "saving" ? "正在保存草稿…" : shared.notice || message);
-  return { document, dispatch, stage, setStage, selectedMemberId, selectedMember, setSelectedMemberId, previewTemplate, setPreviewTemplate,
-    selectionResetToken, message: syncMessage, setMessage, checks, newDraft, removeMember, connectFirstInterfaces, inheritInterface, exportDraft,
+  return { document, dispatch, stage, setStage, selectedMemberId, setSelectedMemberId, previewTemplate, setPreviewTemplate,
+    selectionResetToken, message: syncMessage, setMessage, checks, newDraft, removeMember, connectFirstInterfaces, setInterfaceExposure, renamePort, exportDraft,
     shared, editable, selectDraft, openDraftLink, copyDraftLink, publishDraft, publishing, adding, addPublishedTemplate, libraryRefreshToken,
     copyMember, moveMember,
     downloadLocalDraft, dismissAgentChanges: () => controller.current?.dismissAgentChanges(),

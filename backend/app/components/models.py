@@ -308,6 +308,17 @@ class PortAddAction(ComponentModel):
     port: ComponentPort
 
 
+class PortRemoveAction(ComponentModel):
+    type: Literal["port.remove"]
+    id: str
+
+
+class PortRenameAction(ComponentModel):
+    type: Literal["port.rename"]
+    id: str
+    name: str
+
+
 class ParameterValueAction(ComponentModel):
     type: Literal["parameter.value"]
     id: str
@@ -358,7 +369,7 @@ class RuleRemoveAction(ComponentModel):
 
 TypedAction = Annotated[
     ResetAction | DefinitionPatchAction | MemberAddAction | MemberPatchAction | MemberRemoveAction
-    | MateAddAction | PortAddAction | ParameterValueAction | ParameterAddAction | ParameterRemoveAction | BindingSetAction | PatternAddAction | PatternRemoveAction | RuleAddAction | RuleRemoveAction | RuleExpressionAction,
+    | MateAddAction | PortAddAction | PortRemoveAction | PortRenameAction | ParameterValueAction | ParameterAddAction | ParameterRemoveAction | BindingSetAction | PatternAddAction | PatternRemoveAction | RuleAddAction | RuleRemoveAction | RuleExpressionAction,
     Field(discriminator="type"),
 ]
 ComponentAction = TypeAdapter(TypedAction)

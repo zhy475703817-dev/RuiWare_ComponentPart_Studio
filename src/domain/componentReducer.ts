@@ -10,6 +10,8 @@ export type ComponentAction =
   | { type: "member.remove"; id: string }
   | { type: "mate.add"; mate: Mate }
   | { type: "port.add"; port: ComponentPort }
+  | { type: "port.remove"; id: string }
+  | { type: "port.rename"; id: string; name: string }
   | { type: "parameter.value"; id: string; value: number | null }
   | { type: "parameter.add"; parameter: import("./component.ts").ComponentParameter }
   | { type: "parameter.remove"; id: string }
@@ -106,8 +108,18 @@ export function componentReducer(document: ComponentDocument, action: ComponentA
       if (!hasInterface(document, action.port.source) || document.ports.some(port => port.id === action.port.id ||
         (port.source.memberId === action.port.source.memberId && port.source.interfaceId === action.port.source.interfaceId))) return document;
       const sourceInterface = getInterface(document, action.port.source);
-      if (!sourceInterface || (action.port.interface && !samePartInterface(action.port.interface, sourceInterface))) return document;
-      return next({ ports: [...document.ports, { ...structuredClone(action.port), interface: structuredClone(sourceInterface) }] });
+      const name = action.port.name.trim();
+      if (!sourceInterface || !name || (action.port.interface && !samePartInterface(action.port.interface, sourceInterface))) return document;
+      return next({ ports: [...document.ports, { ...structuredClone(action.port), name, interface: structuredClone(sourceInterface) }] });
+    }
+    case "port.remove":
+      if (!document.ports.some(port => port.id === action.id)) return document;
+      return next({ ports: document.ports.filter(port => port.id !== action.id) });
+    case "port.rename": {
+      const name = action.name.trim();
+      const port = document.ports.find(item => item.id === action.id);
+      if (!port || !name || port.name === name) return document;
+      return next({ ports: document.ports.map(item => item.id === action.id ? { ...item, name } : item) });
     }
     case "parameter.value":
       if (!document.parameters.some(parameter => parameter.id === action.id && parameter.value !== action.value)) return document;

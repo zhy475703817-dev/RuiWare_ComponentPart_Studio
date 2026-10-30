@@ -131,8 +131,8 @@ class ComponentTests(unittest.TestCase):
         with TestClient(create_app(dist_dir=None)) as client:
             data = self.create(client)["document"]
         data["assembly"]["members"] = [member("member.a"), member("member.b")]
-        data["assembly"]["members"][0]["parameterDefinitions"] = [{"id": "length", "label": "长度", "unit": "mm", "valueType": "integer", "minimum": 100, "maximum": 5000, "default": 2400}]
-        data["assembly"]["members"][0]["interfaces"][0].update({
+        data["assembly"]["members"][1]["parameterDefinitions"] = [{"id": "length", "label": "长度", "unit": "mm", "valueType": "integer", "minimum": 100, "maximum": 5000, "default": 2400}]
+        data["assembly"]["members"][1]["interfaces"][0].update({
             "interfaceType": "locating", "locatingType": "planeContact", "declarationMode": "featureDerived",
             "geometryRefs": ["leftFace"], "parameterRefs": ["sectionWidth"], "description": "左端连接面", "required": True,
             "region": {"mode": "rectangle", "uSpanExpression": "sectionWidth", "vSpanExpression": "sectionHeight", "countExpression": "holeCount"},
@@ -228,6 +228,56 @@ console.log(JSON.stringify({document:result,checks:validateComponent(result),exp
         stale_data["ports"][0]["interface"]["name"] = "旧名称"
         stale_document = type(document).model_validate(stale_data)
         self.assertEqual(next(check for check in validate_component(stale_document) if check["id"] == "ports")["status"], "fail")
+
+    def test_component_port_can_be_removed_and_renamed(self):
+        from backend.app.components.models import ComponentAction
+        from backend.app.components.service import ComponentError, apply_action, create_component_document, serialize_component
+
+        document = apply_action(create_component_document(), ComponentAction.validate_python({"type": "member.add", "member": member("upright")}))
+        document = apply_action(document, ComponentAction.validate_python({
+            "type": "port.add", "port": {"id": "port.one", "name": "立柱-左端面", "source": source("upright"), "tags": []},
+        }))
+        document = apply_action(document, ComponentAction.validate_python({"type": "port.rename", "id": "port.one", "name": "  安装接口  "}))
+        self.assertEqual(document.ports[0].name, "安装接口")
+        self.assertEqual(serialize_component(document)["stages"]["ports"][0]["name"], "安装接口")
+
+        with self.assertRaises(ComponentError) as invalid:
+            apply_action(document, ComponentAction.validate_python({"type": "port.rename", "id": "port.one", "name": "   "}))
+        self.assertEqual(invalid.exception.code, "INVALID_PORT_NAME")
+        document = apply_action(document, ComponentAction.validate_python({"type": "port.remove", "id": "port.one"}))
+        self.assertEqual(document.ports, [])
+
+    def test_port_selection_actions_persist_and_export(self):
+        with TestClient(create_app(dist_dir=None)) as client:
+            draft = self.create(client)
+            draft = self.action(client, draft, {"type": "member.add", "member": member("upright")}).json()
+            draft = self.action(client, draft, {"type": "member.add", "member": member("beam")}).json()
+            first_port = {"id": "port.one", "name": "立柱-左端面", "source": source("upright"), "tags": []}
+            second_port = {"id": "port.two", "name": "横梁-左端面", "source": source("beam"), "tags": []}
+            draft = self.action(client, draft, {"type": "port.add", "port": first_port}).json()
+            draft = self.action(client, draft, {"type": "port.add", "port": second_port}).json()
+            duplicate = self.action(client, draft, {"type": "port.add", "port": {**first_port, "id": "port.duplicate"}})
+            self.assertEqual(duplicate.status_code, 422)
+
+            invalid_name = self.action(client, draft, {"type": "port.rename", "id": "port.one", "name": "   "})
+            self.assertEqual(invalid_name.status_code, 422)
+            self.assertEqual(invalid_name.json()["error"]["code"], "INVALID_PORT_NAME")
+            draft = self.action(client, draft, {"type": "port.rename", "id": "port.one", "name": "  安装接口  "}).json()
+
+            persisted = client.get(f"/api/component-drafts/{draft['draftId']}").json()
+            exported = client.get(f"/api/component-drafts/{draft['draftId']}/export").json()
+            self.assertEqual([port["name"] for port in persisted["document"]["ports"]], ["安装接口", "横梁-左端面"])
+            self.assertEqual([port["name"] for port in exported["stages"]["ports"]], ["安装接口", "横梁-左端面"])
+            self.assertEqual(next(check for check in draft["checks"] if check["id"] == "ports")["status"], "pass")
+
+            removed = self.action(client, draft, {"type": "port.remove", "id": "port.one"})
+            self.assertEqual(removed.status_code, 200, removed.text)
+            self.assertEqual([port["id"] for port in removed.json()["document"]["ports"]], ["port.two"])
+            self.assertEqual(next(check for check in removed.json()["checks"] if check["id"] == "ports")["status"], "pass")
+            removed = self.action(client, removed.json(), {"type": "port.remove", "id": "port.two"})
+            self.assertEqual(removed.status_code, 200, removed.text)
+            self.assertEqual(removed.json()["document"]["ports"], [])
+            self.assertEqual(next(check for check in removed.json()["checks"] if check["id"] == "ports")["status"], "fail")
 
     def test_clearing_component_parameter_removes_member_override(self):
         from backend.app.components.models import ComponentAction

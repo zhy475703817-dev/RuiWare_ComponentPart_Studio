@@ -287,6 +287,31 @@ test('添加连接及继承接口使用结构化引用并拒绝不存在的来�
   assert.equal(componentReducer(draft, { type: 'port.add', port: { ...port, id: 'again' } }), draft);
 });
 
+test('对外接口可按成员逐项开放、取消和改名', () => {
+  let draft = createComponentDocument();
+  const first = member('member.a');
+  const second = member('member.b');
+  first.name = '横梁';
+  second.name = '立柱';
+  draft.assembly.members = [first, second];
+  const firstPort = { id: 'port.a', name: '横梁-左端面', source: source('member.a'), tags: ['end-face'] };
+  const secondPort = { id: 'port.b', name: '立柱-左端面', source: source('member.b'), tags: ['end-face'] };
+
+  draft = componentReducer(draft, { type: 'port.add', port: firstPort });
+  draft = componentReducer(draft, { type: 'port.add', port: secondPort });
+  assert.deepEqual(draft.ports.map(port => port.source.memberId), ['member.a', 'member.b']);
+  assert.equal(componentReducer(draft, { type: 'port.add', port: { ...secondPort, id: 'port.duplicate' } }), draft);
+
+  const renamed = componentReducer(draft, { type: 'port.rename', id: 'port.b', name: '  安装接口  ' });
+  assert.equal(renamed.ports[1].name, '安装接口');
+  assert.equal(componentReducer(renamed, { type: 'port.rename', id: 'port.b', name: '   ' }), renamed);
+  assert.equal(JSON.parse(serializeComponent(renamed)).stages.ports[1].name, '安装接口');
+
+  const removed = componentReducer(renamed, { type: 'port.remove', id: 'port.a' });
+  assert.deepEqual(removed.ports.map(port => port.id), ['port.b']);
+  assert.equal(componentReducer(removed, { type: 'port.remove', id: 'missing' }), removed);
+});
+
 test('基础验证检查固定版本、来源、绑定和数值，未执行能力不会显示通过', () => {
   let draft = createComponentDocument();
   draft.assembly.members = [member('a')];
