@@ -68,6 +68,40 @@ class ComponentTests(unittest.TestCase):
             self.assertEqual(restored.json()["document"]["parameters"][0]["value"], 3200)
             self.assertEqual(client.get("/api/component-drafts/missing").status_code, 404)
 
+    def test_constraint_and_dimension_based_composition_rules_persist_separately(self):
+        with TestClient(create_app(dist_dir=None)) as client:
+            draft = self.create(client)
+            self.assertFalse(any(rule.get("kind") == "composition" for rule in draft["document"]["rules"]))
+            constraint = self.action(client, draft, {"type": "rule.add", "rule": {
+                "id": "clearance", "kind": "constraint", "label": "安装间隙", "expression": "间隙 >= 20 mm",
+            }})
+            self.assertEqual(constraint.status_code, 200, constraint.text)
+            composition = self.action(client, constraint.json(), {"type": "rule.add", "rule": {
+                "id": "width-spacing", "kind": "composition", "label": "宽度变化时保持间距", "expression": "组件总宽变化时，组件间距保持 20 mm",
+            }})
+            self.assertEqual(composition.status_code, 200, composition.text)
+            rules = composition.json()["document"]["rules"]
+            self.assertEqual([(rule["kind"], rule["label"]) for rule in rules[-2:]], [("constraint", "安装间隙"), ("composition", "宽度变化时保持间距")])
+            removed = self.action(client, composition.json(), {"type": "rule.remove", "id": "clearance"})
+            self.assertEqual(removed.status_code, 200, removed.text)
+            self.assertEqual([rule["id"] for rule in removed.json()["document"]["rules"]], ["rule-1", "width-spacing"])
+
+    def test_member_add_suggests_length_width_and_height_bindings(self):
+        with TestClient(create_app(dist_dir=None)) as client:
+            draft = self.create(client)
+            sized = member("sized")
+            sized["parameterDefinitions"] = [
+                {"id": "length", "label": "零件长度", "unit": "mm", "valueType": "number", "minimum": 1000, "maximum": 6000, "default": 2400},
+                {"id": "width", "label": "零件宽度", "unit": "mm", "valueType": "number", "minimum": 100, "maximum": 3000, "default": 600},
+                {"id": "height", "label": "零件高度", "unit": "mm", "valueType": "number", "minimum": 300, "maximum": 8000, "default": 1800},
+            ]
+            added = self.action(client, draft, {"type": "member.add", "member": sized})
+            self.assertEqual(added.status_code, 200, added.text)
+            bindings = added.json()["document"]["bindings"]
+            self.assertEqual([(binding["parameterId"], binding["memberParameterId"]) for binding in bindings], [
+                ("componentLength", "length"), ("componentWidth", "width"), ("componentHeight", "height"),
+            ])
+
     def test_invalid_actions_do_not_mutate_and_pending_is_not_pass(self):
         with TestClient(create_app(dist_dir=None)) as client:
             draft = self.create(client)

@@ -74,7 +74,7 @@ export type ComponentSlot = { id: string; name: string; memberId: string | null;
 export type ComponentParameter = { id: string; label: string; value: number | null; unit: string; min: number; max: number };
 export type ParameterBinding = { id: string; parameterId: string; memberId: string; memberParameterId: string };
 export type ComponentPattern = { id: string; label: string; memberIds: string[]; countParameterId: string; spacingParameterId: string; axis: "x" | "y" | "z" };
-export type ComponentRule = { id: string; expression: string };
+export type ComponentRule = { id: string; kind?: "constraint" | "composition"; label?: string; expression: string };
 export type ConnectionType = "螺栓连接" | "焊接" | "卡扣连接" | "插接" | "铆接" | "胶接" | "型材槽连接" | "销钉连接" | "插接/卡扣" | "自定义";
 export type EvidenceFile = { id: string; fileName: string; mediaType: string; size: number; sha256: string; dataUrl?: string | null };
 export type ConnectionMethod = { mode: "preset" | "custom"; value: string; details: string };
@@ -135,7 +135,7 @@ export function createComponentDocument(): ComponentDocument {
       { id: "componentWidth", label: "组件总宽", value: 600, unit: "mm", min: 100, max: 3000 },
       { id: "componentHeight", label: "组件总高", value: 1800, unit: "mm", min: 300, max: 8000 },
     ],
-    rules: [{ id: "rule-1", expression: "组件总长必须在 1000~6000 mm 范围内" }],
+    rules: [{ id: "rule-1", kind: "constraint", label: "工程限制", expression: "组件总长必须在 1000~6000 mm 范围内" }],
   };
 }
 
