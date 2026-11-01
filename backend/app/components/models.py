@@ -153,6 +153,8 @@ class ComponentPattern(ComponentModel):
 
 class ComponentRule(ComponentModel):
     id: str
+    kind: Literal["constraint", "composition"] = "constraint"
+    label: str = ""
     expression: str
 
 
@@ -316,9 +318,19 @@ class RuleExpressionAction(ComponentModel):
     expression: str
 
 
+class RuleAddAction(ComponentModel):
+    type: Literal["rule.add"]
+    rule: ComponentRule
+
+
+class RuleRemoveAction(ComponentModel):
+    type: Literal["rule.remove"]
+    id: str
+
+
 TypedAction = Annotated[
     ResetAction | DefinitionPatchAction | MemberAddAction | MemberPatchAction | MemberRemoveAction
-    | MateAddAction | PortAddAction | ParameterValueAction | ParameterAddAction | ParameterRemoveAction | BindingSetAction | PatternAddAction | PatternRemoveAction | RuleExpressionAction,
+    | MateAddAction | PortAddAction | ParameterValueAction | ParameterAddAction | ParameterRemoveAction | BindingSetAction | PatternAddAction | PatternRemoveAction | RuleAddAction | RuleRemoveAction | RuleExpressionAction,
     Field(discriminator="type"),
 ]
 ComponentAction = TypeAdapter(TypedAction)

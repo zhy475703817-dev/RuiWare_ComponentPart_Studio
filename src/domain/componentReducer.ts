@@ -16,6 +16,8 @@ export type ComponentAction =
   | { type: "binding.set"; binding: ParameterBinding | null; id: string }
   | { type: "pattern.add"; pattern: ComponentPattern }
   | { type: "pattern.remove"; id: string }
+  | { type: "rule.add"; rule: import("./component.ts").ComponentRule }
+  | { type: "rule.remove"; id: string }
   | { type: "rule.expression"; id: string; expression: string };
 
 export function componentReducer(document: ComponentDocument, action: ComponentAction): ComponentDocument {
@@ -41,7 +43,7 @@ export function componentReducer(document: ComponentDocument, action: ComponentA
           const aliases = parameter.id.toLowerCase().includes("length") || parameter.label.includes("长") ? dimensionAliases.length
             : parameter.id.toLowerCase().includes("width") || parameter.label.includes("宽") ? dimensionAliases.width
               : parameter.id.toLowerCase().includes("height") || parameter.label.includes("高") ? dimensionAliases.height : [];
-          const definition = member.parameterDefinitions?.find(item => aliases.some(alias => item.id.toLowerCase() === alias.toLowerCase() || item.label.toLowerCase() === alias.toLowerCase()) && item.unit === parameter.unit && ["number", "integer"].includes(item.valueType));
+          const definition = member.parameterDefinitions?.find(item => aliases.some(alias => item.id.toLowerCase().includes(alias.toLowerCase()) || item.label.toLowerCase().includes(alias.toLowerCase())) && item.unit === parameter.unit && ["number", "integer"].includes(item.valueType));
           if (!definition) return parameter;
           if (!existingBindings.some(binding => binding.parameterId === parameter.id && binding.memberId === member.id && binding.memberParameterId === definition.id)) {
             autoBindings.push({ id: `${member.id}:${parameter.id}:${definition.id}`, parameterId: parameter.id, memberId: member.id, memberParameterId: definition.id });
@@ -65,6 +67,15 @@ export function componentReducer(document: ComponentDocument, action: ComponentA
           if (value === undefined || !untouched) return parameter;
           return { ...parameter, value: Math.min(parameter.max, Math.max(parameter.min, value)) };
         });
+        member.parameterValues = { ...member.parameterValues };
+        for (const binding of autoBindings) {
+          const parameter = parameters.find(item => item.id === binding.parameterId);
+          const definition = member.parameterDefinitions?.find(item => item.id === binding.memberParameterId);
+          if (!parameter || parameter.value === null || !definition) continue;
+          const minimum = Math.max(parameter.min, definition.minimum ?? -Infinity);
+          const maximum = Math.min(parameter.max, definition.maximum ?? Infinity);
+          if (minimum <= maximum) member.parameterValues[definition.id] = Math.min(maximum, Math.max(minimum, definition.valueType === "integer" ? Math.round(parameter.value) : parameter.value));
+        }
         return next({ assembly: { ...document.assembly, members }, bindings: [...existingBindings, ...autoBindings], parameters });
       }
     case "member.patch":
@@ -150,6 +161,12 @@ export function componentReducer(document: ComponentDocument, action: ComponentA
     case "pattern.remove":
       if (!document.patterns.some(pattern => pattern.id === action.id)) return document;
       return next({ patterns: document.patterns.filter(pattern => pattern.id !== action.id) });
+    case "rule.add":
+      if (!action.rule.id.trim() || !action.rule.expression.trim() || document.rules.some(rule => rule.id === action.rule.id)) return document;
+      return next({ rules: [...document.rules, { ...structuredClone(action.rule), kind: action.rule.kind || "constraint" }] });
+    case "rule.remove":
+      if (!document.rules.some(rule => rule.id === action.id)) return document;
+      return next({ rules: document.rules.filter(rule => rule.id !== action.id) });
     case "binding.set": {
       const previous = document.bindings.find(binding => binding.id === action.id);
       if (action.binding === null) {

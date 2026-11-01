@@ -51,7 +51,7 @@ function normalizeDraftDocument(document: ComponentDocument): ComponentDocument 
   const inferred = inferEnvelopeDimensions(sourceParameters, members, patterns);
   const parameters = [...sourceParameters];
   const dimensionParameters = legacyDimensionSpecs.map(spec => {
-    const existing = parameters.find(parameter => spec.aliases.some(alias => parameter.id?.toLowerCase() === alias.toLowerCase() || parameter.label?.toLowerCase() === alias.toLowerCase()));
+    const existing = parameters.find(parameter => spec.aliases.some(alias => parameter.id?.toLowerCase().includes(alias.toLowerCase()) || parameter.label?.toLowerCase().includes(alias.toLowerCase())));
     const inferredValue = inferred[spec.axis];
     const value = typeof existing?.value === "number" && Number.isFinite(existing.value) ? existing.value : Math.min(spec.max, Math.max(spec.min, inferredValue ?? spec.fallback));
     if (existing) {
@@ -66,7 +66,7 @@ function normalizeDraftDocument(document: ComponentDocument): ComponentDocument 
   const bindings = Array.isArray(document.bindings) ? [...document.bindings] : [];
   for (const member of members) {
     for (const spec of legacyDimensionSpecs) {
-      const definition = member.parameterDefinitions?.find(item => spec.aliases.some(alias => item.id?.toLowerCase() === alias.toLowerCase() || item.label?.toLowerCase() === alias.toLowerCase()) && item.unit === "mm" && ["number", "integer"].includes(item.valueType));
+      const definition = member.parameterDefinitions?.find(item => spec.aliases.some(alias => item.id?.toLowerCase().includes(alias.toLowerCase()) || item.label?.toLowerCase().includes(alias.toLowerCase())) && item.unit === "mm" && ["number", "integer"].includes(item.valueType));
       const parameter = dimensionParameters.find(item => item.id === spec.id || spec.aliases.some(alias => item.id?.toLowerCase() === alias.toLowerCase() || item.label?.toLowerCase() === alias.toLowerCase()));
       const lowerBound = Math.max(parameter?.min ?? Number.POSITIVE_INFINITY, definition?.minimum ?? Number.POSITIVE_INFINITY);
       const upperBound = Math.min(parameter?.max ?? Number.NEGATIVE_INFINITY, definition?.maximum ?? Number.NEGATIVE_INFINITY);
@@ -140,8 +140,9 @@ export class SharedDraftController {
       const next = componentReducer(projection, action);
       const missingTarget = ((action.type === "member.patch" || action.type === "member.remove") && !projection.assembly.members.some(item => item.id === action.id))
         || (action.type === "parameter.value" && !projection.parameters.some(item => item.id === action.id))
-        || (action.type === "rule.expression" && !projection.rules.some(item => item.id === action.id));
-      const invalidAddition = ["member.add", "mate.add", "port.add"].includes(action.type) && next === projection;
+        || (action.type === "rule.expression" && !projection.rules.some(item => item.id === action.id))
+        || (action.type === "rule.remove" && !projection.rules.some(item => item.id === action.id));
+      const invalidAddition = ["member.add", "mate.add", "port.add", "rule.add"].includes(action.type) && next === projection;
       if (missingTarget || invalidAddition) {
         // Keep the full visible local document for download; reprojecting would silently drop queued additions.
         this.publish({ status: "conflict", dirty: true, error: "Agent 修改影响了后续操作的对象或引用，无法直接合并。本页完整输入已保留，请下载本地副本后核对差异。" });

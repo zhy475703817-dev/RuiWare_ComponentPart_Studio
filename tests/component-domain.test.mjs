@@ -30,6 +30,33 @@ test('定义、参数及规则编辑共用一份不可变草稿并增加修订',
   assert.deepEqual(componentReducer(draft, { type: 'reset' }), createComponentDocument());
 });
 
+test('组件间构成规则默认为空，并与其他限制条件独立保存和删除', () => {
+  let draft = createComponentDocument();
+  assert.equal(draft.rules.some(rule => rule.kind === 'composition'), false);
+  draft = componentReducer(draft, { type: 'rule.add', rule: { id: 'clearance', kind: 'constraint', label: '安装间隙', expression: '间隙 >= 20 mm' } });
+  draft = componentReducer(draft, { type: 'rule.add', rule: { id: 'width-spacing', kind: 'composition', label: '宽度变化时保持间距', expression: '组件总宽变化时，组件间距保持 20 mm' } });
+  const exported = JSON.parse(serializeComponent(draft));
+  assert.equal(exported.stages.rules.find(rule => rule.id === 'width-spacing').kind, 'composition');
+  assert.equal(exported.stages.rules.find(rule => rule.id === 'clearance').kind, 'constraint');
+  draft = componentReducer(draft, { type: 'rule.remove', id: 'clearance' });
+  assert.equal(draft.rules.some(rule => rule.id === 'clearance'), false);
+  assert.equal(draft.rules.some(rule => rule.id === 'width-spacing'), true);
+});
+
+test('新增成员时按长宽高名称默认绑定，并允许移除尺寸来源', () => {
+  const boundMember = { ...member('sized'), parameterDefinitions: [
+    { id: 'length', label: '零件长度', unit: 'mm', valueType: 'number', minimum: 1000, maximum: 6000, default: 2400 },
+    { id: 'width', label: '零件宽度', unit: 'mm', valueType: 'number', minimum: 100, maximum: 3000, default: 600 },
+    { id: 'height', label: '零件高度', unit: 'mm', valueType: 'number', minimum: 300, maximum: 8000, default: 1800 },
+  ] };
+  let draft = componentReducer(createComponentDocument(), { type: 'member.add', member: boundMember });
+  assert.deepEqual(draft.bindings.map(binding => binding.parameterId), ['componentLength', 'componentWidth', 'componentHeight']);
+  assert.deepEqual(draft.assembly.members[0].parameterValues, { length: 2400, width: 600, height: 1800 });
+  const lengthBinding = draft.bindings.find(binding => binding.parameterId === 'componentLength');
+  draft = componentReducer(draft, { type: 'binding.set', id: lengthBinding.id, binding: null });
+  assert.equal(draft.bindings.some(binding => binding.parameterId === 'componentLength'), false);
+});
+
 test('高度指标保留组件参数值，不从其他参数推算几何高度', () => {
   const metrics = deriveComponentMetrics([
     { id: 'componentHeight', label: '组件总高', value: 1800, unit: 'mm', min: 500, max: 6000 },
@@ -52,7 +79,7 @@ test('体积由长宽高计算，重量只在存在材料信息时计算', () =>
   ];
   const withoutMaterial = deriveComponentMetrics(dimensions, [], [member('a')]);
   assert.equal(withoutMaterial.volume.label, '包络体积');
-  assert.equal(withoutMaterial.volume.value, '100,000 mm³');
+  assert.equal(withoutMaterial.volume.value, '0.000 m³');
   assert.match(withoutMaterial.volume.note, /不代表材料实体体积/);
   assert.equal(withoutMaterial.weight.value, '未配置');
 
@@ -65,11 +92,11 @@ test('体积由长宽高计算，重量只在存在材料信息时计算', () =>
     { id: 'density', label: '材料密度', unit: 'kg/m3', valueType: 'number', minimum: 7000, maximum: 9000, default: 7850 },
   ] };
   const withSolidProperties = deriveComponentMetrics(dimensions, [], [solidPart]);
-  assert.equal(withSolidProperties.weight.value, '0.79 kg');
+  assert.equal(withSolidProperties.weight.value, '0.785 kg');
 
   const weighedMember = { ...member('b'), parameterValues: { mass: 500 }, parameterDefinitions: [{ id: 'mass', label: '质量', unit: 'g', valueType: 'number', minimum: 0, maximum: 1000, default: 500 }] };
   const withMass = deriveComponentMetrics(dimensions, [], [weighedMember]);
-  assert.equal(withMass.weight.value, '0.5 kg');
+  assert.equal(withMass.weight.value, '0.500 kg');
 });
 
 test('组件参数绑定会继承成员范围并把值同步到成员参数', () => {
