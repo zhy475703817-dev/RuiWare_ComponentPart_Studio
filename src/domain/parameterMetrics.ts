@@ -28,6 +28,11 @@ function formatNumber(value: number, unit = ""): string {
   return `${value.toLocaleString("zh-CN", { maximumFractionDigits: digits })}${unit}`;
 }
 
+function formatFixed3(value: number, unit = ""): string {
+  if (!Number.isFinite(value)) return "不可用";
+  return `${value.toLocaleString("zh-CN", { minimumFractionDigits: 3, maximumFractionDigits: 3 })}${unit}`;
+}
+
 function numericMemberValue(member: ComponentMember, keys: string[]): number | undefined {
   const direct = Object.entries(member.parameterValues).find(([id, value]) => keys.some(key => id.toLowerCase() === key.toLowerCase()) && typeof value === "number" && Number.isFinite(value));
   if (direct && typeof direct[1] === "number") return direct[1];
@@ -168,8 +173,8 @@ export function deriveComponentMetrics(parameters: ComponentParameter[], binding
     length: parameterMetric(parameters, aliases.length, "长度参数", bindings, members, patterns),
     width: parameterMetric(parameters, aliases.width, "宽度参数", bindings, members, patterns),
     height: parameterMetric(parameters, aliases.height, "高度参数", bindings, members, patterns),
-    volume: computedVolume !== undefined && members.length > 0 ? { label: "包络体积", value: formatNumber(computedVolume, " mm³"), note: "根据组件总长 × 总宽 × 总高计算；表示外形包络，不代表材料实体体积" } : { label: "包络体积", value: "未配置", note: "需要已放置成员及组件长、宽、高参数才能自动推算" },
-    weight: computedPartMass !== undefined ? { label: "重量 / 质量参数", value: formatNumber(computedPartMass, " kg"), note: "根据组件成员重量或零件实体体积与材料密度汇总" } : { label: "重量 / 质量参数", value: "未配置", note: "需要零部件重量，或零件实体体积与材料密度；包络体积不用于估算重量" },
+    volume: computedVolume !== undefined && members.length > 0 ? { label: "包络体积", value: formatFixed3(computedVolume / 1_000_000_000, " m³"), note: "根据组件总长 × 总宽 × 总高换算为立方米；表示外形包络，不代表材料实体体积" } : { label: "包络体积", value: "未配置", note: "需要已放置成员及组件长、宽、高参数才能自动推算" },
+    weight: computedPartMass !== undefined ? { label: "重量 / 质量参数", value: formatFixed3(computedPartMass, " kg"), note: "根据组件成员重量或零件实体体积与材料密度汇总" } : { label: "重量 / 质量参数", value: "未配置", note: "需要零部件重量，或零件实体体积与材料密度；包络体积不用于估算重量" },
   };
 }
 

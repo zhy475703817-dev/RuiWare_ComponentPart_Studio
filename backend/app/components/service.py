@@ -32,9 +32,73 @@ def create_component_document() -> ComponentDocument:
             "designConstraints": "", "evidence": [],
         },
         "assembly": {"members": [], "mates": []}, "ports": [], "slots": [], "bindings": [], "patterns": [],
-        "parameters": [{"id": "componentLength", "label": "组件总长", "value": 2400, "unit": "mm", "min": 1000, "max": 6000}],
-        "rules": [{"id": "rule-1", "expression": "组件总长必须在 1000~6000 mm 范围内"}],
+        "parameters": [
+            {"id": "componentLength", "label": "组件总长", "value": 2400, "unit": "mm", "min": 1000, "max": 6000},
+            {"id": "componentWidth", "label": "组件总宽", "value": 600, "unit": "mm", "min": 100, "max": 3000},
+            {"id": "componentHeight", "label": "组件总高", "value": 1800, "unit": "mm", "min": 300, "max": 8000},
+        ],
+        "rules": [{"id": "rule-1", "kind": "constraint", "label": "工程限制", "expression": "组件总长必须在 1000~6000 mm 范围内"}],
     })
+
+
+DIMENSION_ALIASES = {
+    "length": ("componentLength", "length", "overallLength", "总长", "长度"),
+    "width": ("componentWidth", "width", "overallWidth", "总宽", "宽度"),
+    "height": ("componentHeight", "height", "overallHeight", "总高", "高度"),
+}
+
+
+def _numeric_member_value(member: dict, aliases: tuple[str, ...]) -> float | None:
+    for identifier, value in member.get("parameterValues", {}).items():
+        if identifier.lower() in {alias.lower() for alias in aliases} and isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value):
+            return float(value)
+    for definition in member.get("parameterDefinitions", []):
+        if not any(definition.get(key, "").lower() in {alias.lower() for alias in aliases} for key in ("id", "label")):
+            continue
+        value = member.get("parameterValues", {}).get(definition["id"], definition.get("default"))
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value):
+            return float(value)
+    return None
+
+
+def _member_extent(member: dict, axis: int) -> tuple[float, float] | None:
+    axes = (DIMENSION_ALIASES["length"], DIMENSION_ALIASES["width"], DIMENSION_ALIASES["height"])
+    dimensions = [_numeric_member_value(member, aliases) for aliases in axes]
+    if dimensions[axis] is None:
+        return None
+    half = [max(0.0, value) / 2 if value is not None else 0.0 for value in dimensions]
+    x, y, z = member.get("rotation", [0, 0, 0])
+    a, b, c, d, e, f = math.cos(x), math.sin(x), math.cos(y), math.sin(y), math.cos(z), math.sin(z)
+    rotation = (
+        (c * e, -c * f, d),
+        (a * f + b * d * e, -a * e + b * d * f, -b * c),
+        (b * f - a * d * e, b * e + a * d * f, a * c),
+    )
+    radius = sum(abs(factor) * half[index] for index, factor in enumerate(rotation[axis]))
+    center = float(member.get("position", [0, 0, 0])[axis])
+    return center - radius, center + radius
+
+
+def _infer_envelope_dimensions(parameters: list[dict], members: list[dict], patterns: list[dict]) -> dict[str, float | None]:
+    expanded = []
+    by_id = {parameter["id"]: parameter for parameter in parameters}
+    for member in members:
+        expanded.append(member)
+        for pattern in patterns:
+            if member["id"] not in pattern["memberIds"]:
+                continue
+            count = max(1, round(by_id.get(pattern["countParameterId"], {}).get("value") or 1))
+            spacing = by_id.get(pattern["spacingParameterId"], {}).get("value") or 0
+            axis = {"x": 0, "y": 1, "z": 2}[pattern["axis"]]
+            for index in range(1, count):
+                copy = {**member, "position": list(member["position"])}
+                copy["position"][axis] += spacing * index
+                expanded.append(copy)
+    values: list[float | None] = []
+    for axis in range(3):
+        extents = [extent for member in expanded if (extent := _member_extent(member, axis)) is not None]
+        values.append(max(0.0, max(end for _, end in extents) - min(start for start, _ in extents)) if extents else None)
+    return dict(zip(("length", "width", "height"), values))
 
 
 def has_interface(document: ComponentDocument, source: InterfaceSource) -> bool:
@@ -53,7 +117,50 @@ def apply_action(document: ComponentDocument, action: TypedAction) -> ComponentD
     elif action.type == "member.add":
         if any(member.id == action.member.id for member in document.assembly.members):
             raise ComponentError(422, "DUPLICATE_ID")
-        data["assembly"]["members"].append(action.member.model_dump(by_alias=True))
+        previous_inferred = _infer_envelope_dimensions(data["parameters"], data["assembly"]["members"], data["patterns"])
+        member = action.member.model_dump(by_alias=True)
+        data["assembly"]["members"].append(member)
+        existing = {(item["parameterId"], item["memberId"], item["memberParameterId"]) for item in data["bindings"]}
+        for parameter in data["parameters"]:
+            parameter_text = f"{parameter['id']} {parameter['label']}".lower()
+            axis = "length" if "length" in parameter_text or "长" in parameter_text else "width" if "width" in parameter_text or "宽" in parameter_text else "height" if "height" in parameter_text or "高" in parameter_text else None
+            names = DIMENSION_ALIASES.get(axis, ())
+            definition = next((item for item in member.get("parameterDefinitions", [])
+                               if item.get("unit") == parameter["unit"] and item.get("valueType") in ("number", "integer")
+                               and any(alias.lower() in item.get(key, "").lower() for key in ("id", "label") for alias in names)), None)
+            if definition is None:
+                continue
+            if not document.assembly.members and parameter["value"] is not None and isinstance(definition.get("default"), (int, float)) and not isinstance(definition.get("default"), bool):
+                minimum = max(parameter["min"], definition.get("minimum") if definition.get("minimum") is not None else float("-inf"))
+                maximum = min(parameter["max"], definition.get("maximum") if definition.get("maximum") is not None else float("inf"))
+                parameter["value"] = min(maximum, max(minimum, definition["default"]))
+            key = (parameter["id"], member["id"], definition["id"])
+            if key not in existing:
+                data["bindings"].append({"id": f"{member['id']}:{parameter['id']}:{definition['id']}", "parameterId": parameter["id"], "memberId": member["id"], "memberParameterId": definition["id"]})
+                existing.add(key)
+        inferred = _infer_envelope_dimensions(data["parameters"], data["assembly"]["members"], data["patterns"])
+        defaults = {"componentLength": 2400, "componentWidth": 600, "componentHeight": 1800}
+        for parameter in data["parameters"]:
+            parameter_text = f"{parameter['id']} {parameter['label']}".lower()
+            axis = "length" if "length" in parameter_text or "长" in parameter_text else "width" if "width" in parameter_text or "宽" in parameter_text else "height" if "height" in parameter_text or "高" in parameter_text else None
+            value = inferred.get(axis) if axis else None
+            previous_value = previous_inferred.get(axis) if axis else None
+            untouched = defaults.get(parameter["id"]) == parameter["value"] or parameter["value"] is not None and previous_value is not None and abs(previous_value - parameter["value"]) < 1e-8
+            if value is not None and untouched:
+                parameter["value"] = min(parameter["max"], max(parameter["min"], value))
+        member["parameterValues"] = dict(member.get("parameterValues", {}))
+        for binding in data["bindings"]:
+            if binding["memberId"] != member["id"]:
+                continue
+            parameter = next(item for item in data["parameters"] if item["id"] == binding["parameterId"])
+            definition = next(item for item in member.get("parameterDefinitions", []) if item["id"] == binding["memberParameterId"])
+            if parameter["value"] is None:
+                continue
+            minimum = max(parameter["min"], definition.get("minimum") if definition.get("minimum") is not None else float("-inf"))
+            maximum = min(parameter["max"], definition.get("maximum") if definition.get("maximum") is not None else float("inf"))
+            if minimum <= maximum:
+                value = round(parameter["value"]) if definition.get("valueType") == "integer" else parameter["value"]
+                member["parameterValues"][definition["id"]] = min(maximum, max(minimum, value))
     elif action.type in ("member.patch", "member.remove"):
         member = next((member for member in data["assembly"]["members"] if member["id"] == action.id), None)
         if member is None:
@@ -159,6 +266,15 @@ def apply_action(document: ComponentDocument, action: TypedAction) -> ComponentD
         if not any(item["id"] == action.id for item in data["patterns"]):
             raise ComponentError(404, "COMPONENT_ITEM_NOT_FOUND")
         data["patterns"] = [item for item in data["patterns"] if item["id"] != action.id]
+    elif action.type == "rule.add":
+        rule = action.rule.model_dump()
+        if not rule["id"].strip() or not rule["expression"].strip() or any(item["id"] == rule["id"] for item in data["rules"]):
+            raise ComponentError(422, "INVALID_RULE")
+        data["rules"].append(rule)
+    elif action.type == "rule.remove":
+        if not any(item["id"] == action.id for item in data["rules"]):
+            raise ComponentError(404, "COMPONENT_ITEM_NOT_FOUND")
+        data["rules"] = [item for item in data["rules"] if item["id"] != action.id]
     elif action.type in ("parameter.value", "rule.expression"):
         collection, field = ("parameters", "value") if action.type == "parameter.value" else ("rules", "expression")
         item = next((item for item in data[collection] if item["id"] == action.id), None)
