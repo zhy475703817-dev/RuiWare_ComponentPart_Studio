@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import type { ReactNode, RefObject } from "react";
 import { Canvas, useThree } from "@react-three/fiber";
-import { Grid, Line, OrbitControls, TransformControls } from "@react-three/drei";
+import { Grid, Html, Line, OrbitControls, TransformControls } from "@react-three/drei";
 import { AlertTriangle, Boxes, Copy, Eye, Trash2 } from "lucide-react";
 import { BufferAttribute, BufferGeometry, DoubleSide } from "three";
 import { Vector3 as ThreeVector3 } from "three";
@@ -71,6 +71,15 @@ function CompatibleOutline() {
 type ScreenPoint = { x: number; y: number };
 type TooltipSource = "pointer" | "panel" | "hover";
 type MemberTooltip = { memberId: string; point: ScreenPoint; opacity: number; source: TooltipSource; token: number };
+const ModelStatusPortal = createContext<RefObject<HTMLDivElement> | undefined>(undefined);
+
+function ModelStatus({ name, preview }: { name: string; preview: ReturnType<typeof useTemplatePreview> }) {
+  const portal = useContext(ModelStatusPortal);
+  return <Html portal={portal} center style={{ display: preview.loading || preview.error ? "block" : "none" }}><div className="member-model-status" role={preview.error ? "alert" : "status"}>
+    <b>{name}</b><span>{preview.error ? "模型暂时无法显示，请重试" : preview.result ? "正在更新模型…" : "正在加载模型…"}</span>
+    {preview.error && <button type="button" className="ghost" onClick={preview.retry}>重试</button>}
+  </div></Html>;
+}
 
 function DraggableGroup({ member, selected, compatible = false, onSelect, onHover, onMove, onDragStateChange, onPointerSelect, onPointerHover, onPointerHoverEnd, movable = true, children }: { member: ComponentMember; selected: boolean; compatible?: boolean; onSelect: () => void; onHover?: (hovered: boolean) => void; onMove: (position: Vector3) => void; onDragStateChange?: (dragging: boolean) => void; onPointerSelect?: (point: ScreenPoint) => void; onPointerHover?: (point: ScreenPoint) => void; onPointerHoverEnd?: () => void; movable?: boolean; children: (hovered: boolean) => ReactNode }) {
   const groupRef = useRef<Group | null>(null); const [groupObject, setGroupObject] = useState<Group | null>(null); const positionRef = useRef<Vector3>(member.position); const [localPosition, setLocalPosition] = useState<Vector3>(member.position); const [hovered, setHovered] = useState(false);
@@ -99,10 +108,9 @@ function partTemplate(member: ComponentMember): PublishedTemplate {
 function PartMesh({ member, materialColor, position = [0, 0, 0] as Vector3, onSelect, onPointerSelect }: { member: ComponentMember; materialColor?: string; position?: Vector3; onSelect?: () => void; onPointerSelect?: (point: ScreenPoint) => void }) {
   const template = useMemo(() => partTemplate(member), [member.template.publicationId, member.template.templateId, member.template.version, member.template.sha256, member.code, member.name]);
   const preview = useTemplatePreview(template, member.parameterValues);
-  if (!preview.result?.geometry) return null;
-  return <mesh geometry={preview.result.geometry} position={position} rotation={member.rotation} dispose={null} onClick={event => { event.stopPropagation(); onSelect?.(); onPointerSelect?.({ x: event.nativeEvent.clientX, y: event.nativeEvent.clientY }); }}>
+  return <group position={position} rotation={member.rotation}><ModelStatus name={member.name} preview={preview}/>{preview.result && <mesh geometry={preview.result.geometry} dispose={null} onClick={event => { event.stopPropagation(); onSelect?.(); onPointerSelect?.({ x: event.nativeEvent.clientX, y: event.nativeEvent.clientY }); }}>
     <PartMaterial member={member} color={materialColor || "#7394b0"}/>
-  </mesh>;
+  </mesh>}</group>;
 }
 
 function InterfaceMarker({ geometry, item, member, resolvedInterfaces }: { geometry: BufferGeometry | null; item: PartInterface | undefined; member: ComponentMember; resolvedInterfaces?: ResolvedPartInterface[] }) {
@@ -148,9 +156,7 @@ function MemberModel({ member, selected, compatible, selectedInterface, selected
   return <DraggableGroup member={member} selected={selected} compatible={compatible} onSelect={onSelect} onHover={onHover} onMove={onMove} onDragStateChange={onDragStateChange} onPointerSelect={onPointerSelect} onPointerHover={onPointerHover} onPointerHoverEnd={onPointerHoverEnd} movable={!member.patternInstance}>
     {hovered => {
       const color = selected ? "#c89532" : hovered ? "#d9b85f" : compatible ? "#a8cad8" : "#7394b0";
-      return preview.result?.geometry
-        ? <><mesh geometry={preview.result.geometry} dispose={null} onClick={event => { event.stopPropagation(); onSelect(); onPointerSelect?.({ x: event.nativeEvent.clientX, y: event.nativeEvent.clientY }); }}><PartMaterial member={member} color={color}/></mesh><InterfaceMarker geometry={preview.result.geometry} item={selectedItem} member={member} resolvedInterfaces={selectedInterfaceResolved ?? preview.info?.resolvedInterfaces}/></>
-        : <mesh onClick={event => { event.stopPropagation(); onSelect(); onPointerSelect?.({ x: event.nativeEvent.clientX, y: event.nativeEvent.clientY }); }}><boxGeometry args={[160, 80, 60]}/><meshBasicMaterial color={color} transparent={isTransparentMaterial(member)} opacity={isTransparentMaterial(member) ? .45 : 1}/></mesh>;
+      return <><ModelStatus name={member.name} preview={preview}/>{preview.result && <><mesh geometry={preview.result.geometry} dispose={null} onClick={event => { event.stopPropagation(); onSelect(); onPointerSelect?.({ x: event.nativeEvent.clientX, y: event.nativeEvent.clientY }); }}><PartMaterial member={member} color={color}/></mesh><InterfaceMarker geometry={preview.result.geometry} item={selectedItem} member={member} resolvedInterfaces={selectedInterfaceResolved ?? preview.info?.resolvedInterfaces}/></>}</>;
     }}
   </DraggableGroup>;
 }
@@ -174,8 +180,11 @@ function PreviewScene({ members, parameters, bindings, patterns, selectedMemberI
   const renderedMembers = useMemo<VisualMember[]>(() => resolveComponentComposition({ assembly: { members, mates: [] }, parameters, bindings, patterns }, Object.fromEntries(parameters.map(parameter => [parameter.id, parameter.value]))), [members, parameters, bindings, patterns]);
   const screenPosition = useRef(new ThreeVector3());
   const lastPanelSelectionToken = useRef(panelSelectionToken);
+  const lastSelectedMemberId = useRef(selectedMemberId);
   useEffect(() => {
-    if (lastPanelSelectionToken.current === panelSelectionToken) return;
+    const selectionChanged = lastSelectedMemberId.current !== selectedMemberId;
+    lastSelectedMemberId.current = selectedMemberId;
+    if (!selectionChanged && lastPanelSelectionToken.current === panelSelectionToken) return;
     lastPanelSelectionToken.current = panelSelectionToken;
     if (!selectedMemberId || !onScreenSelection) return;
     const member = renderedMembers.find(item => (item.sourceMemberId || item.id) === selectedMemberId);
@@ -197,13 +206,16 @@ function PreviewScene({ members, parameters, bindings, patterns, selectedMemberI
   })}<OrbitControls ref={controls} enabled={cameraEnabled} makeDefault minDistance={radius / 100} maxDistance={radius * 100}/></>;
 }
 
-type Props = { members: ComponentMember[]; parameters?: ComponentParameter[]; bindings?: ParameterBinding[]; patterns?: ComponentPattern[]; mateCount: number; previewTemplate: PublishedTemplate | null; selectedMemberId?: string | null; selectedInterface?: InterfaceSelection | null; selectedInterfaceResolved?: ResolvedPartInterface[]; panelSelectionToken?: number; compatibleMemberIds?: ReadonlySet<string>; onSelectMember?: (id: string | null) => void; onHoverMember?: (id: string | null) => void; onMoveMember?: (id: string, position: Vector3) => void; onCopyMember?: (id: string) => void; onRemoveMember?: (id: string) => void; onDropTemplate?: () => void };
-export function ComponentViewport({ members, parameters = [], bindings = [], patterns = [], mateCount, previewTemplate, selectedMemberId = null, selectedInterface = null, selectedInterfaceResolved, panelSelectionToken = 0, compatibleMemberIds, onSelectMember = () => undefined, onHoverMember, onMoveMember = () => undefined, onCopyMember = () => undefined, onRemoveMember = () => undefined, onDropTemplate = () => undefined }: Props) {
-  const preview = useTemplatePreview(members.length || previewTemplate?.templateKind === "component" ? null : previewTemplate); const loaded = preview.result;
+type Props = { members: ComponentMember[]; parameters?: ComponentParameter[]; bindings?: ParameterBinding[]; patterns?: ComponentPattern[]; mateCount: number; previewTemplate: PublishedTemplate | null; onShowAssembly?: () => void; selectedMemberId?: string | null; selectedInterface?: InterfaceSelection | null; selectedInterfaceResolved?: ResolvedPartInterface[]; panelSelectionToken?: number; compatibleMemberIds?: ReadonlySet<string>; onSelectMember?: (id: string | null) => void; onHoverMember?: (id: string | null) => void; onMoveMember?: (id: string, position: Vector3) => void; onCopyMember?: (id: string) => void; onRemoveMember?: (id: string) => void; onDropTemplate?: () => void };
+export function ComponentViewport({ members, parameters = [], bindings = [], patterns = [], mateCount, previewTemplate, onShowAssembly, selectedMemberId = null, selectedInterface = null, selectedInterfaceResolved, panelSelectionToken = 0, compatibleMemberIds, onSelectMember = () => undefined, onHoverMember, onMoveMember = () => undefined, onCopyMember = () => undefined, onRemoveMember = () => undefined, onDropTemplate = () => undefined }: Props) {
+  const isPreview = previewTemplate !== null;
+  const preview = useTemplatePreview(previewTemplate?.templateKind === "component" ? null : previewTemplate);
+  const loaded = preview.result;
   const hoverHandler = onHoverMember || ((id: string | null) => { if (id) onSelectMember(id); });
   const [tooltip, setTooltip] = useState<MemberTooltip | null>(null);
   const tooltipRef = useRef<typeof tooltip>(null);
   const sceneRef = useRef<HTMLDivElement | null>(null);
+  const statusPortal = useRef<HTMLDivElement>(null!);
   const tooltipTimers = useRef<number[]>([]);
   const tooltipToken = useRef(0);
   const clearTooltipTimers = () => { tooltipTimers.current.forEach(timer => window.clearTimeout(timer)); tooltipTimers.current = []; };
@@ -263,5 +275,42 @@ export function ComponentViewport({ members, parameters = [], bindings = [], pat
   const clearSelection = () => { clearTooltipTimers(); tooltipRef.current = null; setTooltip(null); onHoverMember?.(null); onSelectMember(null); };
   const handleViewportPointerLeave = () => { hoverHandler(null); clearHoverTooltip(); };
   const tooltipMember = tooltip ? members.find(member => member.id === tooltip.memberId) : undefined;
-  return <section className="viewport" aria-label="组件三维视图" tabIndex={0} onPointerLeave={handleViewportPointerLeave} onDragOver={event => { if (event.dataTransfer.types.includes("text/plain")) event.preventDefault(); }} onDrop={event => { if (event.dataTransfer.types.includes("text/plain")) { event.preventDefault(); onDropTemplate(); } }} onKeyDown={event => { if (!selectedMemberId) return; if (event.key === "Delete" || event.key === "Backspace") { event.preventDefault(); onRemoveMember(selectedMemberId); } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "d") { event.preventDefault(); onCopyMember(selectedMemberId); } }}><div className="viewport-toolbar"><button className="tool active" type="button"><Eye size={15}/>预览</button><span>从左侧拖入零部件 · 选择后使用操作轴移动 · 滚轮缩放</span>{selectedMemberId && <><button className="tool" type="button" title="复制成员 (Ctrl/Cmd+D)" aria-label="复制选中成员" onClick={() => onCopyMember(selectedMemberId)}><Copy size={14}/></button><button className="tool" type="button" title="删除选中成员 (Delete)" aria-label="删除选中成员" onClick={() => onRemoveMember(selectedMemberId)}><Trash2 size={14}/></button></>}<span className="view-status">{members.length} 个成员 · {patterns.length ? `${patterns.length} 条构成规则` : `${mateCount} 个连接`}</span></div><div className="viewport-scene" ref={sceneRef}><Canvas camera={{ position: [7, 5, 7], up: [0, 0, 1], fov: 42 }} onPointerMissed={clearSelection}><color attach="background" args={["#f5f7f9"]}/><ambientLight intensity={1.8}/><directionalLight position={[4, 6, 5]} intensity={2}/><PreviewScene members={members} parameters={parameters} bindings={bindings} patterns={patterns} selectedMemberId={selectedMemberId} selectedInterface={selectedInterface} selectedInterfaceResolved={selectedInterfaceResolved} panelSelectionToken={panelSelectionToken} compatibleMemberIds={compatibleMemberIds} onSelectMember={onSelectMember} onHoverMember={hoverHandler} onPointerSelect={handlePointerSelect} onPointerHover={handlePointerHover} onPointerHoverEnd={handlePointerHoverEnd} onScreenSelection={handleScreenSelection} onClearSelection={clearSelection} onMoveMember={onMoveMember} geometry={loaded?.geometry || null}/></Canvas>{tooltip && tooltipMember && <div className="viewport-tooltip" style={{ left: tooltip.point.x, top: tooltip.point.y, opacity: tooltip.opacity }}>{tooltipMember.name}</div>}</div>{!loaded && !members.length && <div className="empty-overlay" role="status"><Boxes size={30}/><b>{previewTemplate ? previewTemplate.name : "浏览已发布零部件"}</b><span>{preview.error || (previewTemplate ? "正在准备模型…" : "点击左侧模板预览零件")}</span>{preview.error && <><AlertTriangle size={18}/><button type="button" className="ghost" onClick={preview.retry}>重试</button></>}</div>}{members.length > 0 && <div className="preview-caption" role="status"><b>组件成员</b><span>选中成员后拖动操作轴可调整位置</span></div>}</section>;
+  return <section className="viewport" aria-label="组件三维视图" tabIndex={0} onPointerLeave={handleViewportPointerLeave}
+    onDragOver={event => { if (event.dataTransfer.types.includes("text/plain")) event.preventDefault(); }}
+    onDrop={event => { if (event.dataTransfer.types.includes("text/plain")) { event.preventDefault(); onDropTemplate(); } }}
+    onKeyDown={event => {
+      if (isPreview || !selectedMemberId || (event.target instanceof HTMLElement && event.target.closest("input,textarea,select,button"))) return;
+      if (event.key === "Delete" || event.key === "Backspace") { event.preventDefault(); onRemoveMember(selectedMemberId); }
+      else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "d") { event.preventDefault(); onCopyMember(selectedMemberId); }
+    }}>
+    <div className="viewport-toolbar">
+      <button className={`tool ${!isPreview ? "active" : ""}`} type="button" onClick={onShowAssembly}><Boxes size={15}/>当前组件</button>
+      {isPreview && <span className="tool active"><Eye size={15}/>模板预览</span>}
+      <span>{isPreview ? "预览不会修改当前组件" : "选择成员后使用操作轴移动 · 滚轮缩放"}</span>
+      {!isPreview && selectedMemberId && <>
+        <button className="tool" type="button" title="复制成员 (Ctrl/Cmd+D)" aria-label="复制选中成员" onClick={() => onCopyMember(selectedMemberId)}><Copy size={14}/></button>
+        <button className="tool" type="button" title="删除成员 (Delete)" aria-label="删除选中成员" onClick={() => onRemoveMember(selectedMemberId)}><Trash2 size={14}/></button>
+      </>}
+      <span className="view-status">{members.length} 个成员 · {patterns.length ? `${patterns.length} 条构成规则` : `${mateCount} 个连接`}</span>
+    </div>
+    <div className="viewport-scene" ref={sceneRef}>
+      <ModelStatusPortal.Provider value={statusPortal}><Canvas camera={{ position: [7, 5, 7], up: [0, 0, 1], fov: 42 }} onPointerMissed={clearSelection}>
+        <color attach="background" args={["#f5f7f9"]}/><ambientLight intensity={1.8}/><directionalLight position={[4, 6, 5]} intensity={2}/>
+        <PreviewScene members={isPreview ? [] : members} parameters={parameters} bindings={bindings} patterns={isPreview ? [] : patterns}
+          selectedMemberId={isPreview ? null : selectedMemberId} selectedInterface={selectedInterface} selectedInterfaceResolved={selectedInterfaceResolved}
+          panelSelectionToken={panelSelectionToken} compatibleMemberIds={compatibleMemberIds} onSelectMember={onSelectMember} onHoverMember={hoverHandler}
+          onPointerSelect={handlePointerSelect} onPointerHover={handlePointerHover} onPointerHoverEnd={handlePointerHoverEnd}
+          onScreenSelection={handleScreenSelection} onClearSelection={clearSelection} onMoveMember={onMoveMember} geometry={loaded?.geometry || null}/>
+      </Canvas></ModelStatusPortal.Provider>
+      <div ref={statusPortal} className="member-status-layer"/>
+      {!isPreview && tooltip && tooltipMember && <div className="viewport-tooltip" style={{ left: tooltip.point.x, top: tooltip.point.y, opacity: tooltip.opacity }}>{tooltipMember.name}</div>}
+    </div>
+    {!loaded && (isPreview || !members.length) && <div className="empty-overlay" role="status">
+      <Boxes size={30}/><b>{previewTemplate ? previewTemplate.name : "从左侧加入零部件，开始构建组件"}</b>
+      <span>{previewTemplate?.templateKind === "component" ? "此组件可加入当前组件后查看" : preview.error || (isPreview ? "正在准备模型…" : "点击模板可预览，点击加号可加入组件")}</span>
+      {preview.error && <><AlertTriangle size={18}/><button type="button" className="ghost" onClick={preview.retry}>重试</button></>}
+    </div>}
+    {isPreview && loaded && <div className="preview-caption" role="status"><b>{previewTemplate.name} · V{previewTemplate.version}</b><span>模板预览 · 点击左侧加号加入当前组件</span></div>}
+    {!isPreview && members.length > 0 && <div className="preview-caption" role="status"><b>{members.find(member => member.id === selectedMemberId)?.name || "当前组件"}</b><span>点击模型或成员列表选择，拖动操作轴调整位置</span></div>}
+  </section>;
 }

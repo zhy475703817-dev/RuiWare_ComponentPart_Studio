@@ -10,7 +10,8 @@ from fastapi.responses import JSONResponse
 import httpx
 
 from .components.service import ComponentError
-from .library import LibraryError, read_published_library
+from .library import LibraryError, latest_catalog_items, read_published_library
+from .library_cleanup import cleanup_preview, execute_cleanup
 from .preview import DOWNLOAD_TIMEOUT_SECONDS, MAX_DOWNLOAD_BYTES, download, read_package
 from . import reconstruction
 
@@ -23,6 +24,7 @@ class LibrarySync:
         self.started_at = None
         self.errors = []
         self.rerun = False
+        self.cleanup = {'status': 'idle', 'deleted': [], 'failed': [], 'candidateCount': 0}
 
     def start(self, force=False):
         if self.task is not None and not self.task.done():
@@ -35,7 +37,8 @@ class LibrarySync:
         self.task = asyncio.create_task(self.run())
 
     def snapshot(self):
-        return {**self.cache.snapshot(), 'syncing': self.task is not None and not self.task.done(), 'errors': self.errors}
+        return {**self.cache.snapshot(), 'syncing': self.task is not None and not self.task.done(), 'errors': self.errors,
+                'cleanup': self.cleanup}
 
     async def close(self):
         if self.task is not None:
@@ -59,12 +62,38 @@ class LibrarySync:
         try:
             use_minio = state.settings.minio.read_configured
             if use_minio:
-                records = await asyncio.to_thread(state.published_storage.records, 'part')
+                self.cleanup = {'status': 'analyzing', 'deleted': [], 'failed': [], 'candidateCount': 0}
+                report = await asyncio.to_thread(cleanup_preview, state.published_storage, state.drafts, state.publications,
+                                                 state.reference_registry, self.cache)
+                report = await asyncio.to_thread(state.cleanup_store.save_scan, report)
+                self.cleanup['candidateCount'] = report['summary']['strictCandidateCount']
+                if not report['scanComplete']:
+                    self.cleanup['status'] = 'blocked'
+                elif not state.published_storage.writable:
+                    self.cleanup['status'] = 'permission-denied'
+                else:
+                    self.cleanup['status'] = 'cleaning'
+                    selected = [item['publicationId'] for item in report['items'] if item.get('status') == 'auto-clean']
+                    if selected:
+                        result = await asyncio.to_thread(execute_cleanup, state, report, selected, automatic=True)
+                        self.cleanup['deleted'] = [item for item in result['items'] if item['status'] == 'deleted']
+                        self.cleanup['failed'] = [item for item in result['items'] if item['status'] != 'deleted']
+                        self.errors.extend(item.get('errorCode', 'REMOTE_STORAGE_DELETE_FAILED') for item in self.cleanup['failed'])
+                    self.cleanup['status'] = 'completed' if not self.cleanup['failed'] else 'partial'
+                records = await asyncio.to_thread(state.published_storage.records, 'part', include_history=True)
             else:
+                self.cleanup = {'status': 'disabled', 'deleted': [], 'failed': [], 'candidateCount': 0}
                 library = await read_published_library(state.http, state.settings)
                 records = [item for item in library.items if item.templateKind == 'part']
+            # Choose the newest release before admission: an invalid latest model
+            # must not expose an older release as though it were current.
+            publications = [record.publication if use_minio else record for record in records]
+            latest_ids = {item['publicationId'] for item in latest_catalog_items([
+                publication.model_dump(exclude_unset=True) for publication in publications])}
             for record in records:
                 publication = record.publication if use_minio else record
+                if publication.publicationId not in latest_ids:
+                    continue
                 if not re.fullmatch(r'[A-Za-z0-9_.-]{1,128}', publication.publicationId) or publication.publicationId in {'.', '..'}:
                     raise LibraryError(502, 'LIBRARY_INVALID_RESPONSE')
                 try:
@@ -121,6 +150,8 @@ class LibrarySync:
             if not failed:
                 self.cache.stage('part', items)
         except (LibraryError, ComponentError) as error:
+            if self.cleanup['status'] in ('analyzing', 'cleaning'):
+                self.cleanup['status'] = 'blocked'
             self.errors.append(error.code)
         except (TimeoutError, httpx.TimeoutException):
             self.errors.append('LIBRARY_TIMEOUT')

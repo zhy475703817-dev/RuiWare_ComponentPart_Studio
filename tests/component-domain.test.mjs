@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { Box3, Vector3 } from 'three';
 import { createComponentDocument } from '../src/domain/component.ts';
+import { placeNextMember } from '../src/domain/assemblyPlacement.ts';
 import { componentReducer } from '../src/domain/componentReducer.ts';
 import { validateComponent } from '../src/domain/validation.ts';
 import { serializeComponent } from '../src/domain/serialization.ts';
@@ -14,6 +16,23 @@ const member = id => ({
   interfaces: [{ id: 'face.left', name: '左端面', type: 'plane', tags: ['end-face'] }],
 });
 const source = memberId => ({ memberId, interfaceId: 'face.left' });
+
+test('新加入的成员按包络尺寸沿画布地面错开放置', () => {
+  const bounds = new Box3(new Vector3(-150, -30, -20), new Vector3(150, 30, 80));
+  assert.deepEqual(placeNextMember(bounds, []), [0, 0, 20]);
+  const occupied = [bounds.clone().translate(new Vector3(0, 0, 20))];
+  const secondPosition = placeNextMember(bounds, occupied);
+  assert.deepEqual(secondPosition, [330, 0, 20]);
+  assert.equal(occupied[0].intersectsBox(bounds.clone().translate(new Vector3(...secondPosition))), false);
+  assert.deepEqual(bounds.min.toArray(), [-150, -30, -20]);
+});
+
+test('模型原点偏移时保持工程几何，仅通过成员位置落地并避开已移动成员', () => {
+  const bounds = new Box3(new Vector3(1000, 100, 50), new Vector3(1100, 140, 70));
+  assert.deepEqual(placeNextMember(bounds, []), [-1050, -120, -50]);
+  const occupied = [new Box3(new Vector3(2000, -200, 0), new Vector3(2400, 200, 100))];
+  assert.deepEqual(placeNextMember(bounds, occupied), [1420, -120, -50]);
+});
 
 test('定义、参数及规则编辑共用一份不可变草稿并增加修订', () => {
   const original = createComponentDocument();
