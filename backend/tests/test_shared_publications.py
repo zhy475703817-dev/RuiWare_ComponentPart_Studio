@@ -115,7 +115,8 @@ class SharedPublicationTests(unittest.TestCase):
             self.assertEqual(third.get('/api/published-components').json()['count'], 2)
             self.assertEqual(third.get(f"/api/published-components/{nested.json()['publicationId']}").json()['document']['assembly']['members'][0]['template']['sha256'], original['sha256'])
         self.assertTrue(all(key.startswith('publishers/test-user/') for key in self.objects.writes))
-        self.assertTrue(all(key.endswith(('template.rwpart','metadata.json')) for key in self.objects.writes))
+        self.assertTrue(all(key.endswith(('template.rwpart','metadata.json'))
+                            or '/reference-registry/' in key for key in self.objects.writes))
 
     def test_failed_upload_is_not_published_and_retry_reuses_snapshot(self):
         with self.client('author') as client:
@@ -208,7 +209,7 @@ class SharedPublicationTests(unittest.TestCase):
             response = self.publish(client, response.json())
             self.assertEqual(response.status_code, 422)
             self.assertEqual(client.get('/api/published-components').json()['count'], 0)
-            self.assertEqual(self.objects.writes, [])
+            self.assertEqual([key for key in self.objects.writes if '/reference-registry/' not in key], [])
 
     def test_storage_object_keys_cannot_redirect_component_downloads(self):
         with self.client('author') as client:

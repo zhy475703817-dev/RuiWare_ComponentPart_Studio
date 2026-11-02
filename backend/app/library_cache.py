@@ -8,7 +8,7 @@ import sqlite3
 import time
 
 from .config import PROJECT_ROOT, Settings
-from .library import LibraryError, PublishedTemplate
+from .library import LibraryError, PublishedTemplate, catalog_identity, latest_catalog_items
 
 
 def engine_version() -> str:
@@ -137,6 +137,17 @@ class LibraryCache:
                 self.namespace, kind, state['initialized'] or complete, json.dumps(active),
                 json.dumps(pending) if pending is not None else None, time.time() if complete else state['checked']))
 
+    def remove_publications(self, identifiers: list[str]):
+        """Remove deleted releases from catalog snapshots, retaining local package bytes."""
+        removed = set(identifiers)
+        with closing(self._connect()) as db, db:
+            rows = db.execute('SELECT kind, active, pending FROM library_catalogs WHERE source=?', (self.namespace,)).fetchall()
+            for row in rows:
+                active = [item for item in json.loads(row['active']) if item['publicationId'] not in removed]
+                pending = [item for item in json.loads(row['pending']) if item['publicationId'] not in removed] if row['pending'] else None
+                db.execute('UPDATE library_catalogs SET active=?, pending=? WHERE source=? AND kind=?', (
+                    json.dumps(active), json.dumps(pending) if pending is not None else None, self.namespace, row['kind']))
+
     def apply(self):
         with closing(self._connect()) as db, db:
             db.execute('UPDATE library_catalogs SET active=pending, pending=NULL WHERE source=? AND pending IS NOT NULL', (self.namespace,))
@@ -146,7 +157,7 @@ class LibraryCache:
         with closing(self._connect()) as db:
             available = {(row['id'], row['hash']) for row in db.execute(
                 'SELECT id, hash FROM library_models WHERE source=? AND engine=? AND available=1', (self.namespace, self.engine))}
-        return [item for item in items if item.get('templateKind') == 'component'
+        return [item for item in latest_catalog_items(items) if item.get('templateKind') == 'component'
                 or (item['publicationId'], item['sha256'].lower()) in available]
 
     def snapshot(self) -> dict:
@@ -156,8 +167,8 @@ class LibraryCache:
         for state in states:
             if state['pending'] is None:
                 continue
-            before = {item['publicationId']: item for item in state['active']}
-            after = {item['publicationId']: item for item in state['pending']}
+            before = {catalog_identity(item): item for item in latest_catalog_items(state['active'])}
+            after = {catalog_identity(item): item for item in latest_catalog_items(state['pending'])}
             changes += sum(before.get(key) != after.get(key) for key in before.keys() | after.keys())
         items.sort(key=lambda item: item['createdAt'], reverse=True)
         return {'items': items, 'count': len(items), 'updateCount': changes,

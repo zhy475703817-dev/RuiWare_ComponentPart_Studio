@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Annotated, Literal
 from urllib.parse import urlsplit, urlunsplit
 
@@ -58,6 +58,23 @@ class PublishedLibrary(BaseModel):
         if self.count != len(ids) or len(set(ids)) != len(ids):
             raise ValueError("inconsistent publication count or duplicate id")
         return self
+
+
+def catalog_identity(item: dict) -> tuple[str, str]:
+    kind = item.get('templateKind', 'part')
+    return kind, item['templateId'] if kind == 'part' else item['publicationId']
+
+
+def latest_catalog_items(items: list[dict]) -> list[dict]:
+    """Collapse part versions only; names/codes are not stable identities."""
+    latest = {}
+    for item in items:
+        key = catalog_identity(item)
+        created = datetime.fromisoformat(item['createdAt'].replace('Z', '+00:00'))
+        rank = (item['version'], created.replace(tzinfo=created.tzinfo or timezone.utc).timestamp(), item['publicationId'])
+        if key not in latest or rank > latest[key][0]:
+            latest[key] = rank, item
+    return [item for _, item in latest.values()]
 
 
 class LibraryError(Exception):
