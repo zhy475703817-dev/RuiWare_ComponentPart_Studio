@@ -63,23 +63,26 @@ class LibrarySync:
             use_minio = state.settings.minio.read_configured
             if use_minio:
                 self.cleanup = {'status': 'analyzing', 'deleted': [], 'failed': [], 'candidateCount': 0}
-                report = await asyncio.to_thread(cleanup_preview, state.published_storage, state.drafts, state.publications,
-                                                 state.reference_registry, self.cache)
-                report = await asyncio.to_thread(state.cleanup_store.save_scan, report)
-                self.cleanup['candidateCount'] = report['summary']['strictCandidateCount']
-                if not report['scanComplete']:
-                    self.cleanup['status'] = 'blocked'
-                elif not state.published_storage.writable:
-                    self.cleanup['status'] = 'permission-denied'
-                else:
-                    self.cleanup['status'] = 'cleaning'
-                    selected = [item['publicationId'] for item in report['items'] if item.get('status') == 'auto-clean']
-                    if selected:
-                        result = await asyncio.to_thread(execute_cleanup, state, report, selected, automatic=True)
-                        self.cleanup['deleted'] = [item for item in result['items'] if item['status'] == 'deleted']
-                        self.cleanup['failed'] = [item for item in result['items'] if item['status'] != 'deleted']
-                        self.errors.extend(item.get('errorCode', 'REMOTE_STORAGE_DELETE_FAILED') for item in self.cleanup['failed'])
-                    self.cleanup['status'] = 'completed' if not self.cleanup['failed'] else 'partial'
+                try:
+                    report = await asyncio.to_thread(cleanup_preview, state.published_storage, state.drafts, state.publications,
+                                                     state.reference_registry, self.cache)
+                    report = await asyncio.to_thread(state.cleanup_store.save_scan, report)
+                    self.cleanup['candidateCount'] = report['summary']['strictCandidateCount']
+                    if not report['scanComplete']:
+                        self.cleanup['status'] = 'blocked'
+                    elif not state.published_storage.writable:
+                        self.cleanup['status'] = 'permission-denied'
+                    else:
+                        self.cleanup['status'] = 'cleaning'
+                        selected = [item['publicationId'] for item in report['items'] if item.get('status') == 'auto-clean']
+                        if selected:
+                            result = await asyncio.to_thread(execute_cleanup, state, report, selected, automatic=True)
+                            self.cleanup['deleted'] = [item for item in result['items'] if item['status'] == 'deleted']
+                            self.cleanup['failed'] = [item for item in result['items'] if item['status'] != 'deleted']
+                        self.cleanup['status'] = 'completed' if not self.cleanup['failed'] else 'partial'
+                except Exception as error:
+                    # Cleanup is maintenance; its failure must not stop catalog updates.
+                    self.cleanup.update(status='failed', errorCode=error.code if isinstance(error, (LibraryError, ComponentError)) else 'CLEANUP_FAILED')
                 records = await asyncio.to_thread(state.published_storage.records, 'part', include_history=True)
             else:
                 self.cleanup = {'status': 'disabled', 'deleted': [], 'failed': [], 'candidateCount': 0}
