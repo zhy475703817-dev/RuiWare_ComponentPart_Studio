@@ -13,6 +13,27 @@ const publication = {
   downloadUrl: '/api/public/v1/templates/version-1/download',
 };
 
+test('后台清理结果不进入工作台，真实的模板更新错误仍正常返回', async t => {
+  const payload = {items:[publication], count:1, initialized:true, syncing:false, updateCount:0,
+    checkedAt:1, errors:[], cleanup:{status:'partial', candidateCount:1,
+      failed:[{publicationId:'old', errorCode:'BACKUP_FAILED'}]}};
+  t.mock.method(globalThis, 'fetch', async () => Response.json(payload));
+  const signal = new AbortController().signal;
+  let result = await readCachedLibrary(signal);
+  assert.equal(result.error, '');
+  assert.equal(Object.hasOwn(result, 'cleanupWarning'), false);
+  assert.equal(Object.hasOwn(result, 'cleanup'), false);
+  assert.equal(result.items.length, 1);
+  payload.errors = ['LIBRARY_UNREACHABLE'];
+  payload.cleanup.failed[0].errorCode = 'DELETE_PERMISSION_DENIED';
+  result = await readCachedLibrary(signal);
+  assert.match(result.error, /共享发布库/);
+  assert.equal(Object.hasOwn(result, 'cleanupWarning'), false);
+  payload.errors = [];
+  payload.cleanup = {status:'completed', candidateCount:0, failed:[]};
+  assert.equal((await readCachedLibrary(signal)).error, '');
+});
+
 test('本地发布库只读取快照，检查更新和应用更新使用明确的操作', async t => {
   const calls = [];
   const snapshot = {items:[publication],count:1,updateCount:2,initialized:true,syncing:true,checkedAt:1792800000,errors:[]};

@@ -2,7 +2,6 @@ import { Fragment, useEffect, useRef, useState } from "react";
 import { AlertTriangle, Box, Boxes, Layers, Plus, RefreshCw, Search } from "lucide-react";
 import { formatLibraryError, readCachedLibrary, publicationKey } from "./publishedLibrary";
 import type { PublishedTemplate } from "./publishedLibrary";
-import { StorageReview } from "./StorageReview";
 
 const formatDate = (value: string) => new Date(value).toLocaleString("zh-CN", { hour12: false });
 const formatSize = (size: number) => size < 1024 ? `${size} B` : size < 1024 ** 2 ? `${(size / 1024).toFixed(1)} KB` : `${(size / 1024 ** 2).toFixed(1)} MB`;
@@ -75,7 +74,6 @@ export function PublishedTemplateLibrary({ onPreview, onAdd, onDragTemplate, mem
   return <section className="published-library" aria-label="已发布模板库">
     <div className="panel-title"><span><Boxes size={16}/>已发布模板</span><div className="library-actions"><small>{initialized || items.length ? items.length : "—"}</small><button className="library-refresh" onClick={() => void refresh("sync")} disabled={loading} aria-label={error ? "重试读取发布库" : "刷新发布库"} title="刷新发布库"><RefreshCw size={14} className={loading ? "spinning" : ""}/></button></div></div>
     <p className="hint">按发布来源分区 · 点击预览，或加入当前组件</p>
-    <StorageReview onCleaned={() => void refresh()}/>
     <label className="library-search"><Search size={14}/><input aria-label="搜索模板名称或编码" placeholder="搜索名称或编码" value={query} onChange={event => setQuery(event.target.value)}/></label>
     <div className="library-status" role="status" aria-live="polite">{loading ? initialized || items.length ? "正在检查模板更新…" : "正在准备模板…" : updatedAt ? `上次检查：${formatDate(updatedAt)}` : "尚未连接发布库"}</div>
     {updateCount > 0 && <div className="library-update" role="status"><span>发现 {updateCount} 项模板更新</span><button className="ghost" onClick={() => void refresh("apply")}>更新列表</button></div>}
