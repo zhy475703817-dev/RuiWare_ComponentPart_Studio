@@ -35,11 +35,12 @@ export function App() {
   const { members, mates } = document.assembly;
   const compatibleIds = compatibleMemberIds(members, workspace.selectedMemberId);
   const clearInterfacePreview = () => { interfacePreviewAbort.current?.abort(); interfacePreviewAbort.current = null; setSelectedInterface(null); setInterfacePreview(undefined); };
-  const selectPanelMember = (id: string) => { workspace.setSelectedMemberId(id); clearInterfacePreview(); setPanelSelectionToken(token => token + 1); };
+  const selectPanelMember = (id: string) => { workspace.setPreviewTemplate(null); workspace.setSelectedMemberId(id); clearInterfacePreview(); setPanelSelectionToken(token => token + 1); };
   const selectInterface = (selection: InterfaceSelection) => {
     interfacePreviewAbort.current?.abort();
     interfacePreviewAbort.current = null;
     setSelectedInterface(selection);
+    workspace.setPreviewTemplate(null);
     workspace.setSelectedMemberId(selection.memberId);
     setPanelSelectionToken(token => token + 1);
     const member = members.find(item => item.id === selection.memberId);
@@ -86,7 +87,9 @@ export function App() {
   function renderStage() {
     switch (stage) {
       case "definition": return <DefinitionStage definition={document.definition} members={members} selectedMemberId={workspace.selectedMemberId} hoveredMemberId={hoveredMemberId} compatibleMemberIds={compatibleIds} onSelectMember={selectPanelMember} onHoverMember={setHoveredMemberId} onChange={patch => dispatch({ type: "definition.patch", patch })}/>;
-      case "assembly": return <AssemblyStage mates={mates} onConnect={workspace.connectFirstInterfaces} onInherit={workspace.inheritInterface}/>;
+      case "assembly": return <AssemblyStage mates={mates} onConnect={workspace.connectFirstInterfaces} onInherit={workspace.inheritInterface}
+        selectedMember={workspace.selectedMember} bindings={document.bindings}
+        onMemberChange={patch => { if (workspace.selectedMemberId) dispatch({ type: "member.patch", id: workspace.selectedMemberId, patch }); }}/>;
       case "interfaces": return <InterfacesStage members={members} ports={document.ports} slots={document.slots} selectedInterface={selectedInterface} interfacePreview={interfacePreview} onSelectInterface={selectInterface}/>;
       case "parameters": return <ParametersStage parameters={document.parameters} bindings={document.bindings} patterns={document.patterns} rules={document.rules} members={members} definitionName={document.definition.name} definitionCode={document.definition.code} onChange={(id, value) => dispatch({ type: "parameter.value", id, value })} onBindingChange={(id, binding) => dispatch({ type: "binding.set", id, binding })} onAddParameter={parameter => dispatch({ type: "parameter.add", parameter })} onRemoveParameter={id => dispatch({ type: "parameter.remove", id })} onAddPattern={pattern => dispatch({ type: "pattern.add", pattern })} onRemovePattern={id => dispatch({ type: "pattern.remove", id })} onAddRule={rule => dispatch({ type: "rule.add", rule })} onRemoveRule={id => dispatch({ type: "rule.remove", id })}/>;
       case "rules": return <RulesStage rules={document.rules} onChange={(id, expression) => dispatch({ type: "rule.expression", id, expression })}/>;
@@ -113,6 +116,7 @@ export function App() {
        patterns={document.patterns}
       mateCount={mates.length}
       previewTemplate={workspace.previewTemplate}
+      onShowAssembly={() => workspace.setPreviewTemplate(null)}
       selectedMemberId={workspace.selectedMemberId}
       selectedInterface={selectedInterface}
       selectedInterfaceResolved={sameInterfaceSelection(interfacePreview?.selection || null, selectedInterface) && interfacePreview?.status === "ready" ? interfacePreview.resolvedInterfaces : undefined}

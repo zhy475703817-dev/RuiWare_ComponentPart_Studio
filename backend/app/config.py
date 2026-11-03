@@ -35,15 +35,17 @@ class Settings:
     mcp_token: str = field(default="", repr=False)
     public_base_url: str = "http://127.0.0.1:8020"
     minio: MinioSettings = field(default_factory=MinioSettings)
+    cleanup_dir: Path | None = None
 
 
 def load_settings(root: Path = PROJECT_ROOT) -> Settings:
     # Do not mutate the process environment; an explicitly empty env value wins too.
     values = {**dotenv_values(root / ".env"), **dotenv_values(root / ".env.local"), **os.environ}
+    draft_db = Path(values.get("COMPONENT_DRAFT_DB") or PROJECT_ROOT / ".runtime" / "components.sqlite3")
     return Settings(
         api_url=values.get("RUIWARE_TEMPLATE_API_URL") or "http://127.0.0.1:8010",
         api_key=values.get("RUIWARE_PUBLIC_API_KEY") or "",
-        draft_db=Path(values.get("COMPONENT_DRAFT_DB") or PROJECT_ROOT / ".runtime" / "components.sqlite3"),
+        draft_db=draft_db,
         mcp_token=values.get("COMPONENT_MCP_TOKEN") or "",
         public_base_url=values.get("COMPONENT_PUBLIC_BASE_URL") or "http://127.0.0.1:8020",
         minio=MinioSettings(
@@ -55,4 +57,5 @@ def load_settings(root: Path = PROJECT_ROOT) -> Settings:
             read_prefix=(values.get("RUIWARE_MINIO_READ_PREFIX") or "publishers").strip("/"),
             secure=(values.get("RUIWARE_MINIO_SECURE") or "false").lower() in {"1", "true", "yes"},
         ),
+        cleanup_dir=Path(values.get("COMPONENT_CLEANUP_DIR") or draft_db.parent / "template-cleanup"),
     )

@@ -1,5 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import type { ComponentAction } from "../domain/componentReducer";
+import { componentReducer } from "../domain/componentReducer";
+import { resolveComponentComposition } from "../domain/composition";
+import { placeNextMember } from "../domain/assemblyPlacement";
+import { memberBounds } from "../library/memberModels";
 import { SharedDraftController, httpDraftApi, initialSharedState } from "./sharedDraft";
 import type { PublishedTemplate } from "../library/publishedLibrary";
 import type { ComponentMember, MemberParameterDefinition, Vector3 } from "../domain/component";
@@ -23,6 +27,7 @@ export function useComponentWorkspace() {
   const [message, setMessage] = useState(initialMessage);
   const [publishing, setPublishing] = useState(false);
   const [adding, setAdding] = useState(false);
+  const addingLock = useRef(false);
   const [libraryRefreshToken, setLibraryRefreshToken] = useState(0);
   const { document, checks } = shared;
   const editable = (shared.status === "ready" || shared.status === "saving") && !publishing && !adding;
@@ -175,9 +180,11 @@ export function useComponentWorkspace() {
 
   async function addPublishedTemplate(template: PublishedTemplate) {
     const workspace = controller.current;
-    if (!workspace || !editable) return;
+    if (!workspace || !editable || addingLock.current) return;
+    addingLock.current = true;
     const draftId = workspace.getSnapshot().draftId;
     setAdding(true);
+    setMessage(`正在加入 ${template.name}…`);
     try {
       let member;
       if (template.templateKind === "component") {
@@ -197,13 +204,28 @@ export function useComponentWorkspace() {
         };
       }
       if (workspace !== controller.current || workspace.getSnapshot().draftId !== draftId) throw new Error("草稿已切换，请重新选择模板。");
+      const snapshot = workspace.getSnapshot();
+      let position: Vector3 | undefined;
+      if (template.templateKind !== "component") {
+        // Resolve automatic parameter bindings before measuring the displayed shapes.
+        const projected = componentReducer(snapshot.document, { type: "member.add", member });
+        const instances = resolveComponentComposition(projected);
+        const bounds = await Promise.all(instances.map(item => memberBounds(item)));
+        const index = instances.findIndex(item => item.id === member.id);
+        position = placeNextMember(bounds[index], bounds.filter((_, i) => i !== index));
+        if (workspace !== controller.current || workspace.getSnapshot().draftId !== draftId ||
+            workspace.getSnapshot().document.revision !== snapshot.document.revision) throw new Error("草稿已更新，请重新加入模板。");
+      }
       if (!workspace.dispatch({ type: "member.add", member })) throw new Error("草稿暂不可编辑，请先处理同步问题。");
-      await workspace.flush();
+      // Apply placement separately so inferred component dimensions do not resize the parts again.
+      if (position) workspace.dispatch({ type: "member.patch", id: member.id, patch: { position } });
       setSelectedMemberId(member.id);
+      setPreviewTemplate(null);
       setStage("assembly");
-      setMessage(`已加入 ${template.name} · V${template.version}`);
+      await workspace.flush();
+      setMessage(`已加入 ${template.name} · V${template.version}，可在画布中选择并移动`);
     } catch (error) { setMessage(error instanceof Error ? error.message : "加入失败，请重试。"); }
-    finally { setAdding(false); }
+    finally { addingLock.current = false; setAdding(false); }
   }
 
   async function downloadLocalDraft() {

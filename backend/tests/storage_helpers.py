@@ -31,10 +31,21 @@ class MemoryMinio:
             raise ConnectionError('private connection details must not reach the user')
         return ObjectResponse(self.objects[bucket_name, object_name])
 
-    def list_objects(self, bucket_name, prefix, recursive):
+    def _put_object(self, bucket_name, object_name, data, headers=None):
+        assert headers.get('If-None-Match') == '*'
+        if (bucket_name, object_name) in self.objects:
+            error = RuntimeError('private conditional failure')
+            error.code = 'PreconditionFailed'
+            raise error
+        self.put_object(bucket_name, object_name, BytesIO(data), len(data))
+
+    def list_objects(self, bucket_name, prefix, recursive, include_version=False):
         if self.fail_list:
             raise ConnectionError('private connection details must not reach the user')
         return [SimpleNamespace(object_name=key) for bucket, key in self.objects if bucket == bucket_name and key.startswith(prefix)]
+
+    def remove_object(self, bucket_name, object_name, version_id=None):
+        self.objects.pop((bucket_name, object_name), None)
 
 
 STORAGE_ENV = {
