@@ -58,6 +58,22 @@ class SyncCleanupTests(LibraryCleanupFixture, unittest.TestCase):
             self.assertEqual(result['status'], 'partial')
             self.assertEqual(result['failed'][0]['errorCode'], 'BACKUP_FAILED')
             self.assertIn(('templates', old['objectKey']), self.storage.objects)
+            snapshot = client.app.state.library_sync.snapshot()
+            self.assertEqual(snapshot['errors'], [])
+            self.assertEqual([item['publicationId'] for item in snapshot['items']], ['new'])
+
+    def test_cleanup_scan_save_failure_does_not_block_catalog_updates(self):
+        self.seed('old')
+        latest = self.seed('new', version=2)
+        with self.client() as client:
+            self.prepare_latest(client, latest)
+            with patch.object(client.app.state.cleanup_store, 'save_scan', side_effect=OSError('private path')):
+                result = self.sync(client)
+            self.assertEqual(result['status'], 'failed')
+            self.assertEqual(result['errorCode'], 'CLEANUP_FAILED')
+            snapshot = client.app.state.library_sync.snapshot()
+            self.assertEqual(snapshot['errors'], [])
+            self.assertEqual([item['publicationId'] for item in snapshot['items']], ['new'])
 
     def test_partial_delete_restores_current_bytes_and_can_retry(self):
         old = self.seed('old')

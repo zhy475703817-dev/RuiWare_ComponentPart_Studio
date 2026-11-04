@@ -50,9 +50,8 @@ class CleanupStore:
         backup_id = uuid4().hex
         package_hash = hashlib.sha256(package).hexdigest()
         metadata_hash = hashlib.sha256(metadata).hexdigest()
-        self.backups.mkdir(parents=True, exist_ok=True)
         directory = self.backups / backup_id
-        staging = Path(tempfile.mkdtemp(dir=self.backups, prefix=f".{backup_id}-"))
+        directory.mkdir(parents=True, exist_ok=False)
         manifest = {
             "backupId": backup_id,
             "publicationId": publication["publicationId"],
@@ -64,16 +63,17 @@ class CleanupStore:
             "expiresAt": (datetime.now(timezone.utc) + timedelta(days=30)).isoformat(),
         }
         try:
-            _atomic_bytes(staging / "template.rwpart", package)
-            _atomic_bytes(staging / "metadata.json", metadata)
-            _atomic_bytes(staging / "manifest.json", json.dumps(manifest, ensure_ascii=False).encode())
-            if hashlib.sha256((staging / "template.rwpart").read_bytes()).hexdigest() != package_hash:
+            _atomic_bytes(directory / "template.rwpart", package)
+            _atomic_bytes(directory / "metadata.json", metadata)
+            if hashlib.sha256((directory / "template.rwpart").read_bytes()).hexdigest() != package_hash:
                 raise OSError("backup hash mismatch")
-            if hashlib.sha256((staging / "metadata.json").read_bytes()).hexdigest() != metadata_hash:
+            if hashlib.sha256((directory / "metadata.json").read_bytes()).hexdigest() != metadata_hash:
                 raise OSError("backup metadata hash mismatch")
-            staging.replace(directory)
+            # Commit marker last: incomplete backups stay invisible. Avoid renaming
+            # a populated directory, which Windows can deny even for writable files.
+            _atomic_bytes(directory / "manifest.json", json.dumps(manifest, ensure_ascii=False).encode())
         except Exception:
-            shutil.rmtree(staging, ignore_errors=True)
+            shutil.rmtree(directory, ignore_errors=True)
             raise
         return manifest
 
