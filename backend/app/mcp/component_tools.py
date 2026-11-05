@@ -3,7 +3,7 @@ from typing import Annotated
 from mcp.types import CallToolResult, ToolAnnotations
 from pydantic import Field
 
-from ..components.models import ComponentAction, ComponentDocument, DefinitionPatch, MemberPatch
+from ..components.models import ComponentAction, ComponentDocument, DefinitionPatch, MemberPatch, PortTrialOptions, PortConfirmAction, PortTrialRecordAction, PortPatchAction, PortRemoveAction, PortAddAction, InterfaceSetAction
 
 
 Revision = Annotated[int, Field(strict=True, ge=1)]
@@ -13,6 +13,16 @@ FiniteValue = Annotated[float, Field(strict=True, allow_inf_nan=False)]
 def register(mcp, app, invoke):
     readonly = ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False)
     write = ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False)
+
+    @mcp.tool(annotations=write, structured_output=False)
+    async def component_execute_action(draftId: str, expectedRevision: Revision, action: PortAddAction | PortPatchAction | PortRemoveAction | PortConfirmAction | PortTrialRecordAction | InterfaceSetAction, reason: Annotated[str, Field(max_length=2000)] = "") -> CallToolResult:
+        """对外接口原子命令，与网页共用修订校验。port.add/patch/remove编辑接口契约；interface.set校准来源；port.trial.record由服务端重算报告。port.confirm仅人工可操作，AI不得导入人工确认。未知尺寸和公差须留空；pending及对齐通过不代表完成碰撞验证。reason记录依据，冲突后重新读取，不能覆盖。"""
+        return await invoke(app.state.drafts.update, draftId, expectedRevision, action, actor="agent", reason=reason)
+
+    @mcp.tool(annotations=readonly, structured_output=False)
+    async def component_trial_ports(draftId: str, expectedRevision: Revision, portId: str, options: PortTrialOptions) -> CallToolResult:
+        """跨组件对外接口只读试配，双方严格修订校验。返回双方尺寸、公差和间隙、规则问题码、刚体对齐前后误差和整组件预览位姿。不会修改正式装配。碰撞未执行，pending不能当作合格。使用port.trial.record命令重算并保存报告；提供reason记录依据。port.confirm仅用户可操作。"""
+        return await invoke(app.state.drafts.preview_ports, draftId, expectedRevision, portId, options)
 
     async def edit(draft_id, revision, action):
         return await invoke(app.state.drafts.update, draft_id, revision, ComponentAction.validate_python(action), actor="agent")
@@ -27,7 +37,7 @@ def register(mcp, app, invoke):
     @mcp.tool(annotations=write, structured_output=False)
     async def component_create_draft(name: str = "", document: ComponentDocument | None = None) -> CallToolResult:
         """创建持久化草稿；name 省略或为空时使用默认名称/导入文档名称。可导入符合 ComponentDocument 的工程文档。"""
-        return await invoke(app.state.drafts.create, name=name or None, document=document)
+        return await invoke(app.state.drafts.create, name=name or None, document=document, actor="agent")
 
     @mcp.tool(annotations=readonly, structured_output=False)
     async def component_list_drafts() -> CallToolResult:

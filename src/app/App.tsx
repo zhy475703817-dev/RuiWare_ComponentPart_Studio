@@ -6,6 +6,11 @@ import type { InterfaceSelection, ResolvedPartInterface } from "../domain/compon
 import { ComponentViewport } from "../viewport/ComponentViewport";
 import { DefinitionStage } from "../stages/DefinitionStage";
 import { AssemblyStage } from "../stages/AssemblyStage";
+import { ExternalPortsPanel } from "../stages/ExternalPortsPanel";
+import { PortTrialViewport } from "../stages/PortTrialViewport";
+import { PortDiagnosticsPanel } from "../stages/PortDiagnosticsPanel";
+import type { PortTrialPreview } from "../domain/component";
+import "../styles/interfaces.css";
 import { InterfacesStage } from "../stages/InterfacesStage";
 import { ParametersStage } from "../stages/ParametersStage";
 import { RulesStage } from "../stages/RulesStage";
@@ -33,6 +38,8 @@ export function App() {
   const workspace = useComponentWorkspace();
   const { document, dispatch, stage, checks } = workspace;
   const { members, mates } = document.assembly;
+  const [externalPreview, setExternalPreview] = useState<PortTrialPreview | null>(null);
+  useEffect(() => { setExternalPreview(null); }, [workspace.shared.draftId, document.revision, stage]);
   const compatibleIds = compatibleMemberIds(members, workspace.selectedMemberId);
   const clearInterfacePreview = () => { interfacePreviewAbort.current?.abort(); interfacePreviewAbort.current = null; setSelectedInterface(null); setInterfacePreview(undefined); };
   const selectPanelMember = (id: string) => { workspace.setPreviewTemplate(null); workspace.setSelectedMemberId(id); clearInterfacePreview(); setPanelSelectionToken(token => token + 1); };
@@ -90,7 +97,7 @@ export function App() {
       case "assembly": return <AssemblyStage mates={mates} onConnect={workspace.connectFirstInterfaces} onInherit={workspace.inheritInterface}
         selectedMember={workspace.selectedMember} bindings={document.bindings}
         onMemberChange={patch => { if (workspace.selectedMemberId) dispatch({ type: "member.patch", id: workspace.selectedMemberId, patch }); }}/>;
-      case "interfaces": return <InterfacesStage members={members} ports={document.ports} slots={document.slots} selectedInterface={selectedInterface} interfacePreview={interfacePreview} onSelectInterface={selectInterface}/>;
+      case "interfaces": return <><ExternalPortsPanel key={workspace.shared.draftId} document={document} draftId={workspace.shared.draftId || ""} diagnostics={workspace.shared.portDiagnostics} targets={workspace.shared.items} onTrialPreview={setExternalPreview} onExecute={workspace.executePortCommand} onLocate={selectInterface}/><details><summary>来源接口资料与可替换槽位</summary><InterfacesStage members={members} ports={document.ports} slots={document.slots} selectedInterface={selectedInterface} interfacePreview={interfacePreview} onSelectInterface={selectInterface}/></details><PortDiagnosticsPanel shared={workspace.shared} lastCommand={workspace.lastPortCommand}/></>;
       case "parameters": return <ParametersStage parameters={document.parameters} bindings={document.bindings} patterns={document.patterns} rules={document.rules} members={members} definitionName={document.definition.name} definitionCode={document.definition.code} onChange={(id, value) => dispatch({ type: "parameter.value", id, value })} onBindingChange={(id, binding) => dispatch({ type: "binding.set", id, binding })} onAddParameter={parameter => dispatch({ type: "parameter.add", parameter })} onRemoveParameter={id => dispatch({ type: "parameter.remove", id })} onAddPattern={pattern => dispatch({ type: "pattern.add", pattern })} onRemovePattern={id => dispatch({ type: "pattern.remove", id })} onAddRule={rule => dispatch({ type: "rule.add", rule })} onRemoveRule={id => dispatch({ type: "rule.remove", id })}/>;
       case "rules": return <RulesStage rules={document.rules} onChange={(id, expression) => dispatch({ type: "rule.expression", id, expression })}/>;
       case "validation": return <ValidationStage checks={checks} revision={document.revision} onValidate={() => workspace.setMessage(checks.some(check => check.status === "fail") ? "基础数据检查未通过，请处理失败项" : "基础数据检查通过；装配求解和工程规则执行仍待接入")}/>;
@@ -109,7 +116,7 @@ export function App() {
         <button className="member-remove" onClick={() => workspace.removeMember(member.id)} aria-label={`删除成员 ${member.role}`}><Trash2 size={14}/></button>
       </div>)}
     </>}
-    viewport={<ComponentViewport
+    viewport={externalPreview ? <PortTrialViewport preview={externalPreview} onClose={() => setExternalPreview(null)}/> : <ComponentViewport
       members={members}
        parameters={document.parameters}
        bindings={document.bindings}

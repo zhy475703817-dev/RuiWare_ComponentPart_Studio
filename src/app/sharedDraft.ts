@@ -10,25 +10,34 @@ export type DraftChange = {
   actor: "agent" | "user"; fromRevision: number; revision: number; createdAt: string;
   items: { path: string[]; label: string; kind: "added" | "removed" | "updated"; before: unknown; after: unknown }[];
 };
+export type DraftCommand = ComponentAction | { type: "port.confirm"; id: string; scope: "basis" | "review"; note: string } | { type: "port.trial.record"; id: string; options: import("../domain/component").PortTrialOptions } | { type: "interface.set"; memberId: string; interfaceId: string; frame: import("../domain/component").ConnectorFrame };
+export type PortDiagnostic = { portId: string; status: string; type: string | null; frame: import("../domain/component").ConnectorFrame | null;
+  sourceVersion: import("../domain/component").PartTemplateReference | null; issues: {code: string; message: string}[];
+  layers?: { definition: string; basis: string; rules: string; geometry: string; review: string }; reviewReasons?: string[]; sourceChanges?: string[];
+  axes?: { x: number[]; y: number[]; z: number[] } | null; trialCurrent?: boolean; specificationIssues?: string[];
+};
+export type Operation = { id: number; revision: number; beforeRevision?: number; expectedRevision?: number; reason?: string; changes?: DraftChange["items"]; actor: string; createdAt: string; action: DraftCommand; status: "ok" | "error"; changedMemberIds?: string[]; error?: { code: string; message?: string; details?: unknown } };
 export type DraftEnvelope = { draftId: string; document: ComponentDocument; checks: ValidationCheck[];
+  portDiagnostics?: PortDiagnostic[]; operations?: Operation[];
   changes?: DraftChange[]; changesTruncated?: boolean; reconciled?: boolean };
 export type DraftSummary = { draftId: string; name: string; revision: number; updatedAt: string };
 export type DraftApi = {
   list: () => Promise<{ items: DraftSummary[] }>;
   create: () => Promise<DraftEnvelope>;
   get: (id: string, afterRevision?: number) => Promise<DraftEnvelope>;
-  apply: (id: string, revision: number, action: ComponentAction) => Promise<DraftEnvelope>;
+  apply: (id: string, revision: number, action: DraftCommand, reason?: string) => Promise<DraftEnvelope>;
   export: (id: string) => Promise<unknown>;
 };
 export type SharedDraftState = {
   draftId: string | null; document: ComponentDocument; checks: ValidationCheck[]; items: DraftSummary[];
   status: "loading" | "ready" | "saving" | "error" | "conflict"; dirty: boolean; error: string | null; notice: string;
+  commandBusy: boolean; portDiagnostics?: PortDiagnostic[]; operations?: Operation[];
   agentChanges: DraftChange[]; changesTruncated: boolean; userPriority: boolean;
 };
 
 export function initialSharedState(): SharedDraftState {
   return { draftId: null, document: createComponentDocument(), checks: [], items: [], status: "loading", dirty: false, error: null, notice: "",
-    agentChanges: [], changesTruncated: false, userPriority: false };
+    commandBusy: false, operations: [], agentChanges: [], changesTruncated: false, userPriority: false };
 }
 
 const errorCode = (error: unknown): string => (error as { code?: string })?.code || "";
@@ -135,6 +144,7 @@ export class SharedDraftController {
     if (this.confirmed?.draftId === draft.draftId) this.recordChanges(draft);
     else this.publish({ agentChanges: [], changesTruncated: false, userPriority: false });
     this.confirmed = draft;
+    this.publish({ portDiagnostics: draft.portDiagnostics, operations: draft.operations || [] });
     let projection = draft.document;
     for (const action of this.pending) {
       const next = componentReducer(projection, action);
@@ -203,7 +213,7 @@ export class SharedDraftController {
   }
 
   dispatch(action: ComponentAction): boolean {
-    if (!this.confirmed || !["ready", "saving"].includes(this.state.status) || this.disposed) return false;
+    if (this.state.commandBusy || !this.confirmed || !["ready", "saving"].includes(this.state.status) || this.disposed) return false;
     if (componentReducer(this.state.document, action) === this.state.document) return true;
     this.pending.push(structuredClone(action));
     this.editGeneration++;
@@ -236,6 +246,25 @@ export class SharedDraftController {
     while (this.saving) await this.saving;
     if (this.pending.length || !this.confirmed || ["error", "conflict"].includes(this.state.status)) throw new Error(this.state.error || "草稿尚未就绪");
   }
+  async executePortCommand(action: DraftCommand, expectedRevision?: number, reason = ""): Promise<DraftEnvelope> {
+    if (this.state.commandBusy || this.disposed) throw new Error("已有命令正在执行，请稍候。");
+    this.publish({ commandBusy: true });
+    this.editGeneration++;
+    try {
+      await this.flush();
+      const draft = this.confirmed!;
+      const revision = expectedRevision ?? draft.document.revision;
+      const result = await this.api.apply(draft.draftId, revision, action, reason);
+      if (!this.disposed) this.accept(result);
+      return result;
+    } catch (error) {
+      if (!this.pending.length) {
+        const conflict = errorCode(error) === "REVISION_CONFLICT";
+        this.publish({ status: conflict ? "conflict" : errorCode(error) ? "ready" : "error", error: errorMessage(error) });
+      }
+      throw error;
+    } finally { this.publish({ commandBusy: false }); }
+  }
   async retry() {
     if (this.state.status === "conflict") throw new Error(this.state.error || "草稿修订冲突");
     if (!this.confirmed) return this.start();
@@ -245,6 +274,7 @@ export class SharedDraftController {
     if (!this.pending.length) this.project({ status: "ready", error: null });
   }
   async reload() {
+    if (this.state.commandBusy) return;
     if (!this.confirmed) return this.start();
     if (this.saving) await this.saving;
     const generation = ++this.generation;
@@ -259,6 +289,7 @@ export class SharedDraftController {
   async select(id: string) { await this.change(() => this.api.get(id)); }
   async create() { await this.change(() => this.api.create()); }
   private async change(load: () => Promise<DraftEnvelope>) {
+    if (this.state.commandBusy) throw new Error("已有接口命令正在执行，请稍候。");
     await this.flush();
     const generation = ++this.generation;
     this.publish({ status: "loading", error: null });
@@ -281,10 +312,10 @@ export class SharedDraftController {
     const generation = this.generation;
     const editGeneration = this.editGeneration;
     try {
-      if (this.confirmed && !this.pending.length && this.state.status === "ready") {
+      if (this.confirmed && !this.pending.length && this.state.status === "ready" && !this.state.commandBusy) {
         const draft = await this.api.get(this.confirmed.draftId, this.confirmed.document.revision);
         if (!this.disposed && generation === this.generation && editGeneration === this.editGeneration
-            && !this.pending.length && this.state.status === "ready" && draft.document.revision >= this.confirmed.document.revision) this.accept(draft);
+            && !this.pending.length && this.state.status === "ready" && !this.state.commandBusy && draft.document.revision >= this.confirmed.document.revision) this.accept(draft);
       }
       if (!this.disposed) await this.refreshList();
     } catch { this.publish({ notice: "暂时无法同步最新草稿，请检查连接；本页输入不会被覆盖。" }); }
@@ -303,12 +334,12 @@ async function request<T>(path: string, body?: unknown): Promise<T> {
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const data = await response.json();
-  if (!response.ok) throw Object.assign(new Error("草稿请求失败"), { code: data?.error?.code || "INVALID_REQUEST", current: data?.error?.current });
+  if (!response.ok) throw Object.assign(new Error(data?.error?.message || "草稿请求失败"), { code: data?.error?.code || "INVALID_REQUEST", current: data?.error?.current });
   return data as T;
 }
 export const httpDraftApi: DraftApi = {
   list: () => request(""), create: () => request("", {}),
   get: (id, afterRevision) => request(`/${encodeURIComponent(id)}${afterRevision === undefined ? "" : `?afterRevision=${afterRevision}`}`),
-  apply: (id, expectedRevision, action) => request(`/${encodeURIComponent(id)}/actions`, { expectedRevision, action }),
+  apply: (id, expectedRevision, action, reason) => request(`/${encodeURIComponent(id)}/actions`, { expectedRevision, action, reason: reason || "" }),
   export: id => request(`/${encodeURIComponent(id)}/export`),
 };

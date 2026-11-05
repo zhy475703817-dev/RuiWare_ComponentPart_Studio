@@ -4,15 +4,24 @@ import re
 from .models import ComponentAction, ComponentDocument, InterfaceSource, TypedAction
 
 
+from .ports import port_diagnostics
+
+
 class ComponentError(Exception):
-    def __init__(self, status: int, code: str, current: dict | None = None):
+    def __init__(self, status: int, code: str, current: dict | None = None, *, message: str = "", details: dict | None = None):
         super().__init__(code)
         self.status = status
         self.code = code
         self.current = current
+        self.message = message
+        self.details = details or {}
 
     def as_dict(self) -> dict:
         error = {"code": self.code}
+        if self.message:
+            error["message"] = self.message
+        if self.details:
+            error["details"] = self.details
         if self.current is not None:
             error["current"] = self.current
         return {"error": error}
@@ -188,6 +197,10 @@ def apply_action(document: ComponentDocument, action: TypedAction) -> ComponentD
         data["assembly"]["mates"].append(mate.model_dump(by_alias=True))
     elif action.type == "port.add":
         port = action.port
+        if port.basisConfirmation or port.reviewConfirmation or port.trial:
+            raise ComponentError(422, "SERVER_EVIDENCE_ONLY", message="确认和试配证据须通过专用命令生成，不能随新增接口写入。")
+        if not port.id.strip() or not port.name.strip():
+            raise ComponentError(422, "INVALID_PORT", message="对外接口 ID 和名称不能为空。")
         source_member = next((member for member in document.assembly.members if member.id == port.source.memberId), None)
         source_interface = next((item for item in (source_member.interfaces if source_member else []) if item.id == port.source.interfaceId), None)
         if source_interface is None:
@@ -203,6 +216,31 @@ def apply_action(document: ComponentDocument, action: TypedAction) -> ComponentD
             **port.model_dump(by_alias=True),
             "interface": source_interface.model_dump(by_alias=True),
         })
+    elif action.type in ("port.patch", "port.remove"):
+        port = next((item for item in data["ports"] if item["id"] == action.id), None)
+        if port is None:
+            raise ComponentError(404, "COMPONENT_ITEM_NOT_FOUND", message="对外接口不存在，请重新读取草稿。")
+        if action.type == "port.remove":
+            data["ports"] = [item for item in data["ports"] if item["id"] != action.id]
+        else:
+            port.update(action.patch.model_dump(exclude_unset=True))
+            if not port["name"].strip():
+                raise ComponentError(422, "INVALID_PORT", message="对外接口名称不能为空。")
+            source = InterfaceSource.model_validate(port["source"])
+            if not has_interface(document, source):
+                raise ComponentError(422, "INVALID_REFERENCE", message="来源成员或接口已失效。")
+            if any(item.id != action.id and item.source == source for item in document.ports):
+                raise ComponentError(422, "DUPLICATE_PORT", message="该来源接口已对外暴露。")
+            port["interface"] = next(interface for member in data["assembly"]["members"] if member["id"] == source.memberId for interface in member["interfaces"] if interface["id"] == source.interfaceId)
+    elif action.type == "interface.set":
+        member = next((m for m in data["assembly"]["members"] if m["id"] == action.memberId), None)
+        interface = next((i for i in member["interfaces"] if i["id"] == action.interfaceId), None) if member else None
+        if interface is None:
+            raise ComponentError(404, "COMPONENT_ITEM_NOT_FOUND", message="待校准的接口不存在。")
+        interface["frame"] = action.frame.model_dump()
+        for port in data["ports"]:
+            if port["source"] == {"memberId": action.memberId, "interfaceId": action.interfaceId}:
+                port["interface"] = dict(interface)
     elif action.type == "binding.set":
         data["bindings"] = [item for item in data["bindings"] if item["id"] != action.id]
         if action.binding is not None:
@@ -360,6 +398,7 @@ def validate_component(document: ComponentDocument) -> list[dict]:
             has_interface(document, port.source) and (port.interface is None or port.interface == next(
                 item for member in members if member.id == port.source.memberId for item in member.interfaces if item.id == port.source.interfaceId
             )) for port in document.ports), "请继承有效的零部件接口，并检查接口信息是否仍与来源一致"),
+        check("ports.ready", "对外接口契约", bool(document.ports) and all(item["status"] == "ready" for item in port_diagnostics(document)), "请在第三步检查接口来源、坐标校准与连接规则"),
         check("parameters", "参数范围", bool(document.parameters) and len(parameter_ids) == len(document.parameters) and all(parameter.value is not None and parameter.min <= parameter.max and parameter.min <= parameter.value <= parameter.max for parameter in document.parameters), "参数需为范围内的有效数值"),
         check("bindings", "参数绑定来源", all(binding_valid(binding) for binding in document.bindings) and all(
             max([parameter.min, *(definition.minimum for binding in document.bindings if binding.parameterId == parameter.id
@@ -379,7 +418,7 @@ def validate_component(document: ComponentDocument) -> list[dict]:
     ]
 
 
-def serialize_component(document: ComponentDocument) -> dict:
+def serialize_component(document: ComponentDocument, diagnostics=None) -> dict:
     data = document.model_dump(by_alias=True)
     members = []
     for member in data["assembly"]["members"]:
@@ -398,6 +437,7 @@ def serialize_component(document: ComponentDocument) -> dict:
         source_member = next((member for member in document.assembly.members if member.id == port.source.memberId), None)
         source_interface = next((item for item in (source_member.interfaces if source_member else []) if item.id == port.source.interfaceId), None)
         ports.append({
+            **port.model_dump(),
             "id": port.id, "name": port.name, "sourceMemberId": port.source.memberId,
             "sourceInterfaceId": port.source.interfaceId, "source": port.source.model_dump(), "tags": port.tags,
             "interface": (port.interface or source_interface).model_dump(by_alias=True) if port.interface or source_interface else None,
@@ -407,6 +447,7 @@ def serialize_component(document: ComponentDocument) -> dict:
         "name": document.definition.name,
         "stages": {
             "definition": data["definition"], "assembly": {"members": members, "mates": mates}, "ports": ports,
+            "portDiagnostics": diagnostics if diagnostics is not None else port_diagnostics(document),
             "slots": data["slots"], "parameters": {parameter.id: parameter.value for parameter in document.parameters},
             "parameterDefinitions": data["parameters"], "bindings": data["bindings"], "patterns": data["patterns"], "rules": data["rules"],
             "validation": [{"name": check["label"], "passed": check["status"] == "pass", **check} for check in validate_component(document)],

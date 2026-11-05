@@ -1,6 +1,6 @@
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_serializer, model_validator
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator, model_serializer, model_validator
 
 
 Number = Annotated[float, Field(strict=True, allow_inf_nan=False)]
@@ -28,11 +28,17 @@ class PartTemplateReference(ComponentModel):
         return data
 
 
+class ConnectorFrame(ComponentModel):
+    origin: Vector3
+    rotation: Vector3
+
+
 class PartInterface(ComponentModel):
     id: str
     name: str
     type: Literal["plane", "axis", "point"]
     tags: list[str]
+    frame: ConnectorFrame | None = Field(default=None, exclude_if=lambda value: value is None)
     declarationMode: Literal["staticGeometry", "featureDerived"] | None = None
     interfaceType: Literal["locating", "connecting", "supporting", "adjustable", "processDatum", "other"] | None = None
     locatingType: Literal["planeContact", "axisCoincident", "pinHole", "edgeStop", "slotAdjustable", "keyedAntiError"] | None = None
@@ -100,11 +106,129 @@ class Mate(ComponentModel):
     offset: Number
 
 
+class PortDimension(ComponentModel):
+    key: Annotated[str, Field(min_length=1, max_length=80)]
+    value: Annotated[float, Field(strict=True, ge=0)] | None = None
+    unit: Literal["mm", "cm", "m"] = "mm"
+    tolerance: Annotated[float, Field(strict=True, ge=0)] | None = None
+
+    @field_validator("key")
+    @classmethod
+    def strip_key(cls, value):
+        if not value.strip():
+            raise ValueError("尺寸标识不能为空")
+        return value.strip()
+
+
+class PortSpecification(ComponentModel):
+    category: str = ""
+    role: Literal["male", "female", "symmetric", "unknown"] = "unknown"
+    contact: Literal["clearance", "contact", "press-fit", "unknown"] = "unknown"
+    clearanceMinMm: Number | None = None
+    clearanceMaxMm: Number | None = None
+    dimensions: Annotated[list[PortDimension], Field(max_length=32)] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def valid_dimensions(self):
+        keys = [item.key.strip() for item in self.dimensions]
+        if any(not key for key in keys) or len(keys) != len(set(keys)):
+            raise ValueError("尺寸标识不能为空或重复")
+        if self.clearanceMinMm is not None and self.clearanceMaxMm is not None and self.clearanceMinMm > self.clearanceMaxMm:
+            raise ValueError("间隙下限不能大于上限")
+        if self.contact in ("clearance", "contact") and self.clearanceMinMm is not None and self.clearanceMinMm < 0:
+            raise ValueError("非压配合的间隙下限不能为负")
+        return self
+
+
+class PortConfirmation(ComponentModel):
+    key: str
+    revision: Revision
+    createdAt: str
+    actor: Literal["user"]
+    note: str
+    snapshot: dict = Field(default_factory=dict)
+
+
+class PortTrialOptions(ComponentModel):
+    targetDraftId: str
+    targetPortId: str
+    expectedTargetRevision: Revision
+    relation: Literal["固定"] = "固定"
+    offset: Number = 0
+    angle: Number = 0
+    flip: bool = True
+
+
+class PortRuleIssue(ComponentModel):
+    code: str
+    message: str
+    status: Literal["fail", "pending"]
+
+
+class PortDimensionResult(ComponentModel):
+    key: str
+    movingMm: Number | None
+    targetMm: Number | None
+    clearanceMm: Number | None = None
+    uncertaintyMm: Number | None = None
+    status: Literal["pass", "fail", "pending"]
+
+
+class PortRulesResult(ComponentModel):
+    status: Literal["pass", "fail", "pending"]
+    issues: list[PortRuleIssue]
+    dimensions: list[PortDimensionResult]
+
+
+class PortAlignmentResult(ComponentModel):
+    status: Literal["pass", "fail", "pending"]
+    positionErrorMm: Number | None = None
+    angleErrorRad: Number | None = None
+    beforeDistanceMm: Number | None = None
+    beforeAngleRad: Number | None = None
+
+
+class PortCollisionResult(ComponentModel):
+    status: Literal["pending"]
+    method: Literal["not-run"]
+    message: str
+
+
+class PortTrialReport(ComponentModel):
+    status: Literal["fail", "pending"]
+    rules: PortRulesResult
+    alignment: PortAlignmentResult
+    collision: PortCollisionResult
+
+
+class PortTrialRecord(ComponentModel):
+    options: PortTrialOptions
+    sourceKey: str
+    targetKey: str
+    revision: Revision
+    createdAt: str
+    actor: Literal["user", "agent"]
+    report: dict
+
+    @field_validator("report")
+    @classmethod
+    def validate_report(cls, value):
+        return PortTrialReport.model_validate(value).model_dump(exclude_unset=True)
+
+
 class ComponentPort(ComponentModel):
     id: str
     name: str
     source: InterfaceSource
     tags: list[str]
+
+    required: bool | None = Field(default=None, exclude_if=lambda value: value is None)
+    compatibleTags: list[str] | None = Field(default=None, exclude_if=lambda value: value is None)
+    allowedRelations: list[Literal["贴合", "同轴", "重合", "固定"]] | None = Field(default=None, exclude_if=lambda value: value is None)
+    specification: PortSpecification | None = Field(default=None, exclude_if=lambda value: value is None)
+    basisConfirmation: PortConfirmation | None = Field(default=None, exclude_if=lambda value: value is None)
+    reviewConfirmation: PortConfirmation | None = Field(default=None, exclude_if=lambda value: value is None)
+    trial: PortTrialRecord | None = Field(default=None, exclude_if=lambda value: value is None)
 
     # Keep the resolved source declaration with the inherited component port.
     # Older drafts omit this snapshot and remain valid through the custom
@@ -280,6 +404,46 @@ class PortAddAction(ComponentModel):
     port: ComponentPort
 
 
+class PortPatch(PatchModel):
+    name: str | None = None
+    source: InterfaceSource | None = None
+    tags: list[str] | None = None
+    required: bool | None = None
+    compatibleTags: list[str] | None = None
+    allowedRelations: list[Literal["贴合", "同轴", "重合", "固定"]] | None = None
+    specification: PortSpecification | None = None
+
+
+class PortConfirmAction(ComponentModel):
+    type: Literal["port.confirm"]
+    id: str
+    scope: Literal["basis", "review"]
+    note: Annotated[str, Field(min_length=1, max_length=2000)]
+
+
+class PortTrialRecordAction(ComponentModel):
+    type: Literal["port.trial.record"]
+    id: str
+    options: PortTrialOptions
+
+
+class PortTrialRequest(ComponentModel):
+    expectedRevision: Revision
+    portId: str
+    options: PortTrialOptions
+
+
+class PortPatchAction(ComponentModel):
+    type: Literal["port.patch"]
+    id: str
+    patch: PortPatch
+
+
+class PortRemoveAction(ComponentModel):
+    type: Literal["port.remove"]
+    id: str
+
+
 class ParameterValueAction(ComponentModel):
     type: Literal["parameter.value"]
     id: str
@@ -328,8 +492,16 @@ class RuleRemoveAction(ComponentModel):
     id: str
 
 
+class InterfaceSetAction(ComponentModel):
+    type: Literal["interface.set"]
+    memberId: str
+    interfaceId: str
+    frame: ConnectorFrame
+
+
 TypedAction = Annotated[
     ResetAction | DefinitionPatchAction | MemberAddAction | MemberPatchAction | MemberRemoveAction
+    | PortPatchAction | PortRemoveAction | PortConfirmAction | PortTrialRecordAction | InterfaceSetAction
     | MateAddAction | PortAddAction | ParameterValueAction | ParameterAddAction | ParameterRemoveAction | BindingSetAction | PatternAddAction | PatternRemoveAction | RuleAddAction | RuleRemoveAction | RuleExpressionAction,
     Field(discriminator="type"),
 ]
@@ -339,6 +511,7 @@ ComponentAction = TypeAdapter(TypedAction)
 class ActionRequest(ComponentModel):
     expectedRevision: Revision
     action: TypedAction
+    reason: Annotated[str, Field(max_length=2000)] = ""
 
 
 class CreateDraftRequest(ComponentModel):
