@@ -17,6 +17,22 @@ const member = id => ({
 });
 const source = memberId => ({ memberId, interfaceId: 'face.left' });
 
+test('平面移动按成员保存，旧成员和关闭选项的导出保持兼容', () => {
+  let draft = componentReducer(createComponentDocument(), { type: 'member.add', member: member('part') });
+  draft = componentReducer(draft, { type: 'member.add', member: { ...member('nested'), template: { ...template, templateKind: 'component' } } });
+  const exportedMembers = document => JSON.parse(serializeComponent(document)).stages.assembly.members;
+  assert.equal(exportedMembers(draft).some(item => 'planarMovement' in item), false);
+  const original = draft;
+  draft = componentReducer(draft, { type: 'member.patch', id: 'nested', patch: { planarMovement: true } });
+  assert.equal(original.assembly.members[1].planarMovement, undefined);
+  assert.equal(draft.assembly.members[1].planarMovement, true);
+  assert.equal(exportedMembers(draft)[1].planarMovement, true);
+  assert.equal('planarMovement' in exportedMembers(draft)[0], false);
+  draft = componentReducer(draft, { type: 'member.patch', id: 'nested', patch: { planarMovement: false } });
+  assert.equal(draft.assembly.members[1].planarMovement, false);
+  assert.equal('planarMovement' in exportedMembers(draft)[1], false);
+});
+
 test('新加入的成员按包络尺寸沿画布地面错开放置', () => {
   const bounds = new Box3(new Vector3(-150, -30, -20), new Vector3(150, 30, 80));
   assert.deepEqual(placeNextMember(bounds, []), [0, 0, 20]);

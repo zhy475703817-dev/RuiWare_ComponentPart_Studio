@@ -60,6 +60,7 @@ export type ComponentMember = {
   template: PartTemplateReference;
   position: Vector3;
   rotation: Vector3;
+  planarMovement?: boolean;
   parameterValues: Record<string, ParameterValue>;
   parameterDefinitions?: MemberParameterDefinition[];
   resolvedInterfaces?: ResolvedPartInterface[];

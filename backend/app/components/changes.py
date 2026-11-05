@@ -8,7 +8,7 @@ LABELS = {
     "designConstraints": "设计约束与可变范围", "evidence": "证据与参考", "mediaType": "文件类型",
     "size": "文件大小", "addedAt": "添加时间",
     "assembly": "装配", "members": "成员", "mates": "内部连接", "role": "角色", "position": "位置",
-    "rotation": "旋转", "parameterValues": "参数覆盖", "parameters": "组件参数", "value": "数值",
+    "rotation": "旋转", "planarMovement": "仅在 XY 平面移动", "parameterValues": "参数覆盖", "parameters": "组件参数", "value": "数值",
     "rules": "规则", "expression": "表达式", "ports": "对外接口", "slots": "槽位", "bindings": "参数绑定",
     "source": "来源", "from": "起点", "to": "终点", "relation": "连接关系", "offset": "偏移",
     "memberId": "成员引用", "interfaceId": "接口引用", "required": "必填", "tags": "标签",
