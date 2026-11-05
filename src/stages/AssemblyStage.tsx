@@ -12,7 +12,7 @@ export function AssemblyStage({ mates, onConnect, onInherit, selectedMember: mem
       <h4>{member.name} · V{member.template.version}</h4>
       {(["position", "rotation"] as const).map(field => <div key={field} className="assembly-vector">
         {["X", "Y", "Z"].map((axis, index) => <label key={axis}>{field === "position" ? "位置" : "旋转"} {axis}（{field === "position" ? "mm" : "°"}）
-          <input type="number" step="any" value={Number((member[field][index] * (field === "rotation" ? 180 / Math.PI : 1)).toFixed(6))}
+          <input type="number" step="any" disabled={field === "position" && index === 2 && Boolean(member.planarMovement)} value={Number((member[field][index] * (field === "rotation" ? 180 / Math.PI : 1)).toFixed(6))}
             onChange={event => {
               if (!Number.isFinite(event.target.valueAsNumber)) return;
               const vector: ComponentMember[typeof field] = [...member[field]];

@@ -3,7 +3,7 @@ import type { ComponentAction } from "../domain/componentReducer";
 import { componentReducer } from "../domain/componentReducer";
 import { resolveComponentComposition } from "../domain/composition";
 import { placeNextMember } from "../domain/assemblyPlacement";
-import { memberBounds } from "../library/memberModels";
+import { memberBounds, memberGroundPosition } from "../library/memberModels";
 import { SharedDraftController, httpDraftApi, initialSharedState } from "./sharedDraft";
 import type { PublishedTemplate } from "../library/publishedLibrary";
 import type { ComponentMember, MemberParameterDefinition, Vector3 } from "../domain/component";
@@ -116,6 +116,36 @@ export function useComponentWorkspace() {
 
   function moveMember(id: string, position: Vector3) {
     dispatch({ type: "member.patch", id, patch: { position } });
+  }
+
+  function transformMember(id: string, position: Vector3, rotation: Vector3) {
+    dispatch({ type: "member.patch", id, patch: { position, rotation } });
+  }
+
+  async function groundMember(id: string) {
+    const workspace = controller.current;
+    if (!workspace || !editable) return;
+    const initial = workspace.getSnapshot();
+    const member = initial.document.assembly.members.find(item => item.id === id);
+    if (!initial.draftId || !member) return;
+    const geometryState = (item: ComponentMember) => JSON.stringify([item.template, item.position, item.rotation, item.parameterValues]);
+    const initialGeometry = geometryState(member);
+    try {
+      const position = await memberGroundPosition(member);
+      const current = workspace.getSnapshot();
+      if (controller.current !== workspace || current.draftId !== initial.draftId) return;
+      const currentMember = current.document.assembly.members.find(item => item.id === id);
+      if (!currentMember || geometryState(currentMember) !== initialGeometry) {
+        setMessage("成员已变化，请重新点击贴地。");
+        return;
+      }
+      if (!workspace.dispatch({ type: "member.patch", id, patch: { position } })) return;
+      setMessage(`已将 ${currentMember.name} 贴地，当前最低点 z = 0 mm`);
+    } catch {
+      if (controller.current === workspace && workspace.getSnapshot().draftId === initial.draftId) {
+        setMessage("无法计算模型最低点，请检查该成员的模型或发布版本。");
+      }
+    }
   }
 
   async function openDraftLink(link: string) {
@@ -244,7 +274,7 @@ export function useComponentWorkspace() {
   return { document, dispatch, stage, setStage, selectedMemberId, selectedMember, setSelectedMemberId, previewTemplate, setPreviewTemplate,
     selectionResetToken, message: syncMessage, setMessage, checks, newDraft, removeMember, connectFirstInterfaces, inheritInterface, exportDraft,
     shared, editable, selectDraft, openDraftLink, copyDraftLink, publishDraft, publishing, adding, addPublishedTemplate, libraryRefreshToken,
-    copyMember, moveMember,
+    copyMember, moveMember, transformMember, groundMember,
     downloadLocalDraft, dismissAgentChanges: () => controller.current?.dismissAgentChanges(),
     retrySave: () => { void controller.current?.retry().catch(() => {}); },
     reloadDraft: () => { void controller.current?.reload(); },

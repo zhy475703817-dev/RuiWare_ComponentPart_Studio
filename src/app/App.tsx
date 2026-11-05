@@ -124,7 +124,9 @@ export function App() {
       onSelectMember={selectViewportMember}
       onHoverMember={setHoveredMemberId}
       compatibleMemberIds={compatibleIds}
-      onMoveMember={workspace.moveMember}
+      onTransformMember={workspace.transformMember}
+      onSetPlanarMovement={(id, enabled) => dispatch({ type: "member.patch", id, patch: { planarMovement: enabled } })}
+      onGroundMember={workspace.groundMember}
       onCopyMember={workspace.copyMember}
       onRemoveMember={workspace.removeMember}
       onDropTemplate={() => {

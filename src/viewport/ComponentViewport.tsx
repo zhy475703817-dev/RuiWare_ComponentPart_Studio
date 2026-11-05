@@ -1,8 +1,8 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { ReactNode, RefObject } from "react";
-import { Canvas, useThree } from "@react-three/fiber";
-import { Grid, Html, Line, OrbitControls, TransformControls } from "@react-three/drei";
-import { AlertTriangle, Boxes, Copy, Eye, Trash2 } from "lucide-react";
+import { Canvas, useFrame, useThree } from "@react-three/fiber";
+import { Grid, Line, OrbitControls, TransformControls } from "@react-three/drei";
+import { AlertTriangle, Boxes, Copy, Eye, Move3d, Rotate3d, Trash2 } from "lucide-react";
 import { BufferAttribute, BufferGeometry, DoubleSide } from "three";
 import { Vector3 as ThreeVector3 } from "three";
 import type { Group, PerspectiveCamera } from "three";
@@ -16,6 +16,8 @@ import { useTemplatePreview } from "../library/useTemplatePreview";
 
 type VisualMember = ComponentMember & { sourceMemberId?: string; patternInstance?: boolean };
 const INTERFACE_HIGHLIGHT_COLOR = "#12b8d4";
+type TransformMode = "translate" | "rotate";
+type TransformSnapshot = { position: Vector3; rotation: Vector3; mode: TransformMode };
 
 function materialText(member: ComponentMember): string {
   const candidate = member as ComponentMember & {
@@ -71,20 +73,62 @@ function CompatibleOutline() {
 type ScreenPoint = { x: number; y: number };
 type TooltipSource = "pointer" | "panel" | "hover";
 type MemberTooltip = { memberId: string; point: ScreenPoint; opacity: number; source: TooltipSource; token: number };
-const ModelStatusPortal = createContext<RefObject<HTMLDivElement> | undefined>(undefined);
+type ModelStatusEntry = { id: string; name: string; updating: boolean; error: string; retry: () => void };
+const ModelStatusRegistry = createContext<(id: string, entry: ModelStatusEntry | null) => void>(() => undefined);
 
-function ModelStatus({ name, preview }: { name: string; preview: ReturnType<typeof useTemplatePreview> }) {
-  const portal = useContext(ModelStatusPortal);
-  return <Html portal={portal} center style={{ display: preview.loading || preview.error ? "block" : "none" }}><div className="member-model-status" role={preview.error ? "alert" : "status"}>
-    <b>{name}</b><span>{preview.error ? "模型暂时无法显示，请重试" : preview.result ? "正在更新模型…" : "正在加载模型…"}</span>
-    {preview.error && <button type="button" className="ghost" onClick={preview.retry}>重试</button>}
-  </div></Html>;
+const WORLD_LABELS: { position: Vector3; text: string; className: string }[] = [
+  { position: [0, 0, 0], text: "(0, 0, 0)", className: "world-origin-label" },
+  { position: [120, 0, 0], text: "X", className: "world-axis-label axis-x" },
+  { position: [0, 120, 0], text: "Y", className: "world-axis-label axis-y" },
+  { position: [0, 0, 120], text: "Z", className: "world-axis-label axis-z" },
+];
+
+// Project into React-owned DOM instead of creating nested roots inside the scene.
+function WorldLabelsProjector({ elements }: { elements: RefObject<(HTMLSpanElement | null)[]> }) {
+  const point = useMemo(() => new ThreeVector3(), []);
+  useFrame(({ camera, size }) => {
+    WORLD_LABELS.forEach((label, index) => {
+      const element = elements.current[index];
+      if (!element) return;
+      point.set(...label.position).project(camera);
+      element.style.display = point.z >= -1 && point.z <= 1 ? "block" : "none";
+      element.style.left = `${(point.x + 1) * size.width / 2}px`;
+      element.style.top = `${(1 - point.y) * size.height / 2}px`;
+    });
+  });
+  return null;
 }
 
-function DraggableGroup({ member, selected, compatible = false, onSelect, onHover, onMove, onDragStateChange, onPointerSelect, onPointerHover, onPointerHoverEnd, movable = true, children }: { member: ComponentMember; selected: boolean; compatible?: boolean; onSelect: () => void; onHover?: (hovered: boolean) => void; onMove: (position: Vector3) => void; onDragStateChange?: (dragging: boolean) => void; onPointerSelect?: (point: ScreenPoint) => void; onPointerHover?: (point: ScreenPoint) => void; onPointerHoverEnd?: () => void; movable?: boolean; children: (hovered: boolean) => ReactNode }) {
-  const groupRef = useRef<Group | null>(null); const [groupObject, setGroupObject] = useState<Group | null>(null); const positionRef = useRef<Vector3>(member.position); const [localPosition, setLocalPosition] = useState<Vector3>(member.position); const [hovered, setHovered] = useState(false);
+function ModelStatus({ name, preview }: { name: string; preview: ReturnType<typeof useTemplatePreview> }) {
+  const id = useId();
+  const register = useContext(ModelStatusRegistry);
+  const retry = useRef(preview.retry);
+  const updating = Boolean(preview.result);
+  useEffect(() => { retry.current = preview.retry; }, [preview.retry]);
+  useEffect(() => {
+    if (!preview.loading && !preview.error) {
+      register(id, null);
+      return;
+    }
+    register(id, { id, name, updating, error: preview.error, retry: () => retry.current() });
+    return () => register(id, null);
+  }, [id, name, preview.error, preview.loading, updating, register]);
+  return null;
+}
+
+function DraggableGroup({ member, selected, compatible = false, onSelect, onHover, onTransformPreview, onTransformCommit, onDragStateChange, onPointerSelect, onPointerHover, onPointerHoverEnd, transformMode, planarMove, movable = true, children }: { member: ComponentMember; selected: boolean; compatible?: boolean; onSelect: () => void; onHover?: (hovered: boolean) => void; onTransformPreview: (snapshot: TransformSnapshot) => void; onTransformCommit: (snapshot: TransformSnapshot) => void; onDragStateChange?: (dragging: boolean) => void; onPointerSelect?: (point: ScreenPoint) => void; onPointerHover?: (point: ScreenPoint) => void; onPointerHoverEnd?: () => void; transformMode: TransformMode; planarMove: boolean; movable?: boolean; children: (hovered: boolean) => ReactNode }) {
+  const groupRef = useRef<Group | null>(null); const [groupObject, setGroupObject] = useState<Group | null>(null); const positionRef = useRef<Vector3>(member.position); const rotationRef = useRef<Vector3>(member.rotation); const [localPosition, setLocalPosition] = useState<Vector3>(member.position); const [hovered, setHovered] = useState(false);
   const captureGroup = useCallback((group: Group | null) => { groupRef.current = group; setGroupObject(group); }, []);
-  useEffect(() => { positionRef.current = member.position; setLocalPosition(member.position); }, [member.position]);
+  useEffect(() => { positionRef.current = member.position; rotationRef.current = member.rotation; setLocalPosition(member.position); }, [member.position, member.rotation]);
+  const readTransform = (): TransformSnapshot | null => {
+    const object = groupRef.current;
+    if (!object) return null;
+    if (planarMove) object.position.z = member.position[2];
+    object.updateMatrixWorld(true);
+    positionRef.current = [object.position.x, object.position.y, object.position.z];
+    rotationRef.current = [object.rotation.x, object.rotation.y, object.rotation.z];
+    return { position: positionRef.current, rotation: rotationRef.current, mode: transformMode };
+  };
   return <>
     <group ref={captureGroup} position={localPosition} rotation={member.rotation}
       onPointerOver={event => { event.stopPropagation(); setHovered(true); onHover?.(true); onPointerHover?.({ x: event.nativeEvent.clientX, y: event.nativeEvent.clientY }); }}
@@ -94,10 +138,10 @@ function DraggableGroup({ member, selected, compatible = false, onSelect, onHove
       {compatible && !selected && <CompatibleOutline />}
       {children(hovered)}
     </group>
-    {movable && selected && groupObject && <TransformControls object={groupObject} mode="translate" space="world" showX showY showZ size={0.9}
+    {movable && selected && groupObject && <TransformControls object={groupObject} mode={transformMode} space="world" showX showY showZ={!planarMove || transformMode === "rotate"} size={0.9}
       onMouseDown={() => onDragStateChange?.(true)}
-      onObjectChange={() => { const object = groupRef.current; if (!object) return; positionRef.current = [object.position.x, object.position.y, object.position.z]; }}
-      onMouseUp={() => { onMove(positionRef.current); onDragStateChange?.(false); }} />}
+      onObjectChange={() => { const snapshot = readTransform(); if (snapshot) onTransformPreview(snapshot); }}
+      onMouseUp={() => { const snapshot = readTransform(); if (snapshot) { onTransformPreview(snapshot); onTransformCommit(snapshot); } onDragStateChange?.(false); }} />}
   </>;
 }
 
@@ -149,11 +193,11 @@ function NestedComponentVisual({ member, selected = false, onSelect, onPointerSe
   </group>;
 }
 
-function MemberModel({ member, selected, compatible, selectedInterface, selectedInterfaceResolved, onSelect, onHover, onMove, onDragStateChange, onPointerSelect, onPointerHover, onPointerHoverEnd }: { member: VisualMember; selected: boolean; compatible?: boolean; selectedInterface?: InterfaceSelection | null; selectedInterfaceResolved?: ResolvedPartInterface[]; onSelect: () => void; onHover?: (hovered: boolean) => void; onMove: (position: Vector3) => void; onDragStateChange?: (dragging: boolean) => void; onPointerSelect?: (point: ScreenPoint) => void; onPointerHover?: (point: ScreenPoint) => void; onPointerHoverEnd?: () => void }) {
+function MemberModel({ member, selected, compatible, selectedInterface, selectedInterfaceResolved, onSelect, onHover, onTransformPreview, onTransformCommit, onDragStateChange, onPointerSelect, onPointerHover, onPointerHoverEnd, transformMode, planarMove }: { member: VisualMember; selected: boolean; compatible?: boolean; selectedInterface?: InterfaceSelection | null; selectedInterfaceResolved?: ResolvedPartInterface[]; onSelect: () => void; onHover?: (hovered: boolean) => void; onTransformPreview: (snapshot: TransformSnapshot) => void; onTransformCommit: (snapshot: TransformSnapshot) => void; onDragStateChange?: (dragging: boolean) => void; onPointerSelect?: (point: ScreenPoint) => void; onPointerHover?: (point: ScreenPoint) => void; onPointerHoverEnd?: () => void; transformMode: TransformMode; planarMove: boolean }) {
   const template = useMemo(() => partTemplate(member), [member.template.publicationId, member.template.templateId, member.template.version, member.template.sha256, member.code, member.name]);
   const preview = useTemplatePreview(template, member.parameterValues);
   const selectedItem = selectedInterface?.memberId === (member.sourceMemberId || member.id) ? member.interfaces.find(item => item.id === selectedInterface.interfaceId) : undefined;
-  return <DraggableGroup member={member} selected={selected} compatible={compatible} onSelect={onSelect} onHover={onHover} onMove={onMove} onDragStateChange={onDragStateChange} onPointerSelect={onPointerSelect} onPointerHover={onPointerHover} onPointerHoverEnd={onPointerHoverEnd} movable={!member.patternInstance}>
+  return <DraggableGroup member={member} selected={selected} compatible={compatible} onSelect={onSelect} onHover={onHover} onTransformPreview={onTransformPreview} onTransformCommit={onTransformCommit} onDragStateChange={onDragStateChange} onPointerSelect={onPointerSelect} onPointerHover={onPointerHover} onPointerHoverEnd={onPointerHoverEnd} transformMode={transformMode} planarMove={planarMove} movable={!member.patternInstance}>
     {hovered => {
       const color = selected ? "#c89532" : hovered ? "#d9b85f" : compatible ? "#a8cad8" : "#7394b0";
       return <><ModelStatus name={member.name} preview={preview}/>{preview.result && <><mesh geometry={preview.result.geometry} dispose={null} onClick={event => { event.stopPropagation(); onSelect(); onPointerSelect?.({ x: event.nativeEvent.clientX, y: event.nativeEvent.clientY }); }}><PartMaterial member={member} color={color}/></mesh><InterfaceMarker geometry={preview.result.geometry} item={selectedItem} member={member} resolvedInterfaces={selectedInterfaceResolved ?? preview.info?.resolvedInterfaces}/></>}</>;
@@ -161,16 +205,17 @@ function MemberModel({ member, selected, compatible, selectedInterface, selected
   </DraggableGroup>;
 }
 
-function ComponentMemberModel({ member, selected, compatible, onSelect, onHover, onMove, onDragStateChange, onPointerSelect, onPointerHover, onPointerHoverEnd }: { member: VisualMember; selected: boolean; compatible?: boolean; onSelect: () => void; onHover?: (hovered: boolean) => void; onMove: (position: Vector3) => void; onDragStateChange?: (dragging: boolean) => void; onPointerSelect?: (point: ScreenPoint) => void; onPointerHover?: (point: ScreenPoint) => void; onPointerHoverEnd?: () => void }) {
-  return <DraggableGroup member={member} selected={selected} compatible={compatible} onSelect={onSelect} onHover={onHover} onMove={onMove} onDragStateChange={onDragStateChange} onPointerSelect={onPointerSelect} onPointerHover={onPointerHover} onPointerHoverEnd={onPointerHoverEnd} movable={!member.patternInstance}>
+function ComponentMemberModel({ member, selected, compatible, onSelect, onHover, onTransformPreview, onTransformCommit, onDragStateChange, onPointerSelect, onPointerHover, onPointerHoverEnd, transformMode, planarMove }: { member: VisualMember; selected: boolean; compatible?: boolean; onSelect: () => void; onHover?: (hovered: boolean) => void; onTransformPreview: (snapshot: TransformSnapshot) => void; onTransformCommit: (snapshot: TransformSnapshot) => void; onDragStateChange?: (dragging: boolean) => void; onPointerSelect?: (point: ScreenPoint) => void; onPointerHover?: (point: ScreenPoint) => void; onPointerHoverEnd?: () => void; transformMode: TransformMode; planarMove: boolean }) {
+  return <DraggableGroup member={member} selected={selected} compatible={compatible} onSelect={onSelect} onHover={onHover} onTransformPreview={onTransformPreview} onTransformCommit={onTransformCommit} onDragStateChange={onDragStateChange} onPointerSelect={onPointerSelect} onPointerHover={onPointerHover} onPointerHoverEnd={onPointerHoverEnd} transformMode={transformMode} planarMove={planarMove} movable={!member.patternInstance}>
     {/* The outer drag group owns the instance transform; avoid applying rotation twice. */}
     {hovered => <NestedComponentVisual member={{ ...member, position: [0, 0, 0], rotation: [0, 0, 0] }} selected={selected || hovered} onSelect={onSelect} onPointerSelect={onPointerSelect}/>}
   </DraggableGroup>;
 }
 
-function PreviewScene({ members, parameters, bindings, patterns, selectedMemberId, selectedInterface, selectedInterfaceResolved, panelSelectionToken, compatibleMemberIds, onSelectMember, onHoverMember, onMoveMember, onPointerSelect, onPointerHover, onPointerHoverEnd, onScreenSelection, onClearSelection, geometry }: { members: ComponentMember[]; parameters: ComponentParameter[]; patterns: ComponentPattern[]; bindings: ParameterBinding[]; selectedMemberId: string | null; selectedInterface?: InterfaceSelection | null; selectedInterfaceResolved?: ResolvedPartInterface[]; panelSelectionToken: number; compatibleMemberIds?: ReadonlySet<string>; onSelectMember: (id: string) => void; onHoverMember?: (id: string | null) => void; onMoveMember: (id: string, position: Vector3) => void; onPointerSelect?: (id: string, point: ScreenPoint) => void; onPointerHover?: (id: string, point: ScreenPoint) => void; onPointerHoverEnd?: (id: string) => void; onScreenSelection?: (id: string, point: ScreenPoint) => void; onClearSelection?: () => void; geometry: BufferGeometry | null }) {
+function PreviewScene({ members, parameters, bindings, patterns, selectedMemberId, selectedInterface, selectedInterfaceResolved, panelSelectionToken, compatibleMemberIds, transformMode, planarMove, onSelectMember, onHoverMember, onTransformMember, onTransformPreview, onDragStateChange, onPointerSelect, onPointerHover, onPointerHoverEnd, onScreenSelection, onClearSelection, geometry }: { members: ComponentMember[]; parameters: ComponentParameter[]; patterns: ComponentPattern[]; bindings: ParameterBinding[]; selectedMemberId: string | null; selectedInterface?: InterfaceSelection | null; selectedInterfaceResolved?: ResolvedPartInterface[]; panelSelectionToken: number; compatibleMemberIds?: ReadonlySet<string>; transformMode: TransformMode; planarMove: boolean; onSelectMember: (id: string) => void; onHoverMember?: (id: string | null) => void; onTransformMember: (id: string, position: Vector3, rotation: Vector3) => void; onTransformPreview: (id: string, snapshot: TransformSnapshot) => void; onDragStateChange?: (dragging: boolean) => void; onPointerSelect?: (id: string, point: ScreenPoint) => void; onPointerHover?: (id: string, point: ScreenPoint) => void; onPointerHoverEnd?: (id: string) => void; onScreenSelection?: (id: string, point: ScreenPoint) => void; onClearSelection?: () => void; geometry: BufferGeometry | null }) {
   const { camera, size } = useThree(); const controls = useRef<OrbitControlsImpl>(null); const [cameraEnabled, setCameraEnabled] = useState(true);
-  const setDragging = (dragging: boolean) => { setCameraEnabled(!dragging); if (controls.current) controls.current.enabled = !dragging; };
+  const setDragging = (dragging: boolean) => { setCameraEnabled(!dragging); if (controls.current) controls.current.enabled = !dragging; onDragStateChange?.(dragging); };
+  const updateMemberTransform = (id: string, snapshot: TransformSnapshot) => onTransformPreview(id, snapshot);
   const memberRadius = members.length ? Math.max(8, ...members.map(member => Math.hypot(...member.position) + Math.max(0, ...Object.values(member.parameterValues).filter((value): value is number => typeof value === "number" && Number.isFinite(value))) / 2)) : 8;
   const patternRadius = patterns.length ? Math.max(...patterns.map(pattern => (parameters.find(parameter => parameter.id === pattern.spacingParameterId)?.value ?? 0) * Math.max(1, (parameters.find(parameter => parameter.id === pattern.countParameterId)?.value ?? 1) - 1))) : 0;
   const radius = members.length
@@ -197,27 +242,35 @@ function PreviewScene({ members, parameters, bindings, patterns, selectedMemberI
     onScreenSelection(selectedMemberId, point);
   }, [camera, onScreenSelection, panelSelectionToken, renderedMembers, selectedMemberId, size.height, size.width]);
   useEffect(() => { const viewCamera = camera as PerspectiveCamera; const vertical = viewCamera.fov * Math.PI / 180; const distance = cameraRadius / Math.sin(vertical / 2) * 1.8; viewCamera.position.set(distance, -distance, distance); viewCamera.up.set(0, 0, 1); viewCamera.near = .001; viewCamera.far = distance + cameraRadius * 100; viewCamera.updateProjectionMatrix(); controls.current?.target.set(0, 0, 0); controls.current?.update(); }, [camera, size.width, size.height, cameraRadius]);
-  return <><Grid args={[10000, 10000]} rotation={[Math.PI / 2, 0, 0]} cellSize={100} cellThickness={.5} sectionSize={1000} sectionThickness={1} fadeDistance={10000} cellColor="#c0c8d0" sectionColor="#8da6be" side={DoubleSide}/>{geometry && !renderedMembers.length && <mesh><primitive object={geometry} attach="geometry" dispose={null}/><meshStandardMaterial color="#7394b0" metalness={.18} roughness={.55} side={DoubleSide}/></mesh>}{renderedMembers.map((member, index) => {
+  return <><Grid args={[10000, 10000]} rotation={[Math.PI / 2, 0, 0]} cellSize={100} cellThickness={.5} sectionSize={1000} sectionThickness={1} fadeDistance={100000} cellColor="#a8b2ba" sectionColor="#7c929f" side={DoubleSide}/><axesHelper args={[100]}/>{geometry && !renderedMembers.length && <mesh><primitive object={geometry} attach="geometry" dispose={null}/><meshStandardMaterial color="#7394b0" metalness={.18} roughness={.55} side={DoubleSide}/></mesh>}{renderedMembers.map((member, index) => {
     const memberId = member.sourceMemberId || member.id;
     const compatible = compatibleMemberIds?.has(memberId) || false;
     return member.template.templateKind === "component"
-      ? <ComponentMemberModel key={`${member.id}-${index}`} member={member} selected={memberId === selectedMemberId} compatible={compatible} onSelect={() => onSelectMember(memberId)} onPointerSelect={point => onPointerSelect?.(memberId, point)} onPointerHover={point => onPointerHover?.(memberId, point)} onPointerHoverEnd={() => onPointerHoverEnd?.(memberId)} onHover={hovered => onHoverMember?.(hovered ? memberId : null)} onMove={position => onMoveMember(memberId, position)} onDragStateChange={setDragging}/>
-      : <MemberModel key={`${member.id}-${index}`} member={member} selected={memberId === selectedMemberId} compatible={compatible} selectedInterface={selectedInterface} selectedInterfaceResolved={selectedInterfaceResolved} onSelect={() => onSelectMember(memberId)} onPointerSelect={point => onPointerSelect?.(memberId, point)} onPointerHover={point => onPointerHover?.(memberId, point)} onPointerHoverEnd={() => onPointerHoverEnd?.(memberId)} onHover={hovered => onHoverMember?.(hovered ? memberId : null)} onMove={position => onMoveMember(memberId, position)} onDragStateChange={setDragging}/>;
+      ? <ComponentMemberModel key={`${member.id}-${index}`} member={member} selected={memberId === selectedMemberId} compatible={compatible} onSelect={() => onSelectMember(memberId)} onPointerSelect={point => onPointerSelect?.(memberId, point)} onPointerHover={point => onPointerHover?.(memberId, point)} onPointerHoverEnd={() => onPointerHoverEnd?.(memberId)} onHover={hovered => onHoverMember?.(hovered ? memberId : null)} onTransformPreview={snapshot => updateMemberTransform(memberId, snapshot)} onTransformCommit={snapshot => onTransformMember(memberId, snapshot.position, snapshot.rotation)} onDragStateChange={setDragging} transformMode={transformMode} planarMove={planarMove}/>
+      : <MemberModel key={`${member.id}-${index}`} member={member} selected={memberId === selectedMemberId} compatible={compatible} selectedInterface={selectedInterface} selectedInterfaceResolved={selectedInterfaceResolved} onSelect={() => onSelectMember(memberId)} onPointerSelect={point => onPointerSelect?.(memberId, point)} onPointerHover={point => onPointerHover?.(memberId, point)} onPointerHoverEnd={() => onPointerHoverEnd?.(memberId)} onHover={hovered => onHoverMember?.(hovered ? memberId : null)} onTransformPreview={snapshot => updateMemberTransform(memberId, snapshot)} onTransformCommit={snapshot => onTransformMember(memberId, snapshot.position, snapshot.rotation)} onDragStateChange={setDragging} transformMode={transformMode} planarMove={planarMove}/>;
   })}<OrbitControls ref={controls} enabled={cameraEnabled} makeDefault minDistance={radius / 100} maxDistance={radius * 100}/></>;
 }
 
-type Props = { members: ComponentMember[]; parameters?: ComponentParameter[]; bindings?: ParameterBinding[]; patterns?: ComponentPattern[]; mateCount: number; previewTemplate: PublishedTemplate | null; onShowAssembly?: () => void; selectedMemberId?: string | null; selectedInterface?: InterfaceSelection | null; selectedInterfaceResolved?: ResolvedPartInterface[]; panelSelectionToken?: number; compatibleMemberIds?: ReadonlySet<string>; onSelectMember?: (id: string | null) => void; onHoverMember?: (id: string | null) => void; onMoveMember?: (id: string, position: Vector3) => void; onCopyMember?: (id: string) => void; onRemoveMember?: (id: string) => void; onDropTemplate?: () => void };
-export function ComponentViewport({ members, parameters = [], bindings = [], patterns = [], mateCount, previewTemplate, onShowAssembly, selectedMemberId = null, selectedInterface = null, selectedInterfaceResolved, panelSelectionToken = 0, compatibleMemberIds, onSelectMember = () => undefined, onHoverMember, onMoveMember = () => undefined, onCopyMember = () => undefined, onRemoveMember = () => undefined, onDropTemplate = () => undefined }: Props) {
+type Props = { members: ComponentMember[]; parameters?: ComponentParameter[]; bindings?: ParameterBinding[]; patterns?: ComponentPattern[]; mateCount: number; previewTemplate: PublishedTemplate | null; onShowAssembly?: () => void; selectedMemberId?: string | null; selectedInterface?: InterfaceSelection | null; selectedInterfaceResolved?: ResolvedPartInterface[]; panelSelectionToken?: number; compatibleMemberIds?: ReadonlySet<string>; onSelectMember?: (id: string | null) => void; onHoverMember?: (id: string | null) => void; onTransformMember?: (id: string, position: Vector3, rotation: Vector3) => void; onSetPlanarMovement?: (id: string, enabled: boolean) => void; onGroundMember?: (id: string) => void; onCopyMember?: (id: string) => void; onRemoveMember?: (id: string) => void; onDropTemplate?: () => void };
+export function ComponentViewport({ members, parameters = [], bindings = [], patterns = [], mateCount, previewTemplate, onShowAssembly, selectedMemberId = null, selectedInterface = null, selectedInterfaceResolved, panelSelectionToken = 0, compatibleMemberIds, onSelectMember = () => undefined, onHoverMember, onTransformMember = () => undefined, onSetPlanarMovement, onGroundMember, onCopyMember = () => undefined, onRemoveMember = () => undefined, onDropTemplate = () => undefined }: Props) {
   const isPreview = previewTemplate !== null;
   const preview = useTemplatePreview(previewTemplate?.templateKind === "component" ? null : previewTemplate);
   const loaded = preview.result;
   const hoverHandler = onHoverMember || ((id: string | null) => { if (id) onSelectMember(id); });
   const [tooltip, setTooltip] = useState<MemberTooltip | null>(null);
+  const [transformMode, setTransformMode] = useState<TransformMode>("translate");
+  const [planarMove, setPlanarMove] = useState(false);
+  const [transformReadout, setTransformReadout] = useState<TransformSnapshot | null>(null);
+  const [transformDraft, setTransformDraft] = useState<{ memberId: string; field: "position" | "rotation"; index: number; value: string } | null>(null);
+  const [modelStatuses, setModelStatuses] = useState<ModelStatusEntry[]>([]);
+  const cancelTransformCommit = useRef(false);
   const tooltipRef = useRef<typeof tooltip>(null);
   const sceneRef = useRef<HTMLDivElement | null>(null);
-  const statusPortal = useRef<HTMLDivElement>(null!);
+  const worldLabelElements = useRef<(HTMLSpanElement | null)[]>([]);
   const tooltipTimers = useRef<number[]>([]);
   const tooltipToken = useRef(0);
+  const selectedMember = members.find(member => member.id === selectedMemberId) || null;
+  useEffect(() => { setPlanarMove(Boolean(selectedMember?.planarMovement)); setTransformReadout(null); setTransformDraft(null); }, [selectedMemberId, selectedMember?.planarMovement]);
   const clearTooltipTimers = () => { tooltipTimers.current.forEach(timer => window.clearTimeout(timer)); tooltipTimers.current = []; };
   const showTimedTooltip = (memberId: string, point: ScreenPoint, source: Exclude<TooltipSource, "hover">) => {
     clearTooltipTimers();
@@ -272,6 +325,32 @@ export function ComponentViewport({ members, parameters = [], bindings = [], pat
   };
   const handlePointerHoverEnd = (id: string) => { if (selectedMemberId !== id) clearHoverTooltip(id); };
   const handleScreenSelection = (id: string, point: ScreenPoint) => { showTimedTooltip(id, point, "panel"); };
+  const handleTransformPreview = (id: string, snapshot: TransformSnapshot) => { setTransformReadout(snapshot); };
+  const registerModelStatus = useCallback((id: string, entry: ModelStatusEntry | null) => {
+    setModelStatuses(current => {
+      const index = current.findIndex(status => status.id === id);
+      if (!entry) return index < 0 ? current : current.filter(status => status.id !== id);
+      if (index < 0) return [...current, entry];
+      const previous = current[index];
+      if (previous.name === entry.name && previous.updating === entry.updating && previous.error === entry.error) return current;
+      const updated = [...current];
+      updated[index] = entry;
+      return updated;
+    });
+  }, []);
+  const updateSelectedTransform = (field: "position" | "rotation", index: number, value: number) => {
+    if (!selectedMember || !Number.isFinite(value)) return;
+    const vector: Vector3 = [...selectedMember[field]];
+    vector[index] = field === "rotation" ? value * Math.PI / 180 : value;
+    onTransformMember(selectedMember.id, field === "position" ? vector : selectedMember.position, field === "rotation" ? vector : selectedMember.rotation);
+  };
+  const commitTransformInput = () => {
+    if (cancelTransformCommit.current) { cancelTransformCommit.current = false; setTransformDraft(null); return; }
+    if (!transformDraft || !selectedMember || transformDraft.memberId !== selectedMember.id) { setTransformDraft(null); return; }
+    const value = Number(transformDraft.value);
+    if (transformDraft.value.trim() && Number.isFinite(value)) updateSelectedTransform(transformDraft.field, transformDraft.index, value);
+    setTransformDraft(null);
+  };
   const clearSelection = () => { clearTooltipTimers(); tooltipRef.current = null; setTooltip(null); onHoverMember?.(null); onSelectMember(null); };
   const handleViewportPointerLeave = () => { hoverHandler(null); clearHoverTooltip(); };
   const tooltipMember = tooltip ? members.find(member => member.id === tooltip.memberId) : undefined;
@@ -286,31 +365,48 @@ export function ComponentViewport({ members, parameters = [], bindings = [], pat
     <div className="viewport-toolbar">
       <button className={`tool ${!isPreview ? "active" : ""}`} type="button" onClick={onShowAssembly}><Boxes size={15}/>当前组件</button>
       {isPreview && <span className="tool active"><Eye size={15}/>模板预览</span>}
-      <span>{isPreview ? "预览不会修改当前组件" : "选择成员后使用操作轴移动 · 滚轮缩放"}</span>
+      <span className="viewport-help">{isPreview ? "预览不会修改当前组件" : "选择成员后使用操作轴移动或旋转 · 滚轮缩放"}</span>
+      {!isPreview && selectedMember && <>
+        <button className={`tool ${transformMode === "translate" ? "active" : ""}`} type="button" aria-label="移动模式" onClick={() => setTransformMode("translate")} title="移动模式"><Move3d size={14}/></button>
+        <button className={`tool ${transformMode === "rotate" ? "active" : ""}`} type="button" aria-label="旋转模式" onClick={() => setTransformMode("rotate")} title="旋转模式"><Rotate3d size={14}/></button>
+        <label className="viewport-planar-toggle"><input type="checkbox" checked={planarMove} onChange={event => { setPlanarMove(event.target.checked); onSetPlanarMovement?.(selectedMember.id, event.target.checked); }}/>仅 XY 平面</label>
+        <button className="tool" type="button" onClick={() => onGroundMember?.(selectedMember.id)} title="将当前最低点归零">贴地</button>
+      </>}
       {!isPreview && selectedMemberId && <>
         <button className="tool" type="button" title="复制成员 (Ctrl/Cmd+D)" aria-label="复制选中成员" onClick={() => onCopyMember(selectedMemberId)}><Copy size={14}/></button>
         <button className="tool" type="button" title="删除成员 (Delete)" aria-label="删除选中成员" onClick={() => onRemoveMember(selectedMemberId)}><Trash2 size={14}/></button>
       </>}
       <span className="view-status">{members.length} 个成员 · {patterns.length ? `${patterns.length} 条构成规则` : `${mateCount} 个连接`}</span>
     </div>
-    <div className="viewport-scene" ref={sceneRef}>
-      <ModelStatusPortal.Provider value={statusPortal}><Canvas camera={{ position: [7, 5, 7], up: [0, 0, 1], fov: 42 }} onPointerMissed={clearSelection}>
+    {!isPreview && selectedMember && <div className="viewport-transform-panel" aria-label="选中物体变换">
+      <strong>{selectedMember.name}</strong><span className="transform-origin-note">世界坐标 · mm / °</span>
+      {(["position", "rotation"] as const).map(field => <div className="viewport-transform-row" key={field}>
+        <span>{field === "position" ? "位置" : "旋转"}</span>{["X", "Y", "Z"].map((axis, index) => { const draft = transformDraft?.memberId === selectedMember.id && transformDraft.field === field && transformDraft.index === index ? transformDraft.value : null; return <label key={axis}>{axis}<input type="number" step="any" disabled={field === "position" && planarMove && index === 2} value={draft ?? Number((selectedMember[field][index] * (field === "rotation" ? 180 / Math.PI : 1)).toFixed(6))} onFocus={event => setTransformDraft({ memberId: selectedMember.id, field, index, value: event.currentTarget.value })} onBlur={commitTransformInput} onKeyDown={event => { if (event.key === "Enter") event.currentTarget.blur(); else if (event.key === "Escape") { cancelTransformCommit.current = true; setTransformDraft(null); event.currentTarget.blur(); } }} onChange={event => setTransformDraft({ memberId: selectedMember.id, field, index, value: event.target.value })}/><small>{field === "position" ? "mm" : "°"}</small></label>; })}</div>)}
+    </div>}
+    <div className="viewport-scene" ref={sceneRef} style={{ top: selectedMember && !isPreview ? 132 : 42 }}>
+      <ModelStatusRegistry.Provider value={registerModelStatus}><Canvas camera={{ position: [7, 5, 7], up: [0, 0, 1], fov: 42 }} onPointerMissed={clearSelection}>
+        <WorldLabelsProjector elements={worldLabelElements}/>
         <color attach="background" args={["#f5f7f9"]}/><ambientLight intensity={1.8}/><directionalLight position={[4, 6, 5]} intensity={2}/>
         <PreviewScene members={isPreview ? [] : members} parameters={parameters} bindings={bindings} patterns={isPreview ? [] : patterns}
           selectedMemberId={isPreview ? null : selectedMemberId} selectedInterface={selectedInterface} selectedInterfaceResolved={selectedInterfaceResolved}
           panelSelectionToken={panelSelectionToken} compatibleMemberIds={compatibleMemberIds} onSelectMember={onSelectMember} onHoverMember={hoverHandler}
           onPointerSelect={handlePointerSelect} onPointerHover={handlePointerHover} onPointerHoverEnd={handlePointerHoverEnd}
-          onScreenSelection={handleScreenSelection} onClearSelection={clearSelection} onMoveMember={onMoveMember} geometry={loaded?.geometry || null}/>
-      </Canvas></ModelStatusPortal.Provider>
-      <div ref={statusPortal} className="member-status-layer"/>
+          onScreenSelection={handleScreenSelection} onClearSelection={clearSelection} onTransformMember={onTransformMember} onTransformPreview={handleTransformPreview} onDragStateChange={dragging => { if (!dragging) setTransformReadout(null); }} transformMode={transformMode} planarMove={planarMove} geometry={loaded?.geometry || null}/>
+      </Canvas></ModelStatusRegistry.Provider>
+      <div className="world-label-layer">{WORLD_LABELS.map((label, index) => <span key={label.text} ref={element => { worldLabelElements.current[index] = element; }} className={label.className}>{label.text}</span>)}</div>
+      {modelStatuses.length > 0 && <div className="member-status-layer">{modelStatuses.map(status => <div key={status.id} className="member-model-status" role={status.error ? "alert" : "status"}>
+        <b>{status.name}</b><span>{status.error ? "模型暂时无法显示，请重试" : status.updating ? "正在更新模型…" : "正在加载模型…"}</span>
+        {status.error && <button type="button" className="ghost" onClick={status.retry}>重试</button>}
+      </div>)}</div>}
       {!isPreview && tooltip && tooltipMember && <div className="viewport-tooltip" style={{ left: tooltip.point.x, top: tooltip.point.y, opacity: tooltip.opacity }}>{tooltipMember.name}</div>}
+      {!isPreview && transformReadout && <div className="transform-readout" role="status"><b>{transformReadout.mode === "rotate" ? "旋转" : "移动"}</b> {transformReadout.mode === "rotate" ? `X ${ (transformReadout.rotation[0] * 180 / Math.PI).toFixed(2) }° · Y ${ (transformReadout.rotation[1] * 180 / Math.PI).toFixed(2) }° · Z ${ (transformReadout.rotation[2] * 180 / Math.PI).toFixed(2) }°` : `X ${transformReadout.position[0].toFixed(2)} · Y ${transformReadout.position[1].toFixed(2)} · Z ${transformReadout.position[2].toFixed(2)} mm`}</div>}
     </div>
-    {!loaded && (isPreview || !members.length) && <div className="empty-overlay" role="status">
+    {!loaded && (isPreview || !members.length) && <div className="empty-overlay" style={{ top: 42 }} role="status">
       <Boxes size={30}/><b>{previewTemplate ? previewTemplate.name : "从左侧加入零部件，开始构建组件"}</b>
       <span>{previewTemplate?.templateKind === "component" ? "此组件可加入当前组件后查看" : preview.error || (isPreview ? "正在准备模型…" : "点击模板可预览，点击加号可加入组件")}</span>
       {preview.error && <><AlertTriangle size={18}/><button type="button" className="ghost" onClick={preview.retry}>重试</button></>}
     </div>}
     {isPreview && loaded && <div className="preview-caption" role="status"><b>{previewTemplate.name} · V{previewTemplate.version}</b><span>模板预览 · 点击左侧加号加入当前组件</span></div>}
-    {!isPreview && members.length > 0 && <div className="preview-caption" role="status"><b>{members.find(member => member.id === selectedMemberId)?.name || "当前组件"}</b><span>点击模型或成员列表选择，拖动操作轴调整位置</span></div>}
+    {!isPreview && members.length > 0 && <div className="preview-caption" role="status"><b>{members.find(member => member.id === selectedMemberId)?.name || "当前组件"}</b><span>点击模型或成员列表选择，拖动操作轴调整位置或角度</span></div>}
   </section>;
 }

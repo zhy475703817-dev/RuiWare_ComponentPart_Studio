@@ -388,6 +388,7 @@ def serialize_component(document: ComponentDocument) -> dict:
         members.append({
             "memberId": member["id"], "partTemplateVersion": template["publicationId"], "partTemplateRef": template,
             **{key: member.get(key, []) if key in ("parameterDefinitions", "resolvedInterfaces") else member[key] for key in ("name", "code", "role", "position", "rotation", "parameterValues", "parameterDefinitions", "resolvedInterfaces", "interfaces")}, "bindings": bindings,
+            **({"planarMovement": True} if member.get("planarMovement") else {}),
         })
     mates = [{
         "id": mate.id, "from": f"{mate.from_.memberId}.{mate.from_.interfaceId}", "to": f"{mate.to.memberId}.{mate.to.interfaceId}",
