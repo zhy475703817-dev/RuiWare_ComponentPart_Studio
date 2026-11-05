@@ -3,7 +3,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse, Response
 
-from .models import ActionRequest, ComponentDocument, CreateDraftRequest, PublishRequest
+from .models import ActionRequest, ComponentDocument, CreateDraftRequest, PublishRequest, PortTrialRequest
 from .service import serialize_component
 
 
@@ -59,7 +59,7 @@ def get_draft(request: Request, draft_id: str, afterRevision: int = Query(defaul
 
 @router.post("/{draft_id}/actions")
 def update_draft(request: Request, draft_id: str, body: ActionRequest):
-    return request.app.state.drafts.update(draft_id, body.expectedRevision, body.action)
+    return request.app.state.drafts.update(draft_id, body.expectedRevision, body.action, reason=body.reason)
 
 
 @router.put("/{draft_id}/evidence/{evidence_id}")
@@ -105,3 +105,8 @@ def export_draft(request: Request, draft_id: str):
         "Content-Disposition": f"attachment; filename=component.json; filename*=UTF-8''{quote(document_name + '.json', safe='')}",
         "Cache-Control": "no-store",
     })
+
+
+@router.post("/{draft_id}/ports/trial")
+def trial_ports(request: Request, draft_id: str, body: PortTrialRequest):
+    return request.app.state.drafts.preview_ports(draft_id, body.expectedRevision, body.portId, body.options)

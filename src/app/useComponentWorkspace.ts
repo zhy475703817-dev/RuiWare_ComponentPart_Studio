@@ -5,6 +5,7 @@ import { resolveComponentComposition } from "../domain/composition";
 import { placeNextMember } from "../domain/assemblyPlacement";
 import { memberBounds } from "../library/memberModels";
 import { SharedDraftController, httpDraftApi, initialSharedState } from "./sharedDraft";
+import type { DraftCommand } from "./sharedDraft";
 import type { PublishedTemplate } from "../library/publishedLibrary";
 import type { ComponentMember, MemberParameterDefinition, Vector3 } from "../domain/component";
 import { interfacesForReconstruction, loadReconstructionInfo } from "../library/templatePreview";
@@ -24,13 +25,14 @@ export function useComponentWorkspace() {
   const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null);
   const [previewTemplate, setPreviewTemplate] = useState<PublishedTemplate | null>(null);
   const [selectionResetToken, setSelectionResetToken] = useState(0);
+  const [lastPortCommand, setLastPortCommand] = useState<unknown>(null);
   const [message, setMessage] = useState(initialMessage);
   const [publishing, setPublishing] = useState(false);
   const [adding, setAdding] = useState(false);
   const addingLock = useRef(false);
   const [libraryRefreshToken, setLibraryRefreshToken] = useState(0);
   const { document, checks } = shared;
-  const editable = (shared.status === "ready" || shared.status === "saving") && !publishing && !adding;
+  const editable = (shared.status === "ready" || shared.status === "saving") && !publishing && !adding && !shared.commandBusy;
   const selectedMember = document.assembly.members.find(member => member.id === selectedMemberId);
 
   useEffect(() => {
@@ -240,11 +242,26 @@ export function useComponentWorkspace() {
     setMessage("已下载本地副本；这些修改尚未保存到共享草稿。");
   }
 
+  async function executePortCommand(action: DraftCommand, revision?: number, reason?: string) {
+    const workspace = controller.current;
+    if (!workspace) return null;
+    try {
+      const result = await workspace.executePortCommand(action, revision, reason);
+      setLastPortCommand({ status: "ok", action, revision: result.document.revision, operations: result.operations });
+      return result;
+    } catch (error) {
+      const failure = error as Error & { code?: string; current?: unknown };
+      setLastPortCommand({ status: "error", action, code: failure.code, message: failure.message, current: failure.current });
+      setMessage(failure.message);
+      return null;
+    }
+  }
+
   const syncMessage = shared.error || (shared.status === "loading" ? "正在读取共享草稿…" : shared.status === "saving" ? "正在保存草稿…" : shared.notice || message);
   return { document, dispatch, stage, setStage, selectedMemberId, selectedMember, setSelectedMemberId, previewTemplate, setPreviewTemplate,
     selectionResetToken, message: syncMessage, setMessage, checks, newDraft, removeMember, connectFirstInterfaces, inheritInterface, exportDraft,
     shared, editable, selectDraft, openDraftLink, copyDraftLink, publishDraft, publishing, adding, addPublishedTemplate, libraryRefreshToken,
-    copyMember, moveMember,
+    copyMember, moveMember, executePortCommand, lastPortCommand,
     downloadLocalDraft, dismissAgentChanges: () => controller.current?.dismissAgentChanges(),
     retrySave: () => { void controller.current?.retry().catch(() => {}); },
     reloadDraft: () => { void controller.current?.reload(); },

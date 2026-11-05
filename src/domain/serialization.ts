@@ -1,4 +1,5 @@
 import type { ComponentDocument } from "./component.ts";
+import { resolvePort } from "./ports.ts";
 import { validateComponent } from "./validation.ts";
 
 export function serializeComponent(document: ComponentDocument): string {
@@ -25,7 +26,8 @@ export function serializeComponent(document: ComponentDocument): string {
           fromRef: mate.from, toRef: mate.to, relation: mate.relation, offset: mate.offset,
         })),
       },
-      ports: ports.map(port => ({ id: port.id, name: port.name, sourceMemberId: port.source.memberId, sourceInterfaceId: port.source.interfaceId, source: port.source, tags: port.tags, interface: port.interface })),
+      ports: ports.map(port => ({ ...port, id: port.id, name: port.name, sourceMemberId: port.source.memberId, sourceInterfaceId: port.source.interfaceId, source: port.source, tags: port.tags, interface: port.interface })),
+      portDiagnostics: ports.map(port => resolvePort(document, port)),
       slots, parameters: Object.fromEntries(parameters.map(parameter => [parameter.id, parameter.value])),
       parameterDefinitions: parameters, bindings, patterns: document.patterns, rules,
       validation: validateComponent(document).map(check => ({ name: check.label, passed: check.status === "pass", ...check })),

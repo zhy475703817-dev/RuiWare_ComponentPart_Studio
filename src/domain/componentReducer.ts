@@ -10,6 +10,8 @@ export type ComponentAction =
   | { type: "member.remove"; id: string }
   | { type: "mate.add"; mate: Mate }
   | { type: "port.add"; port: ComponentPort }
+  | { type: "port.patch"; id: string; patch: Partial<Pick<ComponentPort, "name" | "source" | "tags" | "required" | "compatibleTags" | "allowedRelations" | "specification">> }
+  | { type: "port.remove"; id: string }
   | { type: "parameter.value"; id: string; value: number | null }
   | { type: "parameter.add"; parameter: import("./component.ts").ComponentParameter }
   | { type: "parameter.remove"; id: string }
@@ -109,6 +111,17 @@ export function componentReducer(document: ComponentDocument, action: ComponentA
       if (!sourceInterface || (action.port.interface && !samePartInterface(action.port.interface, sourceInterface))) return document;
       return next({ ports: [...document.ports, { ...structuredClone(action.port), interface: structuredClone(sourceInterface) }] });
     }
+    case "port.patch": {
+      const port = document.ports.find(item => item.id === action.id);
+      if (!port) return document;
+      const updated = { ...port, ...structuredClone(action.patch) };
+      if (!updated.name.trim() || !hasInterface(document, updated.source) || document.ports.some(item => item.id !== action.id && item.source.memberId === updated.source.memberId && item.source.interfaceId === updated.source.interfaceId)) return document;
+      updated.interface = structuredClone(getInterface(document, updated.source));
+      if (JSON.stringify(updated) === JSON.stringify(port)) return document;
+      return next({ ports: document.ports.map(item => item.id === action.id ? updated : item) });
+    }
+    case "port.remove":
+      return document.ports.some(item => item.id === action.id) ? next({ ports: document.ports.filter(item => item.id !== action.id) }) : document;
     case "parameter.value":
       if (!document.parameters.some(parameter => parameter.id === action.id && parameter.value !== action.value)) return document;
       const componentParameter = document.parameters.find(parameter => parameter.id === action.id)!;

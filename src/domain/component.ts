@@ -9,7 +9,10 @@ export type PartTemplateReference = {
   sha256: string;
 };
 
+export type ConnectorFrame = { origin: Vector3; rotation: Vector3 };
+
 export type PartInterface = {
+  frame?: ConnectorFrame;
   id: string;
   name: string;
   type: "plane" | "axis" | "point";
@@ -69,7 +72,29 @@ export type ComponentMember = {
 export type InterfaceSource = { memberId: string; interfaceId: string };
 export type InterfaceSelection = InterfaceSource;
 export type Mate = { id: string; from: InterfaceSource; to: InterfaceSource; relation: "贴合" | "同轴" | "重合"; offset: number };
-export type ComponentPort = { id: string; name: string; source: InterfaceSource; tags: string[]; interface?: PartInterface };
+export type ComponentPort = {
+  id: string; name: string; source: InterfaceSource; tags: string[];
+  required?: boolean; compatibleTags?: string[]; allowedRelations?: ("固定" | Mate["relation"])[];
+  interface?: PartInterface;
+  specification?: PortSpecification;
+  basisConfirmation?: PortConfirmation; reviewConfirmation?: PortConfirmation; trial?: PortTrialRecord;
+};
+export type PortSpecification = {
+  category: string; role: "male" | "female" | "symmetric" | "unknown";
+  contact: "clearance" | "contact" | "press-fit" | "unknown";
+  clearanceMinMm: number | null; clearanceMaxMm: number | null;
+  dimensions: { key: string; value: number | null; unit: "mm" | "cm" | "m"; tolerance: number | null }[];
+};
+export type PortConfirmation = { key: string; revision: number; createdAt: string; actor: "user"; note: string };
+export type PortTrialOptions = { targetDraftId: string; targetPortId: string; expectedTargetRevision: number; relation: "固定"; offset: number; angle: number; flip: boolean };
+export type PortTrialReport = {
+  status: "pass" | "fail" | "pending";
+  rules: { status: "pass" | "fail" | "pending"; issues: { code: string; message: string; status: "fail" | "pending" }[]; dimensions: { key: string; movingMm: number | null; targetMm: number | null; clearanceMm?: number; uncertaintyMm?: number; status: string }[] };
+  alignment: { status: string; positionErrorMm?: number; angleErrorRad?: number; beforeDistanceMm?: number; beforeAngleRad?: number };
+  collision: { status: string; method: string; message: string };
+};
+export type PortTrialRecord = { options: PortTrialOptions; sourceKey: string; targetKey: string; revision: number; createdAt: string; actor: "user" | "agent"; report: PortTrialReport };
+export type PortTrialPreview = { draftId: string; baseRevision: number; targetDraftId: string; targetRevision: number; portId: string; targetPortId: string; report: PortTrialReport; movingMembers: ComponentMember[]; targetMembers: ComponentMember[] };
 export type ComponentSlot = { id: string; name: string; memberId: string | null; required: boolean };
 export type ComponentParameter = { id: string; label: string; value: number | null; unit: string; min: number; max: number };
 export type ParameterBinding = { id: string; parameterId: string; memberId: string; memberParameterId: string };
