@@ -1,5 +1,5 @@
 import { Link2 } from "lucide-react";
-import type { Mate } from "../domain/component";
+import type { ComponentMember, Mate, ParameterBinding } from "../domain/component";
 
 type Props = { mates: Mate[]; onConnect: () => void };
 

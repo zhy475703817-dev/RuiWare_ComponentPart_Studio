@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { PublishedTemplate } from "./publishedLibrary";
-import { loadReconstructionInfo, loadTemplatePreview } from "./templatePreview";
+import { loadReconstructionInfo, loadTemplatePreview } from "./templatePreview.ts";
 import type { LoadedPreview, ReconstructionInfo } from "./templatePreview";
 
 function templateKey(selected: PublishedTemplate | null) {
@@ -41,7 +41,7 @@ function trimPreviewCache() {
   }
 }
 
-function cachedPreview(selected: PublishedTemplate, values: Record<string, unknown>) {
+export function cachedPreview(selected: PublishedTemplate, values: Record<string, unknown>) {
   const key = `${templateKey(selected)}|${JSON.stringify(values)}`;
   let entry = previewCache.get(key);
   if (!entry) {

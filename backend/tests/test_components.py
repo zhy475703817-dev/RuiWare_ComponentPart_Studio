@@ -161,6 +161,12 @@ console.log(JSON.stringify({document:result,checks:validateComponent(result),exp
                                 text=True, capture_output=True, encoding="utf-8", cwd=Path(__file__).resolve().parents[2], check=True)
         expected = json.loads(result.stdout)
         document = ComponentDocument.model_validate(data)
+        # Check metadata on the member before the actions deliberately remove it.
+        member_export = serialize_component(document)["stages"]["assembly"]["members"][1]
+        self.assertEqual(member_export["parameterDefinitions"][0]["minimum"], 100)
+        self.assertEqual(member_export["interfaces"][0]["region"]["mode"], "rectangle")
+        self.assertEqual(member_export["interfaces"][0]["geometryRefs"], ["leftFace"])
+        self.assertEqual(member_export["interfaces"][0]["region"]["countExpression"], "holeCount")
         for action in actions:
             document = apply_action(document, ComponentAction.validate_python(action))
         self.assertEqual(document.model_dump(by_alias=True), expected["document"])

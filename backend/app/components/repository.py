@@ -86,6 +86,16 @@ class DraftRepository:
         items = [json.loads(row["metadata"]) for row in rows]
         return {"items": items, "count": len(items)}
 
+    def cleanup_sources(self):
+        """Read current drafts and immutable retry snapshots in one local snapshot."""
+        with closing(self._connect()) as connection, connection:
+            connection.execute("BEGIN")
+            drafts = connection.execute("SELECT id, document FROM component_drafts").fetchall()
+            publications = connection.execute("SELECT id, document FROM component_publications").fetchall()
+        return [{"kind": kind, "id": row["id"],
+                 "document": ComponentDocument.model_validate_json(row["document"]).model_dump(by_alias=True)}
+                for kind, rows in (("local-draft", drafts), ("local-snapshot", publications)) for row in rows]
+
     def publication(self, publication_id: str) -> dict:
         with closing(self._connect()) as connection:
             row = self._publication(connection, publication_id)

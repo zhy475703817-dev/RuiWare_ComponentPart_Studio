@@ -21,8 +21,8 @@ from backend.tests.storage_helpers import MemoryMinio
 from backend.tests.test_preview import STL, metadata
 
 
-def reconstructable_package(valid=True):
-    draft = TemplateDraft(id='draft-1', code='BEAM-1', name='缓存横梁')
+def reconstructable_package(valid=True, *, template_id='draft-1', code='BEAM-1'):
+    draft = TemplateDraft(id=template_id, code=code, name='缓存横梁')
     draft.materialValidationSamples = [MaterialValidationSample.model_validate({'id': 'material.nominal', 'role': 'nominal', 'name': 'steel', 'bindingId': 'mat-1',
                                        'bindingMode': 'copy', 'materialCode': 'M1', 'materialName': 'steel',
                                        'materialThickness': 2, 'requiredForAdmission': True})]
@@ -169,15 +169,15 @@ class LibraryCacheTests(unittest.TestCase):
             self.assertEqual(body['count'], 1)
             self.assertEqual(body['updateCount'], 1)
             applied = client.post('/api/template-library/apply').json()
-            self.assertEqual(applied['count'], 2)
+            self.assertEqual(applied['count'], 1)
             self.assertEqual(applied['updateCount'], 0)
+            model_runs = self.worker.call_count
             self.records = []
             body = self.settled(client, refresh=True)
-            self.assertEqual(body['count'], 2)
-            self.assertEqual(body['updateCount'], 2)
+            self.assertEqual(body['count'], 1)
+            self.assertEqual(body['updateCount'], 1)
             self.assertEqual(client.post('/api/template-library/apply').json()['count'], 0)
-        package_key = f"{self.settings.minio.prefix}/version-1/template.rwpart"
-        self.assertEqual(self.storage.reads.count(package_key), 1)
+            self.assertEqual(self.worker.call_count, model_runs)
 
     def test_invalid_templates_stay_hidden_and_transient_failure_can_retry(self):
         self.payloads['version-1'] = reconstructable_package(False)
@@ -319,8 +319,9 @@ class LibraryCacheTests(unittest.TestCase):
         asyncio.run(scenario())
 
     def test_failed_package_does_not_block_healthy_later_templates(self):
-        self.payloads['version-2'] = self.payloads['version-1']
-        self.records.append({**self.records[0], 'publicationId': 'version-2', 'version': 2})
+        self.payloads['version-2'] = reconstructable_package(template_id='draft-2', code='BEAM-2')
+        self.records.append({**metadata(self.payloads['version-2']), 'publicationId': 'version-2',
+                             'templateId': 'draft-2', 'code': 'BEAM-2', 'version': 2})
         self.fail_ids.add('version-1')
         with TestClient(create_app(self.settings, transport=httpx.MockTransport(self.upstream), dist_dir=None)) as client:
             body = self.settled(client)

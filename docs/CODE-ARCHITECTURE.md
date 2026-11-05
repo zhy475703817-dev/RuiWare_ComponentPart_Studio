@@ -13,6 +13,8 @@ src/domain/component.ts          工程数据模型与新草稿默认值
 src/domain/componentReducer.ts   无副作用的编辑操作及关联清理
 src/domain/validation.ts         基础检查与待接入检查
 src/domain/serialization.ts      导出格式，不依赖页面状态
+src/domain/assemblyPlacement.ts  根据实际模型边界计算新成员落地及间距
+src/library/memberModels.ts      复用模型缓存计算零件及嵌套组件边界
 src/library/                     发布列表、预览请求、STL 校验解析及资源生命周期
 src/viewport/ComponentViewport.tsx 真实 STL 展示、相机适配、网格和预览状态
 src/styles/workspace.css         工作台样式
@@ -47,7 +49,7 @@ FastAPI 提供 `/api/health`、`/api/published-templates`、兼容 STL 预览接
 | 标识 | 面板 | 当前职责 |
 | --- | --- | --- |
 | definition | DefinitionStage | 编辑名称、编码、类型、设计说明 |
-| assembly | AssemblyStage | 记录接口连接和继承接口；显示实际能力边界 |
+| assembly | AssemblyStage | 编辑所选成员位置、旋转及未绑定参数；记录接口连接和继承接口 |
 | interfaces | InterfacesStage | 显示对外接口来源和槽位占用 |
 | parameters | ParametersStage | 编辑数值，显示范围与绑定数据 |
 | rules | RulesStage | 编辑规则说明 |
@@ -68,7 +70,7 @@ FastAPI 提供 `/api/health`、`/api/published-templates`、兼容 STL 预览接
 - 连接和接口在内存中使用 `{ memberId, interfaceId }`。标识含点号也不会被错误拆分。
 - 删除成员清理关联连接、对外接口和参数绑定；保留槽位定义，将其占用清空。必填空槽位会在验证中失败。
 - 位置使用毫米、旋转使用弧度，工程坐标为右手 Z 向上。正式模型加载时，在 viewport 边界明确处理文件单位与坐标，不能修改工程定义来适配显示。
-- reducer 支持新增/编辑/删除成员、新增连接和对外接口，以及删除成员时的关联清理；已接入发布模板本地模型预览，但预览选择仍不等于加入装配，也不会创建示例成员来代替真实零部件。
+- reducer 支持新增/编辑/删除成员、新增连接和对外接口，以及删除成员时的关联清理。加入零件会依据缓存的真实模型边界自动计算落地与间距；加入、成员列表选择、画布操作轴和阶段面板编辑最终都写入同一份草稿。重复引用固定发布版本会创建独立实例。预览仍是只读选择，不等于加入装配。
 
 ## 验证与导出
 
@@ -84,6 +86,6 @@ MCP `/mcp` 与 REST 共用 `DraftRepository`、HTTP 客户端和预览缓存，M
 
 ## 下一步扩展位置
 
-发布包完整性与兼容 STL 预览位于 `backend/app/preview.py`，本地重建位于 `backend/app/reconstruction.py`，固定 CAD 引擎快照位于 `backend/engine/`；前端 `library` 管理参数、请求取消和模型资源。下一步“加入装配”应映射已解析定义并明确发出 `member.add`；点击预览始终不修改工程文档。原始接口契约保留在发布定义中，不能用接口名称推断装配位置。
+发布包完整性与兼容 STL 预览位于 `backend/app/preview.py`，本地重建位于 `backend/app/reconstruction.py`，固定 CAD 引擎快照位于 `backend/engine/`；前端 `library` 管理参数、请求取消和共享模型缓存。零件实例位置按实际包围盒计算，不更改几何本身；画布上的参数失败会保留上一次可用几何。接口连接目前只记录关系，不执行几何约束求解；原始接口契约保留在发布定义中，不能用接口名称推断装配位置。
 
 真实模型已接入 `viewport`。成员变换、接口求解、参数求值属于工程能力，应通过工作台协调和领域操作写回数据。正式发布另接发布服务，不用本地 JSON 下载代替发布。

@@ -1,11 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import type { ComponentAction } from "../domain/componentReducer";
+import { componentReducer } from "../domain/componentReducer";
+import { resolveComponentComposition } from "../domain/composition";
+import { placeNextMember } from "../domain/assemblyPlacement";
+import { memberBounds } from "../library/memberModels";
 import { SharedDraftController, httpDraftApi, initialSharedState } from "./sharedDraft";
 import type { PublishedTemplate } from "../library/publishedLibrary";
 import type { ComponentMember, ComponentSlot, InterfaceSource, MemberParameterDefinition, Vector3 } from "../domain/component";
 import { interfacesForReconstruction, loadReconstructionInfo } from "../library/templatePreview";
 import { STAGES, type StageId } from "./stages";
 import { componentPublicationMember, fetchPublishedComponent, publishComponentDraft } from "../library/componentPublications";
+import { exportEvidenceFiles } from "../domain/evidenceStore";
 
 const initialMessage = "左侧可浏览已发布零部件，点击模板预览或使用加号加入组件";
 
@@ -22,6 +27,7 @@ export function useComponentWorkspace() {
   const [message, setMessage] = useState(initialMessage);
   const [publishing, setPublishing] = useState(false);
   const [adding, setAdding] = useState(false);
+  const addingLock = useRef(false);
   const [libraryRefreshToken, setLibraryRefreshToken] = useState(0);
   const { document, checks } = shared;
   const editable = (shared.status === "ready" || shared.status === "saving") && !publishing && !adding;
@@ -167,7 +173,8 @@ export function useComponentWorkspace() {
     let exported;
     try { exported = await controller.current?.export(); if (!exported) return; }
     catch { setMessage("导出失败，请先确认草稿已保存并处理同步问题。"); return; }
-    const blob = new Blob([JSON.stringify(exported, null, 2)], { type: "application/json" });
+    const packageWithEvidence = { ...exported as object, evidenceFiles: await exportEvidenceFiles(document.definition.evidence) };
+    const blob = new Blob([JSON.stringify(packageWithEvidence, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const link = window.document.createElement("a");
     const filename = document.definition.name.trim().replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_") || "组件模板";
@@ -196,9 +203,11 @@ export function useComponentWorkspace() {
 
   async function addPublishedTemplate(template: PublishedTemplate) {
     const workspace = controller.current;
-    if (!workspace || !editable) return;
+    if (!workspace || !editable || addingLock.current) return;
+    addingLock.current = true;
     const draftId = workspace.getSnapshot().draftId;
     setAdding(true);
+    setMessage(`正在加入 ${template.name}…`);
     try {
       let member;
       if (template.templateKind === "component") {
@@ -218,17 +227,33 @@ export function useComponentWorkspace() {
         };
       }
       if (workspace !== controller.current || workspace.getSnapshot().draftId !== draftId) throw new Error("草稿已切换，请重新选择模板。");
+      const snapshot = workspace.getSnapshot();
+      let position: Vector3 | undefined;
+      if (template.templateKind !== "component") {
+        // Resolve automatic parameter bindings before measuring the displayed shapes.
+        const projected = componentReducer(snapshot.document, { type: "member.add", member });
+        const instances = resolveComponentComposition(projected);
+        const bounds = await Promise.all(instances.map(item => memberBounds(item)));
+        const index = instances.findIndex(item => item.id === member.id);
+        position = placeNextMember(bounds[index], bounds.filter((_, i) => i !== index));
+        if (workspace !== controller.current || workspace.getSnapshot().draftId !== draftId ||
+            workspace.getSnapshot().document.revision !== snapshot.document.revision) throw new Error("草稿已更新，请重新加入模板。");
+      }
       if (!workspace.dispatch({ type: "member.add", member })) throw new Error("草稿暂不可编辑，请先处理同步问题。");
-      await workspace.flush();
+      // Apply placement separately so inferred component dimensions do not resize the parts again.
+      if (position) workspace.dispatch({ type: "member.patch", id: member.id, patch: { position } });
       setSelectedMemberId(member.id);
+      setPreviewTemplate(null);
       setStage("assembly");
-      setMessage(`已加入 ${template.name} · V${template.version}`);
+      await workspace.flush();
+      setMessage(`已加入 ${template.name} · V${template.version}，可在画布中选择并移动`);
     } catch (error) { setMessage(error instanceof Error ? error.message : "加入失败，请重试。"); }
-    finally { setAdding(false); }
+    finally { addingLock.current = false; setAdding(false); }
   }
 
-  function downloadLocalDraft() {
-    const blob = new Blob([JSON.stringify(document, null, 2)], { type: "application/json" });
+  async function downloadLocalDraft() {
+    const backupWithEvidence = { ...document, evidenceFiles: await exportEvidenceFiles(document.definition.evidence) };
+    const blob = new Blob([JSON.stringify(backupWithEvidence, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const link = window.document.createElement("a");
     link.href = url;
