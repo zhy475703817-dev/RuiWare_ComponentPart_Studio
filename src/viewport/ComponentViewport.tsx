@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useId, useMemo, useRef, useState } from "react";
-import type { ReactNode, RefObject } from "react";
-import { Canvas, useFrame, useThree } from "@react-three/fiber";
+import type { ReactNode } from "react";
+import { Canvas, useThree } from "@react-three/fiber";
 import { Grid, Line, TransformControls } from "@react-three/drei";
 import { AlertTriangle, Boxes, Copy, Eye, LocateFixed, Move3d, Rotate3d, RotateCcw, Trash2 } from "lucide-react";
 import { BufferAttribute, BufferGeometry, DoubleSide } from "three";
@@ -76,26 +76,6 @@ type TooltipSource = "pointer" | "panel" | "hover";
 type MemberTooltip = { memberId: string; point: ScreenPoint; opacity: number; source: TooltipSource; token: number };
 type ModelStatusEntry = { id: string; name: string; updating: boolean; error: string; retry: () => void };
 const ModelStatusRegistry = createContext<(id: string, entry: ModelStatusEntry | null) => void>(() => undefined);
-
-const WORLD_LABELS: { position: Vector3; text: string; className: string }[] = [
-  { position: [0, 0, 0], text: "(0, 0, 0)", className: "world-origin-label" },
-];
-
-// Project into React-owned DOM instead of creating nested roots inside the scene.
-function WorldLabelsProjector({ elements }: { elements: RefObject<(HTMLSpanElement | null)[]> }) {
-  const point = useMemo(() => new ThreeVector3(), []);
-  useFrame(({ camera, size }) => {
-    WORLD_LABELS.forEach((label, index) => {
-      const element = elements.current[index];
-      if (!element) return;
-      point.set(...label.position).project(camera);
-      element.style.display = point.z >= -1 && point.z <= 1 ? "block" : "none";
-      element.style.left = `${(point.x + 1) * size.width / 2}px`;
-      element.style.top = `${(1 - point.y) * size.height / 2}px`;
-    });
-  });
-  return null;
-}
 
 function ModelStatus({ name, preview }: { name: string; preview: ReturnType<typeof useTemplatePreview> }) {
   const id = useId();
@@ -261,7 +241,6 @@ export function ComponentViewport({ members, parameters = [], bindings = [], pat
   const cancelTransformCommit = useRef(false);
   const tooltipRef = useRef<typeof tooltip>(null);
   const sceneRef = useRef<HTMLDivElement | null>(null);
-  const worldLabelElements = useRef<(HTMLSpanElement | null)[]>([]);
   const tooltipTimers = useRef<number[]>([]);
   const tooltipToken = useRef(0);
   const selectedMember = members.find(member => member.id === selectedMemberId) || null;
@@ -360,7 +339,7 @@ export function ComponentViewport({ members, parameters = [], bindings = [], pat
     <div className="viewport-toolbar">
       <button className={`tool ${!isPreview ? "active" : ""}`} type="button" onClick={onShowAssembly}><Boxes size={15}/>当前组件</button>
       {isPreview && <span className="tool active"><Eye size={15}/>模板预览</span>}
-      <button className="tool" type="button" onClick={() => setCameraResetToken(token => token + 1)} title="将镜头朝向世界坐标原点"><LocateFixed size={14}/>视角复位</button>
+      <button className="tool" type="button" onClick={() => setCameraResetToken(token => token + 1)} title="面向世界坐标原点并恢复默认观察距离"><LocateFixed size={14}/>视角复位</button>
       <span className="viewport-help" title="左键拖动旋转视角 · 中键拖动平移视角 · 滚轮缩放">{isPreview ? "预览不会修改当前组件" : "中键拖动平移视角 · 滚轮缩放"}</span>
       {!isPreview && selectedMember && <>
         <button className={`tool ${transformMode === "translate" ? "active" : ""}`} type="button" aria-label="移动模式" onClick={() => setTransformMode("translate")} title="移动模式"><Move3d size={14}/></button>
@@ -383,7 +362,6 @@ export function ComponentViewport({ members, parameters = [], bindings = [], pat
     {(isPreview || !selectedMember) && <div className="viewport-transform-placeholder">{isPreview ? "模板预览 · 选择当前组件后可编辑构件" : "选择零部件或组件，精确设置位置和旋转角度"}<span>世界坐标 · mm / °</span></div>}
     <div className="viewport-scene" ref={sceneRef}>
       <ModelStatusRegistry.Provider value={registerModelStatus}><Canvas camera={{ position: [7, 5, 7], up: [0, 0, 1], fov: 42 }} onPointerMissed={clearSelection}>
-        <WorldLabelsProjector elements={worldLabelElements}/>
         <color attach="background" args={["#f5f7f9"]}/><ambientLight intensity={1.8}/><directionalLight position={[4, 6, 5]} intensity={2}/>
         <PreviewScene members={isPreview ? [] : members} parameters={parameters} bindings={bindings} patterns={isPreview ? [] : patterns}
           selectedMemberId={isPreview ? null : selectedMemberId} selectedInterface={selectedInterface} selectedInterfaceResolved={selectedInterfaceResolved}
@@ -391,7 +369,6 @@ export function ComponentViewport({ members, parameters = [], bindings = [], pat
           onPointerSelect={handlePointerSelect} onPointerHover={handlePointerHover} onPointerHoverEnd={handlePointerHoverEnd}
           onScreenSelection={handleScreenSelection} onTransformMember={onTransformMember} onTransformPreview={handleTransformPreview} onDragStateChange={dragging => { if (!dragging) setTransformReadout(null); }} transformMode={transformMode} planarMove={planarMove} geometry={loaded?.geometry || null} cameraResetToken={cameraResetToken} cameraStorageKey={cameraStorageKey}/>
       </Canvas></ModelStatusRegistry.Provider>
-      <div className="world-label-layer">{WORLD_LABELS.map((label, index) => <span key={label.text} ref={element => { worldLabelElements.current[index] = element; }} className={label.className}>{label.text}</span>)}</div>
       {modelStatuses.length > 0 && <div className="member-status-layer">{modelStatuses.map(status => <div key={status.id} className="member-model-status" role={status.error ? "alert" : "status"}>
         <b>{status.name}</b><span>{status.error ? "模型暂时无法显示，请重试" : status.updating ? "正在更新模型…" : "正在加载模型…"}</span>
         {status.error && <button type="button" className="ghost" onClick={status.retry}>重试</button>}

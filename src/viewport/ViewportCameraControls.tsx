@@ -4,7 +4,7 @@ import { OrbitControls } from "@react-three/drei";
 import { MOUSE } from "three";
 import type { PerspectiveCamera } from "three";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
-import { readCameraView, writeCameraView } from "./cameraView";
+import { createResetCameraView, readCameraView, writeCameraView } from "./cameraView";
 import type { CameraView } from "./cameraView";
 
 type Props = {
@@ -101,10 +101,11 @@ export function ViewportCameraControls({ enabled, radius, hasContent, resetToken
     if (lastResetToken.current === resetToken || !controls.current) return;
     lastResetToken.current = resetToken;
     waitingForContent.current = false;
-    const position = camera.position.length() > .01
-      ? camera.position.toArray() as CameraView["position"]
-      : [500, -500, 500] as CameraView["position"];
-    applyView({ version: 1, position, target: [0, 0, 0], zoom: camera.zoom });
+    applyView(createResetCameraView(
+      camera.position.toArray() as CameraView["position"],
+      controls.current.target.toArray() as CameraView["target"],
+      camera.aspect,
+    ));
     saveView();
   }, [applyView, camera, resetToken, saveView]);
 

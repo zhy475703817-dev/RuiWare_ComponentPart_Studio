@@ -7,6 +7,28 @@ export type CameraView = {
   zoom: number;
 };
 
+// Reference framing for the 10,000 mm ground grid; this is a radial distance,
+// independent of member parameters or the distance before the reset.
+export const RESET_CAMERA_DISTANCE_MM = 16000;
+const REFERENCE_ASPECT = 16 / 9;
+
+export function createResetCameraView(position: CameraView["position"], target: CameraView["target"], aspect: number): CameraView {
+  const offset = position.map((coordinate, index) => coordinate - target[index]);
+  let length = Math.hypot(...offset);
+  if (!Number.isFinite(length) || length < .001) {
+    offset.splice(0, 3, 1, -1, 1);
+    length = Math.sqrt(3);
+  }
+  const safeAspect = Number.isFinite(aspect) && aspect > 0 ? aspect : REFERENCE_ASPECT;
+  const distance = RESET_CAMERA_DISTANCE_MM * Math.max(1, REFERENCE_ASPECT / safeAspect);
+  return {
+    version: 1,
+    position: offset.map(coordinate => coordinate / length * distance) as CameraView["position"],
+    target: [0, 0, 0],
+    zoom: 1,
+  };
+}
+
 // Keep corrupted storage from producing unstable projection matrices. These
 // limits are far outside the platform's normal millimetre-scale assemblies.
 const MAX_COORDINATE = 1e12;
