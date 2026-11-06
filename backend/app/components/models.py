@@ -75,6 +75,7 @@ class PartInterface(ComponentModel):
     type: Literal["plane", "axis", "point"]
     tags: list[str]
     connectionTypeId: str | None = Field(default=None, max_length=120)
+    connectableTypeIds: list[str] | None = Field(default=None, max_length=50)
     declarationMode: Literal["staticGeometry", "featureDerived"] | None = None
     interfaceType: Literal["locating", "connecting", "supporting", "adjustable", "processDatum", "other"] | None = None
     locatingType: Literal["planeContact", "axisCoincident", "pinHole", "edgeStop", "slotAdjustable", "keyedAntiError"] | None = None
@@ -93,7 +94,7 @@ class PartInterface(ComponentModel):
     @model_serializer(mode="wrap")
     def preserve_optional_metadata(self, handler):
         data = handler(self)
-        for field in ("declarationMode", "interfaceType", "locatingType", "role", "geometryRefs", "parameterRefs", "description", "required", "connectionGender", "interfaceSize", "connectionMethod", "connectionTypeId", "referenceFrame", "mating", "region"):
+        for field in ("declarationMode", "interfaceType", "locatingType", "role", "geometryRefs", "parameterRefs", "description", "required", "connectionGender", "interfaceSize", "connectionMethod", "connectionTypeId", "connectableTypeIds", "referenceFrame", "mating", "region"):
             if field not in self.model_fields_set:
                 data.pop(field, None)
         return data
@@ -418,6 +419,14 @@ class InterfaceTypeSetAction(ComponentModel):
     interfaceId: str = Field(min_length=1, max_length=120)
     connectionTypeId: str | None = Field(max_length=120)
     customTypeLabel: str | None = Field(default=None, max_length=80)
+    connectableTypeIds: list[str] | None = Field(default=None, max_length=50)
+
+
+class InterfaceConnectableSetAction(ComponentModel):
+    type: Literal["interface.connectable.set"]
+    memberId: str = Field(min_length=1, max_length=120)
+    interfaceId: str = Field(min_length=1, max_length=120)
+    connectableTypeIds: list[str] = Field(max_length=50)
 
 
 class InterfaceTypesMergeAction(ComponentModel):
@@ -475,7 +484,7 @@ class RuleRemoveAction(ComponentModel):
 
 TypedAction = Annotated[
     ResetAction | DefinitionPatchAction | MemberAddAction | MemberPatchAction | MemberRemoveAction
-    | MateAddAction | SlotAddAction | SlotPatchAction | SlotRemoveAction | PortAddAction | PortRemoveAction | PortRenameAction | InterfaceTypeSetAction | InterfaceTypesMergeAction | ParameterValueAction | ParameterAddAction | ParameterRemoveAction | BindingSetAction | PatternAddAction | PatternRemoveAction | RuleAddAction | RuleRemoveAction | RuleExpressionAction,
+    | MateAddAction | SlotAddAction | SlotPatchAction | SlotRemoveAction | PortAddAction | PortRemoveAction | PortRenameAction | InterfaceTypeSetAction | InterfaceConnectableSetAction | InterfaceTypesMergeAction | ParameterValueAction | ParameterAddAction | ParameterRemoveAction | BindingSetAction | PatternAddAction | PatternRemoveAction | RuleAddAction | RuleRemoveAction | RuleExpressionAction,
     Field(discriminator="type"),
 ]
 ComponentAction = TypeAdapter(TypedAction)

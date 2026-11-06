@@ -163,7 +163,7 @@ export class SharedDraftController {
     for (const action of this.pending) {
       const next = componentReducer(projection, action);
       const missingTarget = ((action.type === "member.patch" || action.type === "member.remove") && !projection.assembly.members.some(item => item.id === action.id))
-        || (action.type === "interface.type.set" && !projection.assembly.members.some(member => member.id === action.memberId && member.interfaces.some(item => item.id === action.interfaceId)))
+        || ((action.type === "interface.type.set" || action.type === "interface.connectable.set") && !projection.assembly.members.some(member => member.id === action.memberId && member.interfaces.some(item => item.id === action.interfaceId)))
         || ((action.type === "port.remove" || action.type === "port.rename") && !projection.ports.some(item => item.id === action.id))
         || ((action.type === "slot.patch" || action.type === "slot.remove") && !projection.slots.some(item => item.id === action.id))
         || (action.type === "parameter.value" && !projection.parameters.some(item => item.id === action.id))

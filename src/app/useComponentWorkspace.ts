@@ -185,8 +185,12 @@ export function useComponentWorkspace() {
     dispatch({ type: "port.rename", id, name });
   }
 
-  function setInterfaceType(memberId: string, interfaceId: string, connectionTypeId: string | null, customTypeLabel?: string) {
-    dispatch({ type: "interface.type.set", memberId, interfaceId, connectionTypeId, ...(customTypeLabel === undefined ? {} : { customTypeLabel }) });
+  function setInterfaceType(memberId: string, interfaceId: string, connectionTypeId: string | null, customTypeLabel?: string, connectableTypeIds?: string[]) {
+    dispatch({ type: "interface.type.set", memberId, interfaceId, connectionTypeId, ...(customTypeLabel === undefined ? {} : { customTypeLabel }), ...(connectableTypeIds === undefined ? {} : { connectableTypeIds }) });
+  }
+
+  function setInterfaceConnectableTypes(memberId: string, interfaceId: string, connectableTypeIds: string[]) {
+    dispatch({ type: "interface.connectable.set", memberId, interfaceId, connectableTypeIds });
   }
 
   function addSlot() {
@@ -303,7 +307,7 @@ export function useComponentWorkspace() {
 
   const syncMessage = shared.error || (shared.status === "loading" ? "正在读取共享草稿…" : shared.status === "saving" ? "正在保存草稿…" : shared.notice || message);
   return { document, dispatch, stage, setStage, selectedMemberId, setSelectedMemberId, previewTemplate, setPreviewTemplate,
-    selectionResetToken, message: syncMessage, setMessage, checks, newDraft, removeMember, addMate, setInterfaceExposure, renamePort, setInterfaceType, addSlot, patchSlot, removeSlot, exportDraft,
+    selectionResetToken, message: syncMessage, setMessage, checks, newDraft, removeMember, addMate, setInterfaceExposure, renamePort, setInterfaceType, setInterfaceConnectableTypes, addSlot, patchSlot, removeSlot, exportDraft,
     shared, editable, selectDraft, openDraftLink, copyDraftLink, publishDraft, publishing, adding, addPublishedTemplate, libraryRefreshToken,
     copyMember, moveMember, transformMember, groundMember,
     downloadLocalDraft, dismissAgentChanges: () => controller.current?.dismissAgentChanges(),

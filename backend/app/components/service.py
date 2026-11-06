@@ -9,6 +9,14 @@ PRESET_INTERFACE_TYPE_IDS = {
     "pin.v1", "hole.v1", "weld.surface.v1", "snap.hook.v1", "snap.slot.v1",
     "rail.v1", "rail.slot.v1", "plane.contact.v1", "shaft.v1", "bore.v1",
 }
+DEFAULT_CONNECTABLE_TYPE_IDS = {
+    "bolt.male.v1": ["bolt.female.v1"], "bolt.female.v1": ["bolt.male.v1"],
+    "threaded.stud.v1": ["threaded.hole.v1"], "threaded.hole.v1": ["threaded.stud.v1"],
+    "pin.v1": ["hole.v1"], "hole.v1": ["pin.v1"], "weld.surface.v1": ["weld.surface.v1"],
+    "snap.hook.v1": ["snap.slot.v1"], "snap.slot.v1": ["snap.hook.v1"],
+    "rail.v1": ["rail.slot.v1"], "rail.slot.v1": ["rail.v1"],
+    "plane.contact.v1": ["plane.contact.v1"], "shaft.v1": ["bore.v1"], "bore.v1": ["shaft.v1"],
+}
 
 
 class ComponentError(Exception):
@@ -354,13 +362,33 @@ def apply_action(document: ComponentDocument, action: TypedAction) -> ComponentD
                 data["interfaceTypes"].append({"id": connection_type_id, "label": label})
         elif connection_type_id and connection_type_id not in PRESET_INTERFACE_TYPE_IDS and not any(item["id"] == connection_type_id for item in data["interfaceTypes"]):
             raise ComponentError(422, "INVALID_INTERFACE_TYPE")
+        raw_connectable = action.connectableTypeIds if action.connectableTypeIds is not None else DEFAULT_CONNECTABLE_TYPE_IDS.get(connection_type_id, [])
+        allowed_ids = {item["id"] for item in data["interfaceTypes"]} | PRESET_INTERFACE_TYPE_IDS
+        connectable_type_ids = list(dict.fromkeys(item.strip() for item in raw_connectable if item.strip()))
+        if len(connectable_type_ids) > 50 or any(item not in allowed_ids for item in connectable_type_ids):
+            raise ComponentError(422, "INVALID_INTERFACE_TYPE")
         interface["connectionTypeId"] = connection_type_id
+        interface["connectableTypeIds"] = connectable_type_ids
         for port in data["ports"]:
             if port["source"]["memberId"] == action.memberId and port["source"]["interfaceId"] == action.interfaceId:
                 if port.get("interface") is None:
                     port["interface"] = dict(interface)
                 else:
                     port["interface"]["connectionTypeId"] = connection_type_id
+                    port["interface"]["connectableTypeIds"] = connectable_type_ids
+    elif action.type == "interface.connectable.set":
+        member = next((item for item in data["assembly"]["members"] if item["id"] == action.memberId), None)
+        interface = next((item for item in (member["interfaces"] if member else []) if item["id"] == action.interfaceId), None)
+        if interface is None:
+            raise ComponentError(404, "COMPONENT_ITEM_NOT_FOUND")
+        allowed_ids = {item["id"] for item in data["interfaceTypes"]} | PRESET_INTERFACE_TYPE_IDS
+        connectable_type_ids = list(dict.fromkeys(item.strip() for item in action.connectableTypeIds if item.strip()))
+        if len(connectable_type_ids) != len(action.connectableTypeIds) or len(connectable_type_ids) > 50 or any(item not in allowed_ids for item in connectable_type_ids):
+            raise ComponentError(422, "INVALID_INTERFACE_TYPE")
+        interface["connectableTypeIds"] = connectable_type_ids
+        for port in data["ports"]:
+            if port["source"]["memberId"] == action.memberId and port["source"]["interfaceId"] == action.interfaceId and port.get("interface") is not None:
+                port["interface"]["connectableTypeIds"] = connectable_type_ids
     elif action.type == "interface.types.merge":
         existing_types = {item["id"]: item for item in data["interfaceTypes"]}
         requested_types = {}

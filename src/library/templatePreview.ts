@@ -239,6 +239,14 @@ export async function loadReconstructionInfo(selected: PublishedTemplate, signal
       if (typeof item.connectionTypeId !== "string" || !item.connectionTypeId.trim() || item.connectionTypeId.length > 120) throw new Error("零件接口类型 ID 无效。");
       parsed.connectionTypeId = item.connectionTypeId.trim();
     }
+    if (item.connectableTypeIds !== undefined && item.connectableTypeIds !== null) {
+      if (!Array.isArray(item.connectableTypeIds) || item.connectableTypeIds.length > 50) throw new Error("零件接口可连接类型无效。");
+      const connectableTypeIds = item.connectableTypeIds.map(value => {
+        if (typeof value !== "string" || !value.trim() || value.length > 120) throw new Error("零件接口可连接类型无效。");
+        return value.trim();
+      });
+      parsed.connectableTypeIds = [...new Set(connectableTypeIds)];
+    }
     const parsedInterfaceType = knownInterfaceTypes.find(value => value === interfaceType);
     const parsedLocatingType = knownLocatingTypes.find(value => value === locatingType);
     const description = typeof item.description === "string" ? item.description : undefined;

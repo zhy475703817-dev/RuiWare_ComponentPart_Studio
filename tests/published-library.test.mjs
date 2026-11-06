@@ -176,11 +176,12 @@ test('加入组件只继承公开接口和参数，实例数据独立且固定�
   const document=createComponentDocument();
   document.interfaceTypes=[{id:'custom:设备安装面',label:'设备安装面'}];
   document.assembly.members=[{id:'internal',interfaces:[{id:'face',name:'内部面',type:'plane',tags:['private']}]}];
-  document.ports=[{id:'public-face',name:'安装面',source:{memberId:'internal',interfaceId:'face'},tags:['mount'],interface:{id:'face',name:'内部面',type:'plane',tags:['mount'],connectionTypeId:'custom:设备安装面'}}];
+  document.ports=[{id:'public-face',name:'安装面',source:{memberId:'internal',interfaceId:'face'},tags:['mount'],interface:{id:'face',name:'内部面',type:'plane',tags:['mount'],connectionTypeId:'custom:设备安装面',connectableTypeIds:['bolt.female.v1']}}];
   const published={...publication,templateKind:'component',document};
   const first=componentPublicationMember(published,'instance-1');
   const second=componentPublicationMember(published,'instance-2');
   assert.equal(first.interfaces[0].connectionTypeId,'custom:设备安装面');
+  assert.deepEqual(first.interfaces[0].connectableTypeIds,['bolt.female.v1']);
   assert.equal(first.template.templateKind,'component');
   assert.equal(first.template.sha256,publication.sha256);
   first.parameterValues.componentLength=3500; first.position[0]=42; first.interfaces[0].tags.push('changed');

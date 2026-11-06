@@ -15,6 +15,8 @@ export type PartInterface = {
   type: "plane" | "axis" | "point";
   tags: string[];
   connectionTypeId?: string | null;
+  /** Interface type IDs this interface explicitly declares as connectable. */
+  connectableTypeIds?: string[];
   declarationMode?: "staticGeometry" | "featureDerived";
   interfaceType?: string;
   locatingType?: string;

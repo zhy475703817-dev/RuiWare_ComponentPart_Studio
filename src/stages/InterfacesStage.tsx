@@ -3,7 +3,7 @@ import { useState } from "react";
 import type { ComponentMember, ComponentPort, ComponentSlot, InterfaceSelection, PartInterface, ResolvedPartInterface } from "../domain/component";
 import { sameInterfaceSelection, supportsInterfacePreview } from "../domain/interfaceGeometry";
 import { interfacesCompatible } from "../domain/interfaceCompatibility";
-import { interfaceTypeLabel, PRESET_INTERFACE_TYPES } from "../domain/interfaceTypes";
+import { defaultConnectableTypeIds, interfaceTypeLabel, PRESET_INTERFACE_TYPES } from "../domain/interfaceTypes";
 
 function interfaceSummary(item: PartInterface, members: ComponentMember[], customTypes: { id: string; label: string }[]): string {
   const size = item.interfaceSize;
@@ -53,7 +53,7 @@ function sourceLabel(members: ComponentMember[], source: { memberId: string; int
 
 type SlotPatch = { name?: string; required?: boolean; baseInterface?: { memberId: string; interfaceId: string } | null; memberId?: string | null; interfaceId?: string | null };
 
-export function InterfacesStage({ members, ports, slots, interfaceTypes, selectedInterface, interfacePreview, editable, onSelectInterface, onSetInterfaceExposure, onSetInterfaceType, onRenamePort, onAddSlot, onPatchSlot, onRemoveSlot }: { members: ComponentMember[]; ports: ComponentPort[]; slots: ComponentSlot[]; interfaceTypes: { id: string; label: string }[]; selectedInterface: InterfaceSelection | null; interfacePreview?: { selection: InterfaceSelection; status: "loading" | "ready" | "error"; resolvedInterfaces?: ResolvedPartInterface[] }; editable: boolean; onSelectInterface: (selection: InterfaceSelection) => void; onSetInterfaceExposure: (memberId: string, interfaceId: string, exposed: boolean) => void; onSetInterfaceType: (memberId: string, interfaceId: string, connectionTypeId: string | null, customTypeLabel?: string) => void; onRenamePort: (id: string, name: string) => void; onAddSlot: () => void; onPatchSlot: (id: string, patch: SlotPatch) => void; onRemoveSlot: (id: string) => void }) {
+export function InterfacesStage({ members, ports, slots, interfaceTypes, selectedInterface, interfacePreview, editable, onSelectInterface, onSetInterfaceExposure, onSetInterfaceType, onSetInterfaceConnectableTypes, onRenamePort, onAddSlot, onPatchSlot, onRemoveSlot }: { members: ComponentMember[]; ports: ComponentPort[]; slots: ComponentSlot[]; interfaceTypes: { id: string; label: string }[]; selectedInterface: InterfaceSelection | null; interfacePreview?: { selection: InterfaceSelection; status: "loading" | "ready" | "error"; resolvedInterfaces?: ResolvedPartInterface[] }; editable: boolean; onSelectInterface: (selection: InterfaceSelection) => void; onSetInterfaceExposure: (memberId: string, interfaceId: string, exposed: boolean) => void; onSetInterfaceType: (memberId: string, interfaceId: string, connectionTypeId: string | null, customTypeLabel?: string) => void; onSetInterfaceConnectableTypes: (memberId: string, interfaceId: string, connectableTypeIds: string[]) => void; onRenamePort: (id: string, name: string) => void; onAddSlot: () => void; onPatchSlot: (id: string, patch: SlotPatch) => void; onRemoveSlot: (id: string) => void }) {
   const [customTypeLabel, setCustomTypeLabel] = useState("");
   return <>
     <div className="callout">组件接口保留其来源成员和零部件接口引用，发布版本保持固定。</div>
@@ -96,6 +96,17 @@ export function InterfacesStage({ members, ports, slots, interfaceTypes, selecte
                 <optgroup label="预置类型">{PRESET_INTERFACE_TYPES.map(type => <option key={type.id} value={type.id}>{type.label}</option>)}</optgroup>
                 {interfaceTypes.filter(type => type.id.startsWith("custom:")).length > 0 && <optgroup label="自定义类型">{interfaceTypes.filter(type => type.id.startsWith("custom:")).map(type => <option key={type.id} value={type.id}>{type.label}</option>)}</optgroup>}
               </select></label>
+              <fieldset className="interface-connectable-types" disabled={!editable}>
+                <legend>可连接接口类型</legend>
+                <small>已根据接口类型自动填充，可继续多选或取消。</small>
+                <div className="interface-connectable-options">
+                  {[...PRESET_INTERFACE_TYPES, ...interfaceTypes.filter(type => type.id.startsWith("custom:") && !PRESET_INTERFACE_TYPES.some(preset => preset.id === type.id))].map(type => {
+                    const selectedTypes = item.connectableTypeIds ?? defaultConnectableTypeIds(item.connectionTypeId);
+                    const checked = selectedTypes.includes(type.id);
+                    return <label key={type.id} className="interface-connectable-option"><input type="checkbox" checked={checked} onChange={event => onSetInterfaceConnectableTypes(member.id, item.id, event.currentTarget.checked ? [...selectedTypes, type.id] : selectedTypes.filter(value => value !== type.id))}/><span>{type.label}</span></label>;
+                  })}
+                </div>
+              </fieldset>
               <label>新建自定义类型<input aria-label={`${item.name}：新建自定义接口类型`} maxLength={80} value={customTypeLabel} disabled={!editable} placeholder="输入类型名称" onChange={event => setCustomTypeLabel(event.currentTarget.value)}/></label>
               <button type="button" className="ghost compact-action" disabled={!editable || !customTypeLabel.trim() || customTypeLabel.trim().length > 80} onClick={() => {
                 const label = customTypeLabel.trim().replace(/\s+/g, " ");
