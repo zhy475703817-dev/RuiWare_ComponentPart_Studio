@@ -1,0 +1,36 @@
+{
+  "manifest.json": {
+    "id": "part-alpha",
+    "code": "BEAM-01",
+    "name": "Fixture beam",
+    "author": "author-a",
+    "schemaVersion": "3.0",
+    "unitSystem": "mm-kg-s",
+    "coordinateSystem": "right-handed-z-up"
+  },
+  "classification.json": {
+    "manufacturing": {"primaryProcessId": "roll-forming", "secondaryProcessIds": ["cutting"]},
+    "geometryPrototypeId": "beam"
+  },
+  "material-requirements.json": {
+    "requirements": [{"id": "steel", "minimumThickness": 1.5, "maximumThickness": 3.0, "unit": "mm"}]
+  },
+  "material-validation.json": {"samples": [{"thickness": 2.0, "unit": "mm"}]},
+  "parameters.json": {
+    "definitions": [
+      {"id": "length", "minimum": 100, "maximum": 300, "default": 200, "unit": "mm", "expression": "200"}
+    ]
+  },
+  "parameter-dependencies.json": {"sources": {"length": null}},
+  "geometry-recipe.json": {
+    "operations": [{"id": "operation-a", "type": "extrude", "profileId": "profile-a", "lengthExpression": "length"}]
+  },
+  "constraints.json": {
+    "entities": [{"id": "profile-a", "type": "rectangle", "width": 40, "height": 20}]
+  },
+  "sweep-path.json": {"status": "empty", "geometry": [], "constraints": []},
+  "sketch-solver.json": {"entities": [{"id": "profile-a", "type": "rectangle", "fullyConstrained": true}]},
+  "feature-rules.json": {"reviewed": true, "rules": [{"id": "hole-rule", "featureType": "hole", "enabled": false}]},
+  "variants.json": {"variants": [{"id": "standard", "overrides": {"length": 200}}]},
+  "interfaces.json": {"coordinateSystem": "right-handed-z-up", "interfaces": [{"id": "mount-a", "interfaceType": "locating", "axis": "z"}]}
+}

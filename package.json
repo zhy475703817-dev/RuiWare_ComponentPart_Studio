@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "scripts": {"dev": "vite", "build": "tsc -b && vite build", "preview": "vite preview"},
+  "scripts": {"dev": "vite", "build": "tsc -b && vite build", "preview": "vite preview", "test": "node --test tests/*.test.mjs"},
   "dependencies": {"@vitejs/plugin-react": "^5.0.0", "@react-three/drei": "^10.7.8", "@react-three/fiber": "^9.7.8", "lucide-react": "^0.468.0", "react": "^19.0.0", "react-dom": "^19.0.0", "three": "^0.185.1", "vite": "^7.2.0", "typescript": "~5.9.0"},
   "devDependencies": {"@types/react": "^19.0.0", "@types/react-dom": "^19.0.0", "@types/three": "^0.185.0"}
 }
