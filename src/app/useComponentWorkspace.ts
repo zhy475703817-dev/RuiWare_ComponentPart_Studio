@@ -6,7 +6,7 @@ import { placeNextMember } from "../domain/assemblyPlacement";
 import { memberBounds } from "../library/memberModels";
 import { SharedDraftController, httpDraftApi, initialSharedState } from "./sharedDraft";
 import type { PublishedTemplate } from "../library/publishedLibrary";
-import type { ComponentMember, ComponentSlot, InterfaceSource, MemberParameterDefinition, Vector3 } from "../domain/component";
+import type { ComponentMember, ComponentSlot, InterfaceSource, Mate, MemberParameterDefinition, Vector3 } from "../domain/component";
 import { interfacesForReconstruction, loadReconstructionInfo } from "../library/templatePreview";
 import { STAGES, type StageId } from "./stages";
 import { componentPublicationMember, fetchPublishedComponent, publishComponentDraft } from "../library/componentPublications";
@@ -126,14 +126,13 @@ export function useComponentWorkspace() {
     } catch { setMessage("链接格式不正确，请粘贴包含 draft 参数的草稿链接。"); }
   }
 
-  function connectFirstInterfaces() {
-    const [a, b] = document.assembly.members;
-    if (!a || !b) return setMessage("至少加入两个零部件后才能记录内部连接");
-    const from = a.interfaces[0], to = b.interfaces[0];
-    if (!from || !to) return setMessage("成员缺少可连接接口，请先读取零部件接口定义");
-    if (document.assembly.mates.some(mate => mate.from.memberId === a.id && mate.from.interfaceId === from.id && mate.to.memberId === b.id && mate.to.interfaceId === to.id)) return setMessage("这两个接口已记录连接关系");
-    if (!dispatch({ type: "mate.add", mate: { id: crypto.randomUUID(), from: { memberId: a.id, interfaceId: from.id }, to: { memberId: b.id, interfaceId: to.id }, relation: "贴合", offset: 0 } })) return;
-    setMessage("已记录接口贴合关系；请在预览中确认成员位置，连接关系会随草稿保存");
+  function addMate(mate: Mate) {
+    if (!dispatch({ type: "mate.add", mate })) {
+      setMessage("连接未记录：接口可能不兼容、需要复核、已被占用或已存在连接");
+      return false;
+    }
+    setMessage("已记录声明兼容的接口连接；装配求解尚未接入，成员位置未改变");
+    return true;
   }
 
   function setInterfaceExposure(memberId: string, interfaceId: string, exposed: boolean) {
@@ -154,6 +153,10 @@ export function useComponentWorkspace() {
 
   function renamePort(id: string, name: string) {
     dispatch({ type: "port.rename", id, name });
+  }
+
+  function setInterfaceType(memberId: string, interfaceId: string, connectionTypeId: string | null, customTypeLabel?: string) {
+    dispatch({ type: "interface.type.set", memberId, interfaceId, connectionTypeId, ...(customTypeLabel === undefined ? {} : { customTypeLabel }) });
   }
 
   function addSlot() {
@@ -209,11 +212,13 @@ export function useComponentWorkspace() {
     setAdding(true);
     setMessage(`正在加入 ${template.name}…`);
     try {
-      let member;
+      let member: ComponentMember;
+      let inheritedInterfaceTypes: Array<{ id: string; label: string }> = [];
       if (template.templateKind === "component") {
         const publication = await fetchPublishedComponent(template.publicationId);
         if (publication.templateId !== template.templateId || publication.version !== template.version || publication.sha256.toLowerCase() !== template.sha256.toLowerCase()) throw new Error("发布版本已变化，请刷新列表后重试。");
         member = componentPublicationMember(publication, crypto.randomUUID());
+        inheritedInterfaceTypes = publication.document.interfaceTypes ?? [];
       } else {
         const info = await loadReconstructionInfo(template, AbortSignal.timeout(20000));
         const parameterDefinitions: MemberParameterDefinition[] = info.parameters.map(parameter => ({ id: parameter.id, label: parameter.label, unit: parameter.unit,
@@ -227,6 +232,9 @@ export function useComponentWorkspace() {
         };
       }
       if (workspace !== controller.current || workspace.getSnapshot().draftId !== draftId) throw new Error("草稿已切换，请重新选择模板。");
+      if (inheritedInterfaceTypes.length && !workspace.dispatch({ type: "interface.types.merge", types: inheritedInterfaceTypes })) {
+        throw new Error("组件接口类型目录与当前草稿冲突，请检查自定义类型名称。");
+      }
       const snapshot = workspace.getSnapshot();
       let position: Vector3 | undefined;
       if (template.templateKind !== "component") {
@@ -265,7 +273,7 @@ export function useComponentWorkspace() {
 
   const syncMessage = shared.error || (shared.status === "loading" ? "正在读取共享草稿…" : shared.status === "saving" ? "正在保存草稿…" : shared.notice || message);
   return { document, dispatch, stage, setStage, selectedMemberId, setSelectedMemberId, previewTemplate, setPreviewTemplate,
-    selectionResetToken, message: syncMessage, setMessage, checks, newDraft, removeMember, connectFirstInterfaces, setInterfaceExposure, renamePort, addSlot, patchSlot, removeSlot, exportDraft,
+    selectionResetToken, message: syncMessage, setMessage, checks, newDraft, removeMember, addMate, setInterfaceExposure, renamePort, setInterfaceType, addSlot, patchSlot, removeSlot, exportDraft,
     shared, editable, selectDraft, openDraftLink, copyDraftLink, publishDraft, publishing, adding, addPublishedTemplate, libraryRefreshToken,
     copyMember, moveMember,
     downloadLocalDraft, dismissAgentChanges: () => controller.current?.dismissAgentChanges(),

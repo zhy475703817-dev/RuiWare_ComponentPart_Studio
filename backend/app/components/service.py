@@ -2,6 +2,13 @@ import math
 import re
 
 from .models import ComponentAction, ComponentDocument, InterfaceSource, TypedAction
+from .interface_compatibility import assess_interface_compatibility
+
+PRESET_INTERFACE_TYPE_IDS = {
+    "bolt.male.v1", "bolt.female.v1", "threaded.stud.v1", "threaded.hole.v1",
+    "pin.v1", "hole.v1", "weld.surface.v1", "snap.hook.v1", "snap.slot.v1",
+    "rail.v1", "rail.slot.v1", "plane.contact.v1", "shaft.v1", "bore.v1",
+}
 
 
 class ComponentError(Exception):
@@ -33,7 +40,7 @@ def create_component_document() -> ComponentDocument:
             },
             "designConstraints": "", "evidenceFiles": [], "evidence": [],
         },
-        "assembly": {"members": [], "mates": []}, "ports": [], "slots": [], "bindings": [], "patterns": [],
+        "assembly": {"members": [], "mates": []}, "ports": [], "interfaceTypes": [], "slots": [], "bindings": [], "patterns": [],
         "parameters": [
             {"id": "componentLength", "label": "组件总长", "value": 2400, "unit": "mm", "min": 1000, "max": 6000},
             {"id": "componentWidth", "label": "组件总宽", "value": 600, "unit": "mm", "min": 100, "max": 3000},
@@ -135,41 +142,8 @@ def _interface_size(interface):
 
 
 def interfaces_compatible(a, b):
-    if a is None or b is None:
-        return False, "接口数据缺失"
-    def gender(interface):
-        if interface.connectionGender:
-            return interface.connectionGender
-        tags = [tag.strip().lower() for tag in interface.tags if tag.strip()]
-        male = {"male", "m", "公", "公头", "插头", "plug", "pin"}
-        female = {"female", "f", "母", "母座", "插座", "socket", "hole"}
-        if any(tag in male or "gender:male" in tag or "公头" in tag for tag in tags):
-            return "male"
-        if any(tag in female or "gender:female" in tag or "母座" in tag for tag in tags):
-            return "female"
-        return "neutral"
-
-    gender_a = gender(a)
-    gender_b = gender(b)
-    if gender_a == "neutral" or gender_b == "neutral":
-        gender_match = True
-    else:
-        gender_match = gender_a != gender_b
-    if not gender_match:
-        return False, "公母属性不匹配"
-    if a.type != b.type:
-        return False, "接口几何类型不匹配"
-    size_a, size_b = _interface_size(a), _interface_size(b)
-    # Legacy templates may omit the physical envelope on both sides. Keep
-    # those same-type interfaces selectable, while rejecting one-sided or
-    # conflicting size declarations.
-    if (size_a is None and size_b is not None) or (size_a is not None and size_b is None) or (size_a and size_b and (size_a[0] != size_b[0] or len(size_a[1]) != len(size_b[1]) or any(abs(left - right) > max(size_a[2], size_b[2], 0.01) for left, right in zip(size_a[1], size_b[1])))):
-        return False, "接口尺寸缺失或不匹配"
-    method_a = (a.connectionMethod or "").strip().lower()
-    method_b = (b.connectionMethod or "").strip().lower()
-    if method_a and method_b and method_a != method_b:
-        return False, "连接方式不匹配"
-    return True, ""
+    assessment = assess_interface_compatibility(a, b)
+    return assessment.compatible, next((item.message for item in assessment.checks if item.status != "pass"), "")
 
 
 def apply_action(document: ComponentDocument, action: TypedAction) -> ComponentDocument:
@@ -252,6 +226,19 @@ def apply_action(document: ComponentDocument, action: TypedAction) -> ComponentD
         mate = action.mate
         if not has_interface(document, mate.from_) or not has_interface(document, mate.to) or mate.from_.memberId == mate.to.memberId:
             raise ComponentError(422, "INVALID_REFERENCE")
+        source, target = get_interface(document, mate.from_), get_interface(document, mate.to)
+        source_member = next((item for item in document.assembly.members if item.id == mate.from_.memberId), None)
+        target_member = next((item for item in document.assembly.members if item.id == mate.to.memberId), None)
+        assessment = assess_interface_compatibility(source, target, mate.relation, source_member, target_member)
+        if assessment.status != "compatible":
+            raise ComponentError(422, "INCOMPATIBLE_INTERFACE" if assessment.status == "incompatible" else "INTERFACE_REQUIRES_REVIEW",
+                                 [{"code": item.code, "status": item.status, "message": item.message} for item in assessment.checks])
+        def endpoint_usage(member_id, interface_id):
+            return sum(1 for item in document.assembly.mates if
+                (item.from_.memberId == member_id and item.from_.interfaceId == interface_id) or
+                (item.to.memberId == member_id and item.to.interfaceId == interface_id))
+        if source is None or target is None or endpoint_usage(mate.from_.memberId, mate.from_.interfaceId) >= source.mating.capacity or endpoint_usage(mate.to.memberId, mate.to.interfaceId) >= target.mating.capacity:
+            raise ComponentError(422, "ENDPOINT_ALREADY_CONSUMED")
         if any(item.id == mate.id or (item.from_ == mate.from_ and item.to == mate.to) for item in document.assembly.mates):
             raise ComponentError(422, "DUPLICATE_CONNECTION")
         data["assembly"]["mates"].append(mate.model_dump(by_alias=True))
@@ -308,8 +295,8 @@ def apply_action(document: ComponentDocument, action: TypedAction) -> ComponentD
             target = InterfaceSource(memberId=member_id, interfaceId=interface_id)
             if not has_interface(document, target) or member_id == base.memberId:
                 raise ComponentError(422, "INVALID_SLOT_REFERENCE")
-            compatible, _ = interfaces_compatible(get_interface(document, base), get_interface(document, target))
-            if not compatible:
+            assessment = assess_interface_compatibility(get_interface(document, base), get_interface(document, target), context_a=next((member for member in document.assembly.members if member.id == base.memberId), None), context_b=next((member for member in document.assembly.members if member.id == target.memberId), None))
+            if not assessment.compatible:
                 raise ComponentError(422, "INCOMPATIBLE_SLOT_INTERFACE")
             if any(item["id"] != action.id and item.get("memberId") == member_id and item.get("interfaceId") == interface_id for item in data["slots"]):
                 raise ComponentError(422, "DUPLICATE_SLOT_INTERFACE")
@@ -348,6 +335,53 @@ def apply_action(document: ComponentDocument, action: TypedAction) -> ComponentD
             if not name:
                 raise ComponentError(422, "INVALID_PORT_NAME")
             port["name"] = name
+    elif action.type == "interface.type.set":
+        member = next((item for item in data["assembly"]["members"] if item["id"] == action.memberId), None)
+        interface = next((item for item in (member["interfaces"] if member else []) if item["id"] == action.interfaceId), None)
+        if interface is None:
+            raise ComponentError(404, "COMPONENT_ITEM_NOT_FOUND")
+        connection_type_id = action.connectionTypeId.strip() if action.connectionTypeId else None
+        if action.customTypeLabel is not None:
+            label = " ".join(action.customTypeLabel.split())
+            if not label or not connection_type_id or connection_type_id != f"custom:{label}" or len(connection_type_id) > 120:
+                raise ComponentError(422, "INVALID_INTERFACE_TYPE")
+            existing = next((item for item in data["interfaceTypes"] if item["id"] == connection_type_id), None)
+            if existing and existing["label"] != label:
+                raise ComponentError(422, "INVALID_INTERFACE_TYPE")
+            if not existing:
+                if len(data["interfaceTypes"]) >= 500:
+                    raise ComponentError(422, "INTERFACE_TYPE_LIMIT")
+                data["interfaceTypes"].append({"id": connection_type_id, "label": label})
+        elif connection_type_id and connection_type_id not in PRESET_INTERFACE_TYPE_IDS and not any(item["id"] == connection_type_id for item in data["interfaceTypes"]):
+            raise ComponentError(422, "INVALID_INTERFACE_TYPE")
+        interface["connectionTypeId"] = connection_type_id
+        for port in data["ports"]:
+            if port["source"]["memberId"] == action.memberId and port["source"]["interfaceId"] == action.interfaceId:
+                if port.get("interface") is None:
+                    port["interface"] = dict(interface)
+                else:
+                    port["interface"]["connectionTypeId"] = connection_type_id
+    elif action.type == "interface.types.merge":
+        existing_types = {item["id"]: item for item in data["interfaceTypes"]}
+        requested_types = {}
+        additions = []
+        for item in action.types:
+            label = " ".join(item.label.split())
+            type_id = " ".join(item.id.split())
+            if not label or not type_id.startswith("custom:") or type_id != f"custom:{label}" or len(type_id) > 120:
+                raise ComponentError(422, "INVALID_INTERFACE_TYPE")
+            existing = existing_types.get(type_id)
+            if existing and existing["label"] != label:
+                raise ComponentError(422, "INVALID_INTERFACE_TYPE")
+            requested = requested_types.get(type_id)
+            if requested and requested != label:
+                raise ComponentError(422, "INVALID_INTERFACE_TYPE")
+            requested_types[type_id] = label
+            if not existing and not requested:
+                additions.append({"id": type_id, "label": label})
+        if len(data["interfaceTypes"]) + len(additions) > 500:
+            raise ComponentError(422, "INTERFACE_TYPE_LIMIT")
+        data["interfaceTypes"].extend(additions)
     elif action.type == "binding.set":
         data["bindings"] = [item for item in data["bindings"] if item["id"] != action.id]
         if action.binding is not None:
@@ -511,13 +545,27 @@ def validate_component(document: ComponentDocument) -> list[dict]:
         if key in occupied_slot_interfaces:
             return False
         occupied_slot_interfaces.add(key)
-        return interfaces_compatible(get_interface(document, slot.baseInterface), get_interface(document, target))[0]
+        return assess_interface_compatibility(get_interface(document, slot.baseInterface), get_interface(document, target), context_a=next((member for member in members if member.id == slot.baseInterface.memberId), None), context_b=next((member for member in members if member.id == target.memberId), None)).compatible
+
+    def mate_valid(mate):
+        if not has_interface(document, mate.from_) or not has_interface(document, mate.to) or mate.from_.memberId == mate.to.memberId or not math.isfinite(mate.offset):
+            return False
+        source, target = get_interface(document, mate.from_), get_interface(document, mate.to)
+        if not assess_interface_compatibility(source, target, mate.relation,
+                next((member for member in members if member.id == mate.from_.memberId), None),
+                next((member for member in members if member.id == mate.to.memberId), None)).compatible:
+            return False
+        for endpoint, interface in ((mate.from_, source), (mate.to, target)):
+            usage = sum(1 for item in mates if item.from_ == endpoint or item.to == endpoint)
+            if usage > interface.mating.capacity:
+                return False
+        return True
 
     return [
         check("definition", "组件名称", bool(document.definition.name.strip()), "请填写组件名称"),
         check("members", "装配成员", bool(members) and all(member.id.strip() for member in members) and len(member_ids) == len(members), "请加入零部件，成员标识需唯一"),
         check("references", "固定版本引用", bool(members) and all(member.template.publicationId.strip() and member.template.templateId.strip() and 0 < member.template.version <= 9007199254740991 and re.fullmatch(r"[a-fA-F0-9]{64}", member.template.sha256) for member in members), "成员需引用有效发布版本及模板包校验值"),
-        check("mates", "内部连接数据", (len(members) < 2 or bool(mates)) and len({mate.id for mate in mates}) == len(mates) and all(has_interface(document, mate.from_) and has_interface(document, mate.to) and mate.from_.memberId != mate.to.memberId for mate in mates), "请检查连接两端的成员与接口；多成员组件需建立内部连接"),
+        check("mates", "内部连接数据", len({mate.id for mate in mates}) == len(mates) and all(mate_valid(mate) for mate in mates), "连接两端必须有明确兼容契约、允许所选关系并遵守接口容量；历史未评估连接需复核"),
         check("ports", "对外接口", bool(document.ports) and all(
             bool(port.name.strip()) and has_interface(document, port.source) and (port.interface is None or port.interface == next(
                 item for member in members if member.id == port.source.memberId for item in member.interfaces if item.id == port.source.interfaceId
@@ -569,6 +617,7 @@ def serialize_component(document: ComponentDocument) -> dict:
         "name": document.definition.name,
         "stages": {
             "definition": data["definition"], "assembly": {"members": members, "mates": mates}, "ports": ports,
+            "interfaceTypes": data.get("interfaceTypes", []),
             "slots": data["slots"], "parameters": {parameter.id: parameter.value for parameter in document.parameters},
             "parameterDefinitions": data["parameters"], "bindings": data["bindings"], "patterns": data["patterns"], "rules": data["rules"],
             "validation": [{"name": check["label"], "passed": check["status"] == "pass", **check} for check in validate_component(document)],

@@ -123,7 +123,10 @@ class DraftRepository:
                 row = self._publication(connection, existing["id"])
                 return {**json.loads(row["metadata"]), "document": json.loads(row["document"]), "checks": json.loads(row["checks"])}
             checks = validate_component(document)
-            if not document.definition.name.strip() or (document.assembly.members and next(check for check in checks if check["id"] == "references")["status"] != "pass"):
+            if (not document.definition.name.strip()
+                    or (document.assembly.members and next(check for check in checks if check["id"] == "references")["status"] != "pass")
+                    or any(check["id"] in {"mates", "slots"} and check["status"] == "fail" for check in checks)
+                    or (document.assembly.members and any(check["id"] == "references" and check["status"] == "fail" for check in checks))):
                 raise ComponentError(422, "COMPONENT_PUBLICATION_INVALID")
             # Dependency checks use the shared publication service before preparing this
             # immutable retry snapshot. Network operations never hold the SQLite write lock.

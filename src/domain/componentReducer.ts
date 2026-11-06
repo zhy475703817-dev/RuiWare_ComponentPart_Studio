@@ -1,7 +1,10 @@
 import { createComponentDocument, getInterface, hasInterface, samePartInterface } from "./component.ts";
 import { inferEnvelopeDimensions } from "./parameterMetrics.ts";
-import { interfacesCompatible } from "./interfaceCompatibility.ts";
+import { assessInterfaceCompatibility } from "./interfaceCompatibility.ts";
+import { PRESET_INTERFACE_TYPES } from "./interfaceTypes.ts";
 import type { ComponentDefinition, ComponentDocument, ComponentMember, ComponentPattern, ComponentPort, ComponentSlot, InterfaceSource, Mate, ParameterBinding } from "./component.ts";
+
+const PRESET_CONNECTION_TYPE_IDS = new Set<string>(PRESET_INTERFACE_TYPES.map(item => item.id));
 
 export type ComponentAction =
   | { type: "reset" }
@@ -16,6 +19,8 @@ export type ComponentAction =
   | { type: "port.add"; port: ComponentPort }
   | { type: "port.remove"; id: string }
   | { type: "port.rename"; id: string; name: string }
+  | { type: "interface.type.set"; memberId: string; interfaceId: string; connectionTypeId: string | null; customTypeLabel?: string }
+  | { type: "interface.types.merge"; types: Array<{ id: string; label: string }> }
   | { type: "parameter.value"; id: string; value: number | null }
   | { type: "parameter.add"; parameter: import("./component.ts").ComponentParameter }
   | { type: "parameter.remove"; id: string }
@@ -111,6 +116,13 @@ export function componentReducer(document: ComponentDocument, action: ComponentA
           item.from.memberId === mate.from.memberId && item.from.interfaceId === mate.from.interfaceId &&
           item.to.memberId === mate.to.memberId && item.to.interfaceId === mate.to.interfaceId
         ))) return document;
+      const source = getInterface(document, mate.from), target = getInterface(document, mate.to);
+      const sourceMember = document.assembly.members.find(member => member.id === mate.from.memberId);
+      const targetMember = document.assembly.members.find(member => member.id === mate.to.memberId);
+      if (assessInterfaceCompatibility(source, target, mate.relation, sourceMember, targetMember).status !== "compatible") return document;
+      const used = (memberId: string, interfaceId: string) => document.assembly.mates.filter(item =>
+        item.from.memberId === memberId && item.from.interfaceId === interfaceId || item.to.memberId === memberId && item.to.interfaceId === interfaceId).length;
+      if (!source?.mating || !target?.mating || used(mate.from.memberId, mate.from.interfaceId) >= source.mating.capacity || used(mate.to.memberId, mate.to.interfaceId) >= target.mating.capacity) return document;
       return next({ assembly: { ...document.assembly, mates: [...document.assembly.mates, structuredClone(mate)] } });
     }
     case "slot.add": {
@@ -140,7 +152,9 @@ export function componentReducer(document: ComponentDocument, action: ComponentA
         if (!baseInterface || !hasInterface(document, assignment) || assignment.memberId === baseInterface.memberId) return document;
         const base = getInterface(document, baseInterface);
         const target = getInterface(document, assignment);
-        if (!interfacesCompatible(base, target).compatible) return document;
+        const baseMember = document.assembly.members.find(member => member.id === baseInterface.memberId);
+        const targetMember = document.assembly.members.find(member => member.id === assignment!.memberId);
+        if (assessInterfaceCompatibility(base, target, undefined, baseMember, targetMember).status !== "compatible") return document;
         if (document.slots.some(item => item.id !== action.id && item.memberId === assignment.memberId && item.interfaceId === assignment.interfaceId)) return document;
       }
       const nextSlot: ComponentSlot = { ...current, name, required: patch.required === undefined ? current.required : patch.required,
@@ -167,6 +181,42 @@ export function componentReducer(document: ComponentDocument, action: ComponentA
       const port = document.ports.find(item => item.id === action.id);
       if (!port || !name || port.name === name) return document;
       return next({ ports: document.ports.map(item => item.id === action.id ? { ...item, name } : item) });
+    }
+    case "interface.type.set": {
+      const member = document.assembly.members.find(item => item.id === action.memberId);
+      const target = member?.interfaces.find(item => item.id === action.interfaceId);
+      if (!member || !target) return document;
+      const connectionTypeId = action.connectionTypeId?.trim() || null;
+      let interfaceTypes = document.interfaceTypes ?? [];
+      if (action.customTypeLabel !== undefined) {
+        const label = action.customTypeLabel.trim().replace(/\s+/g, " ");
+        if (!label || label.length > 80 || !connectionTypeId || connectionTypeId !== `custom:${label}` || connectionTypeId.length > 120) return document;
+        if (interfaceTypes.some(item => item.id === connectionTypeId && item.label !== label)) return document;
+        if (!interfaceTypes.some(item => item.id === connectionTypeId)) {
+          if (interfaceTypes.length >= 500) return document;
+          interfaceTypes = [...interfaceTypes, { id: connectionTypeId, label }];
+        }
+      } else if (connectionTypeId && !interfaceTypes.some(item => item.id === connectionTypeId) && !PRESET_CONNECTION_TYPE_IDS.has(connectionTypeId)) return document;
+      if (target.connectionTypeId === connectionTypeId && interfaceTypes === document.interfaceTypes) return document;
+      const interfaces = member.interfaces.map(item => item.id === target.id ? { ...item, connectionTypeId } : item);
+      const ports = document.ports.map(port => port.source.memberId === member.id && port.source.interfaceId === target.id
+        ? { ...port, interface: port.interface ? { ...port.interface, connectionTypeId } : { ...target, connectionTypeId } }
+        : port);
+      return next({ assembly: { ...document.assembly, members: document.assembly.members.map(item => item.id === member.id ? { ...item, interfaces } : item) }, ports, interfaceTypes });
+    }
+    case "interface.types.merge": {
+      const additions = action.types.map(item => ({ id: item.id.trim().replace(/\s+/g, " "), label: item.label.trim().replace(/\s+/g, " ") }));
+      if (additions.some(item => !item.id.startsWith("custom:") || !item.label || item.id !== `custom:${item.label}` || item.id.length > 120 || item.label.length > 80)) return document;
+      if (additions.some((item, index) => additions.findIndex(other => other.id === item.id) !== index)) return document;
+      const interfaceTypes = [...(document.interfaceTypes ?? [])];
+      for (const item of additions) {
+        const existing = interfaceTypes.find(type => type.id === item.id);
+        if (existing && existing.label !== item.label) return document;
+        if (!existing) interfaceTypes.push(item);
+      }
+      if (interfaceTypes.length > 500) return document;
+      if (interfaceTypes.length === (document.interfaceTypes ?? []).length) return document;
+      return next({ interfaceTypes });
     }
     case "parameter.value":
       if (!document.parameters.some(parameter => parameter.id === action.id && parameter.value !== action.value)) return document;

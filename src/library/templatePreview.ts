@@ -235,6 +235,10 @@ export async function loadReconstructionInfo(selected: PublishedTemplate, signal
     const geometryRefs = Array.isArray(item.geometryRefs) ? item.geometryRefs.filter((reference): reference is string => typeof reference === "string") : undefined;
     const parameterRefs = Array.isArray(item.parameterRefs) ? item.parameterRefs.filter((reference): reference is string => typeof reference === "string") : undefined;
     const parsed: PartInterface = { id: item.id, name: item.name, type, tags: [...new Set(tags)] };
+    if (item.connectionTypeId !== undefined && item.connectionTypeId !== null) {
+      if (typeof item.connectionTypeId !== "string" || !item.connectionTypeId.trim() || item.connectionTypeId.length > 120) throw new Error("零件接口类型 ID 无效。");
+      parsed.connectionTypeId = item.connectionTypeId.trim();
+    }
     const parsedInterfaceType = knownInterfaceTypes.find(value => value === interfaceType);
     const parsedLocatingType = knownLocatingTypes.find(value => value === locatingType);
     const description = typeof item.description === "string" ? item.description : undefined;
@@ -261,6 +265,38 @@ export async function loadReconstructionInfo(selected: PublishedTemplate, signal
     if (required !== undefined) parsed.required = required;
     if (connectionGender) parsed.connectionGender = connectionGender;
     if (connectionMethod) parsed.connectionMethod = connectionMethod;
+    if (item.mating !== undefined && item.mating !== null) {
+      if (!record(item.mating) || typeof item.mating.version !== "number" || !Number.isSafeInteger(item.mating.version) || item.mating.version < 1 || typeof item.mating.family !== "string" ||
+        typeof item.mating.role !== "string" || !Array.isArray(item.mating.allowedRelations) || !record(item.mating.dimensions)) {
+        throw new Error("无法读取零件接口配合契约。");
+      }
+      const dimensions: NonNullable<PartInterface["mating"]>["dimensions"] = {};
+      for (const [key, value] of Object.entries(item.mating.dimensions)) {
+        if (!record(value) || typeof value.nominal !== "number" || !Number.isFinite(value.nominal) || value.nominal <= 0 ||
+          typeof value.lowerTolerance !== "number" || !Number.isFinite(value.lowerTolerance) || value.lowerTolerance > 0 ||
+          typeof value.upperTolerance !== "number" || !Number.isFinite(value.upperTolerance) || value.upperTolerance < 0 ||
+          !["mm", "cm", "m", "in"].includes(String(value.unit)) ||
+          (value.parameterRef !== undefined && value.parameterRef !== null && typeof value.parameterRef !== "string")) {
+          throw new Error("无法读取零件接口配合尺寸。");
+        }
+        dimensions[key] = { nominal: value.nominal, lowerTolerance: value.lowerTolerance, upperTolerance: value.upperTolerance,
+          unit: value.unit as NonNullable<PartInterface["mating"]>["dimensions"][string]["unit"],
+          ...(typeof value.parameterRef === "string" ? { parameterRef: value.parameterRef } : {}) };
+      }
+      const allowedRelations = item.mating.allowedRelations.filter((value): value is "贴合" | "同轴" | "重合" => value === "贴合" || value === "同轴" || value === "重合");
+      if (allowedRelations.length !== item.mating.allowedRelations.length || !allowedRelations.length) throw new Error("零件接口包含无效的配合关系。");
+      const capacity = item.mating.capacity === undefined ? 1 : item.mating.capacity;
+      if (!Number.isInteger(capacity) || (capacity as number) < 1 || (capacity as number) > 100) throw new Error("零件接口容量无效。");
+      parsed.mating = { version: item.mating.version, family: item.mating.family, role: item.mating.role, capacity: capacity as number,
+        ...(typeof item.mating.standardId === "string" ? { standardId: item.mating.standardId } : {}),
+        ...(typeof item.mating.connectionMethod === "string" ? { connectionMethod: item.mating.connectionMethod } : {}), dimensions, allowedRelations };
+    }
+    if (item.referenceFrame !== undefined && item.referenceFrame !== null) {
+      if (!record(item.referenceFrame) || !["x", "y", "z", "-x", "-y", "-z"].includes(String(item.referenceFrame.axis)) ||
+        (item.referenceFrame.originRef !== undefined && item.referenceFrame.originRef !== null && typeof item.referenceFrame.originRef !== "string")) throw new Error("无法读取零件接口参考系。");
+      parsed.referenceFrame = { axis: item.referenceFrame.axis as NonNullable<PartInterface["referenceFrame"]>["axis"],
+        ...(typeof item.referenceFrame.originRef === "string" ? { originRef: item.referenceFrame.originRef } : {}) };
+    }
     if (interfaceSize && [interfaceSize.diameter, interfaceSize.width, interfaceSize.height, interfaceSize.depth].some(value => value !== undefined)) parsed.interfaceSize = interfaceSize;
     if (region) parsed.region = region;
     return parsed;

@@ -41,6 +41,8 @@ const errorMessage = (error: unknown): string => errorCode(error) === "REVISION_
   : errorCode(error) === "INVALID_SLOT_REFERENCE" ? "槽位接口引用无效，请重新选择基准接口或占用接口。"
   : errorCode(error) === "INCOMPATIBLE_SLOT_INTERFACE" ? "占用接口与槽位基准接口不兼容。"
   : errorCode(error) === "DUPLICATE_SLOT_INTERFACE" ? "该接口已被其他槽位占用。"
+  : errorCode(error) === "INVALID_INTERFACE_TYPE" ? "接口类型无效，请重新选择或输入类型名称。"
+  : errorCode(error) === "INTERFACE_TYPE_LIMIT" ? "自定义接口类型已达到数量上限。"
   : errorCode(error) === "DRAFT_NOT_FOUND" ? "该草稿已不存在，请选择其他草稿。" : "草稿操作失败。未保存输入已保留，请检查连接后重试。";
 
 // These errors mean the server understood and rejected the requested edit.
@@ -50,7 +52,7 @@ const errorMessage = (error: unknown): string => errorCode(error) === "REVISION_
 const rejectedEditCodes = new Set([
   "DUPLICATE_ID", "DUPLICATE_PORT", "INTERFACE_SNAPSHOT_MISMATCH",
   "INVALID_PORT_NAME", "INVALID_SLOT_NAME", "INVALID_SLOT_REFERENCE",
-  "INCOMPATIBLE_SLOT_INTERFACE", "DUPLICATE_SLOT_INTERFACE",
+  "INCOMPATIBLE_SLOT_INTERFACE", "DUPLICATE_SLOT_INTERFACE", "INVALID_INTERFACE_TYPE", "INTERFACE_TYPE_LIMIT",
 ]);
 
 const legacyDimensionSpecs = [
@@ -60,6 +62,7 @@ const legacyDimensionSpecs = [
 ] as const;
 
 function normalizeDraftDocument(document: ComponentDocument): ComponentDocument {
+  const interfaceTypes = Array.isArray(document.interfaceTypes) ? document.interfaceTypes : [];
   const members = Array.isArray(document.assembly?.members) ? document.assembly.members : [];
   const patterns = Array.isArray(document.patterns) ? document.patterns : [];
   const slots = (Array.isArray(document.slots) ? document.slots : []).map(slot => ({
@@ -94,7 +97,7 @@ function normalizeDraftDocument(document: ComponentDocument): ComponentDocument 
       bindings.push({ id: `${member.id}:${parameter.id}:${definition.id}`, parameterId: parameter.id, memberId: member.id, memberParameterId: definition.id });
     }
   }
-  return { ...document, parameters, bindings, slots };
+  return { ...document, parameters, bindings, slots, interfaceTypes };
 }
 
 function draftMigrationActions(document: ComponentDocument): ComponentAction[] {
@@ -160,12 +163,13 @@ export class SharedDraftController {
     for (const action of this.pending) {
       const next = componentReducer(projection, action);
       const missingTarget = ((action.type === "member.patch" || action.type === "member.remove") && !projection.assembly.members.some(item => item.id === action.id))
+        || (action.type === "interface.type.set" && !projection.assembly.members.some(member => member.id === action.memberId && member.interfaces.some(item => item.id === action.interfaceId)))
         || ((action.type === "port.remove" || action.type === "port.rename") && !projection.ports.some(item => item.id === action.id))
         || ((action.type === "slot.patch" || action.type === "slot.remove") && !projection.slots.some(item => item.id === action.id))
         || (action.type === "parameter.value" && !projection.parameters.some(item => item.id === action.id))
         || (action.type === "rule.expression" && !projection.rules.some(item => item.id === action.id))
         || (action.type === "rule.remove" && !projection.rules.some(item => item.id === action.id));
-      const invalidAddition = ["member.add", "mate.add", "port.add", "slot.add", "rule.add"].includes(action.type) && next === projection;
+      const invalidAddition = ["member.add", "mate.add", "port.add", "slot.add", "rule.add", "interface.types.merge"].includes(action.type) && next === projection;
       if (missingTarget || invalidAddition) {
         // Keep the full visible local document for download; reprojecting would silently drop queued additions.
         this.publish({ status: "conflict", dirty: true, error: "Agent 修改影响了后续操作的对象或引用，无法直接合并。本页完整输入已保留，请下载本地副本后核对差异。" });

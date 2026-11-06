@@ -1,16 +1,18 @@
 import { CheckCircle2, CircleHelp, Plus, Trash2 } from "lucide-react";
+import { useState } from "react";
 import type { ComponentMember, ComponentPort, ComponentSlot, InterfaceSelection, PartInterface, ResolvedPartInterface } from "../domain/component";
 import { sameInterfaceSelection, supportsInterfacePreview } from "../domain/interfaceGeometry";
 import { interfacesCompatible } from "../domain/interfaceCompatibility";
+import { interfaceTypeLabel, PRESET_INTERFACE_TYPES } from "../domain/interfaceTypes";
 
-function interfaceSummary(item: PartInterface): string {
+function interfaceSummary(item: PartInterface, members: ComponentMember[], customTypes: { id: string; label: string }[]): string {
   const size = item.interfaceSize;
   const sizeText = size?.diameter ? `Ø${size.diameter} ${size.unit || "mm"}`
     : size && [size.width, size.height, size.depth].some(value => value !== undefined)
       ? `${[size.width, size.height, size.depth].filter(value => value !== undefined).join(" × ")} ${size.unit || "mm"}`
       : undefined;
   const region = item.region?.uSpan !== undefined && item.region.vSpan !== undefined ? `区域 ${item.region.uSpan} × ${item.region.vSpan} mm` : undefined;
-  return [item.type, item.interfaceType, item.locatingType, item.connectionMethod, sizeText, region].filter(Boolean).join(" / ") || "未声明类型";
+  return [interfaceTypeLabel(item.connectionTypeId, members.flatMap(member => member.interfaces), customTypes), item.type, item.interfaceType, item.locatingType, item.connectionMethod, sizeText, region].filter(Boolean).join(" / ") || "未声明类型";
 }
 
 function PortNameEditor({ port, onRename }: { port: ComponentPort; onRename: (id: string, name: string) => void }) {
@@ -51,7 +53,8 @@ function sourceLabel(members: ComponentMember[], source: { memberId: string; int
 
 type SlotPatch = { name?: string; required?: boolean; baseInterface?: { memberId: string; interfaceId: string } | null; memberId?: string | null; interfaceId?: string | null };
 
-export function InterfacesStage({ members, ports, slots, selectedInterface, interfacePreview, editable, onSelectInterface, onSetInterfaceExposure, onRenamePort, onAddSlot, onPatchSlot, onRemoveSlot }: { members: ComponentMember[]; ports: ComponentPort[]; slots: ComponentSlot[]; selectedInterface: InterfaceSelection | null; interfacePreview?: { selection: InterfaceSelection; status: "loading" | "ready" | "error"; resolvedInterfaces?: ResolvedPartInterface[] }; editable: boolean; onSelectInterface: (selection: InterfaceSelection) => void; onSetInterfaceExposure: (memberId: string, interfaceId: string, exposed: boolean) => void; onRenamePort: (id: string, name: string) => void; onAddSlot: () => void; onPatchSlot: (id: string, patch: SlotPatch) => void; onRemoveSlot: (id: string) => void }) {
+export function InterfacesStage({ members, ports, slots, interfaceTypes, selectedInterface, interfacePreview, editable, onSelectInterface, onSetInterfaceExposure, onSetInterfaceType, onRenamePort, onAddSlot, onPatchSlot, onRemoveSlot }: { members: ComponentMember[]; ports: ComponentPort[]; slots: ComponentSlot[]; interfaceTypes: { id: string; label: string }[]; selectedInterface: InterfaceSelection | null; interfacePreview?: { selection: InterfaceSelection; status: "loading" | "ready" | "error"; resolvedInterfaces?: ResolvedPartInterface[] }; editable: boolean; onSelectInterface: (selection: InterfaceSelection) => void; onSetInterfaceExposure: (memberId: string, interfaceId: string, exposed: boolean) => void; onSetInterfaceType: (memberId: string, interfaceId: string, connectionTypeId: string | null, customTypeLabel?: string) => void; onRenamePort: (id: string, name: string) => void; onAddSlot: () => void; onPatchSlot: (id: string, patch: SlotPatch) => void; onRemoveSlot: (id: string) => void }) {
+  const [customTypeLabel, setCustomTypeLabel] = useState("");
   return <>
     <div className="callout">组件接口保留其来源成员和零部件接口引用，发布版本保持固定。</div>
     <h4>对外接口</h4>
@@ -62,7 +65,7 @@ export function InterfacesStage({ members, ports, slots, selectedInterface, inte
         <PortNameEditor port={port} onRename={onRenamePort}/>
         <small>来源：{sourceMember?.name || port.source.memberId} / {sourceInterface?.name || port.source.interfaceId}</small>
         <small>ID：{port.source.memberId} / {port.source.interfaceId}</small><small>{port.tags.join(", ")}</small>
-        {port.interface && <small>{[port.interface.interfaceType || port.interface.type, port.interface.locatingType, port.interface.region?.mode, port.interface.region?.uSpan !== undefined && port.interface.region?.vSpan !== undefined ? `${port.interface.region.uSpan} × ${port.interface.region.vSpan} mm` : undefined, port.interface.region?.uSpanExpression || port.interface.region?.vSpanExpression ? `U ${port.interface.region?.uSpanExpression || "?"} × V ${port.interface.region?.vSpanExpression || "?"}` : undefined, port.interface.region?.countExpression ? `数量表达式 ${port.interface.region.countExpression}` : undefined].filter(Boolean).join(" / ")}</small>}
+        {port.interface && <><small>接口类型：{interfaceTypeLabel(port.interface.connectionTypeId, members.flatMap(member => member.interfaces), interfaceTypes)}</small><small>{[port.interface.interfaceType || port.interface.type, port.interface.locatingType, port.interface.region?.mode, port.interface.region?.uSpan !== undefined && port.interface.region?.vSpan !== undefined ? `${port.interface.region.uSpan} × ${port.interface.region.vSpan} mm` : undefined, port.interface.region?.uSpanExpression || port.interface.region?.vSpanExpression ? `U ${port.interface.region?.uSpanExpression || "?"} × V ${port.interface.region?.vSpanExpression || "?"}` : undefined, port.interface.region?.countExpression ? `数量表达式 ${port.interface.region.countExpression}` : undefined].filter(Boolean).join(" / ")}</small></>}
       </span></div>;
     })}
     {ports.length === 0 && <p className="empty-text">在下方零部件接口清单中勾选“对外开放”</p>}
@@ -83,9 +86,23 @@ export function InterfacesStage({ members, ports, slots, selectedInterface, inte
           return <div className={`interface-select ${selected ? "selected" : ""} ${externalPort ? "exposed" : ""}`} key={`${member.id}:${item.id}`}>
             <label className="interface-exposure"><input type="checkbox" checked={Boolean(externalPort)} aria-label={`将 ${item.name} 设置为对外接口`} onChange={event => onSetInterfaceExposure(member.id, item.id, event.currentTarget.checked)}/><span>对外开放</span></label>
             <button type="button" className="interface-preview-button" aria-pressed={selected} onClick={() => onSelectInterface({ memberId: member.id, interfaceId: item.id })}>
-              <span className="interface-select-name"><b>{item.name}</b><small>ID：{item.id}</small><small>{interfaceSummary(item)}</small><small>来源 ID：{sourceId}{sourceFeature ? ` · 特征：${sourceFeature}` : ""}</small>{item.geometryRefs?.length ? <small>语义面：{item.geometryRefs.join("、")}</small> : null}</span>
+              <span className="interface-select-name"><b>{item.name}</b><small>ID：{item.id}</small><small>接口类型：{interfaceTypeLabel(item.connectionTypeId, member.interfaces, interfaceTypes)}</small><small>{interfaceSummary(item, members, interfaceTypes)}</small><small>来源 ID：{sourceId}{sourceFeature ? ` · 特征：${sourceFeature}` : ""}</small>{item.geometryRefs?.length ? <small>语义面：{item.geometryRefs.join("、")}</small> : null}</span>
               {previewable ? <CheckCircle2 size={14} aria-label="可按语义面预览"/> : <CircleHelp size={14} aria-label="缺少可定位几何数据"/>}
             </button>
+            {selected && <div className="interface-type-editor" aria-label="接口类型设置">
+              <label>接口类型<select aria-label={`${item.name}：接口类型`} disabled={!editable} value={item.connectionTypeId || ""} onChange={event => onSetInterfaceType(member.id, item.id, event.currentTarget.value || null)}>
+                <option value="">未分类</option>
+                <optgroup label="预置类型">{PRESET_INTERFACE_TYPES.map(type => <option key={type.id} value={type.id}>{type.label}</option>)}</optgroup>
+                {interfaceTypes.filter(type => type.id.startsWith("custom:")).length > 0 && <optgroup label="自定义类型">{interfaceTypes.filter(type => type.id.startsWith("custom:")).map(type => <option key={type.id} value={type.id}>{type.label}</option>)}</optgroup>}
+              </select></label>
+              <label>新建自定义类型<input aria-label={`${item.name}：新建自定义接口类型`} maxLength={80} value={customTypeLabel} disabled={!editable} placeholder="输入类型名称" onChange={event => setCustomTypeLabel(event.currentTarget.value)}/></label>
+              <button type="button" className="ghost compact-action" disabled={!editable || !customTypeLabel.trim() || customTypeLabel.trim().length > 80} onClick={() => {
+                const label = customTypeLabel.trim().replace(/\s+/g, " ");
+                onSetInterfaceType(member.id, item.id, `custom:${label}`, label);
+                setCustomTypeLabel("");
+              }}>定义并应用</button>
+              <small>类型仅用于分类展示；接口连接关系暂不由此类型决定。</small>
+            </div>}
           </div>;
         })}
       </section>)}
@@ -131,18 +148,18 @@ export function InterfacesStage({ members, ports, slots, selectedInterface, inte
         <label className="slot-required"><input type="checkbox" checked={slot.required} disabled={!editable} aria-label={`${slot.name}：必填槽位`} onChange={event => onPatchSlot(slot.id, { required: event.currentTarget.checked })}/>必填槽位</label>
         <label>基准接口<select aria-label={`${slot.name}：基准接口`} disabled={!editable} value={sourceKey(baseInterface)} onChange={event => onPatchSlot(slot.id, { baseInterface: parseSource(event.currentTarget.value) })}>
           <option value="">待配置基准接口</option>
-          {members.flatMap(member => member.interfaces.map(item => <option key={`${member.id}:${item.id}`} value={sourceKey({ memberId: member.id, interfaceId: item.id })}>{member.name} · {item.name}</option>))}
+          {members.flatMap(member => member.interfaces.map(item => <option key={`${member.id}:${item.id}`} value={sourceKey({ memberId: member.id, interfaceId: item.id })}>{member.name} · {item.name} · {interfaceTypeLabel(item.connectionTypeId, member.interfaces, interfaceTypes)}</option>))}
         </select></label>
         {baseInterface && <button type="button" className="slot-preview-link" onClick={() => onSelectInterface(baseInterface)}>预览基准接口 · {sourceLabel(members, baseInterface)}</button>}
         <label>占用接口<select aria-label={`${slot.name}：占用接口`} value={assignmentValue} disabled={!editable || !basePart || candidates.length === 0} onChange={event => { const next = parseSource(event.currentTarget.value); onPatchSlot(slot.id, next ? { memberId: next.memberId, interfaceId: next.interfaceId } : { memberId: null, interfaceId: null }); }}>
           <option value="">{basePart ? "未分配占用接口" : "请先选择基准接口"}</option>
-          {candidates.map(candidate => <option key={`${candidate.member.id}:${candidate.item.id}`} value={sourceKey({ memberId: candidate.member.id, interfaceId: candidate.item.id })}>{candidate.member.name} · {candidate.item.name}{candidate.result.reason === "几何类型匹配；尺寸未声明" ? " · 尺寸未声明" : ""}</option>)}
+          {candidates.map(candidate => <option key={`${candidate.member.id}:${candidate.item.id}`} value={sourceKey({ memberId: candidate.member.id, interfaceId: candidate.item.id })}>{candidate.member.name} · {candidate.item.name} · {interfaceTypeLabel(candidate.item.connectionTypeId, candidate.member.interfaces, interfaceTypes)}{candidate.result.reason === "几何类型匹配；尺寸未声明" ? " · 尺寸未声明" : ""}</option>)}
         </select></label>
         {assigned && <button type="button" className="slot-preview-link" onClick={() => onSelectInterface(assigned)}>预览占用接口 · {sourceLabel(members, assigned)}</button>}
         {!baseInterface && <small className="slot-status warning">请先选择基准接口</small>}
         {baseInterface && !assigned && slot.required && <small className="slot-status warning">必填槽位尚未分配兼容接口</small>}
         {basePart && !candidates.length && <small className="slot-status warning">{unavailableMessage}</small>}
-        {unavailable.length > 0 && <details className="slot-unavailable"><summary>查看不可用接口及原因（{unavailable.length}）</summary>{unavailable.map(candidate => <small key={`${candidate.member.id}:${candidate.item.id}`}>{candidate.member.name} · {candidate.item.name}：{candidate.occupied ? `已被槽位“${candidate.occupied.name}”占用` : candidate.result.reason}</small>)}</details>}
+        {unavailable.length > 0 && <details className="slot-unavailable"><summary>查看不可用接口及原因（{unavailable.length}）</summary>{unavailable.map(candidate => <small key={`${candidate.member.id}:${candidate.item.id}`}>{candidate.member.name} · {candidate.item.name} · {interfaceTypeLabel(candidate.item.connectionTypeId, candidate.member.interfaces, interfaceTypes)}：{candidate.occupied ? `已被槽位“${candidate.occupied.name}”占用` : candidate.result.reason}</small>)}</details>}
         {assigned && <small className="slot-status">已分配：{sourceLabel(members, assigned)}</small>}
       </div>;
     })}

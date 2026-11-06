@@ -8,12 +8,15 @@ import { validateComponent } from '../src/domain/validation.ts';
 import { serializeComponent } from '../src/domain/serialization.ts';
 import { deriveComponentMetrics, effectiveParameterBounds } from '../src/domain/parameterMetrics.ts';
 import { resolveComponentComposition } from '../src/domain/composition.ts';
+import { interfacesCompatible } from '../src/domain/interfaceCompatibility.ts';
 
 const template = { publicationId: 'version.1', templateId: 'part.1', version: 3, sha256: 'a'.repeat(64) };
 const member = id => ({
   id, name: '横梁', code: 'BEAM', role: id, template: { ...template },
   position: [0, 0, 0], rotation: [0, 0, 0], parameterValues: { length: 2400 },
-  interfaces: [{ id: 'face.left', name: '左端面', type: 'plane', tags: ['end-face'] }],
+  interfaces: [{ id: 'face.left', name: '左端面', type: 'plane', tags: ['end-face'], referenceFrame: { axis: 'z' }, mating: {
+    version: 1, family: 'plane-contact', role: 'contact-face', dimensions: {}, allowedRelations: ['贴合', '重合'], capacity: 1,
+  } }],
 });
 const source = memberId => ({ memberId, interfaceId: 'face.left' });
 
@@ -60,6 +63,50 @@ test('组件间构成规则默认为空，并与其他限制条件独立保存�
   draft = componentReducer(draft, { type: 'rule.remove', id: 'clearance' });
   assert.equal(draft.rules.some(rule => rule.id === 'clearance'), false);
   assert.equal(draft.rules.some(rule => rule.id === 'width-spacing'), true);
+});
+
+test('接口可分类为预置或自定义类型，开放接口快照同步且分类不参与连接判定', () => {
+  let draft = createComponentDocument();
+  draft = componentReducer(draft, { type: 'member.add', member: member('a') });
+  draft = componentReducer(draft, { type: 'member.add', member: member('b') });
+  draft = componentReducer(draft, { type: 'port.add', port: { id: 'port-a', name: 'A接口', source: source('a'), tags: [] } });
+  draft = componentReducer(draft, { type: 'interface.type.set', memberId: 'a', interfaceId: 'face.left', connectionTypeId: 'bolt.male.v1' });
+  assert.equal(draft.assembly.members[0].interfaces[0].connectionTypeId, 'bolt.male.v1');
+  assert.equal(draft.ports[0].interface.connectionTypeId, 'bolt.male.v1');
+  draft = componentReducer(draft, { type: 'interface.type.set', memberId: 'a', interfaceId: 'face.left', connectionTypeId: 'custom:专用支架接口', customTypeLabel: '专用支架接口' });
+  draft = componentReducer(draft, { type: 'interface.type.set', memberId: 'b', interfaceId: 'face.left', connectionTypeId: 'bolt.female.v1' });
+  assert.equal(draft.interfaceTypes[0].label, '专用支架接口');
+  assert.notEqual(draft.assembly.members[1].interfaces[0].connectionTypeId, draft.assembly.members[0].interfaces[0].connectionTypeId);
+  assert.equal(draft.assembly.members[1].interfaces[0].mating.family, draft.assembly.members[0].interfaces[0].mating.family);
+  assert.equal(draft.assembly.members[1].interfaces[0].mating.role, draft.assembly.members[0].interfaces[0].mating.role);
+  assert.equal(interfacesCompatible(draft.assembly.members[0].interfaces[0], draft.assembly.members[1].interfaces[0]).status, 'compatible');
+  assert.equal(draft.ports[0].interface.connectionTypeId, 'custom:专用支架接口');
+  const slot = { id: 'slot-a', name: '替换槽', required: false, baseInterface: null, memberId: null, interfaceId: null };
+  draft = componentReducer(draft, { type: 'slot.add', slot });
+  draft = componentReducer(draft, { type: 'slot.patch', id: 'slot-a', patch: { baseInterface: source('a'), memberId: 'b', interfaceId: 'face.left' } });
+  assert.equal(draft.slots[0].memberId, 'b');
+  const cleared = componentReducer(draft, { type: 'interface.type.set', memberId: 'a', interfaceId: 'face.left', connectionTypeId: null });
+  assert.equal(cleared.assembly.members[0].interfaces[0].connectionTypeId, null);
+  assert.equal(cleared.interfaceTypes.length, 1);
+  assert.equal(cleared.ports[0].interface.connectionTypeId, null);
+  assert.equal(componentReducer(cleared, { type: 'interface.type.set', memberId: 'missing', interfaceId: 'face.left', connectionTypeId: 'bolt.male.v1' }), cleared);
+  assert.equal(componentReducer(cleared, { type: 'interface.type.set', memberId: 'a', interfaceId: 'face.left', connectionTypeId: 'custom:未知' }), cleared);
+});
+
+test('嵌套组件的自定义接口类型目录可合并且名称冲突会拒绝', () => {
+  let draft = createComponentDocument();
+  draft = componentReducer(draft, { type: 'interface.types.merge', types: [{ id: 'custom:支架  端口', label: '支架  端口' }] });
+  assert.deepEqual(draft.interfaceTypes, [{ id: 'custom:支架 端口', label: '支架 端口' }]);
+  const same = componentReducer(draft, { type: 'interface.types.merge', types: [{ id: 'custom:支架 端口', label: '支架 端口' }] });
+  assert.equal(same, draft);
+  assert.equal(componentReducer(draft, { type: 'interface.types.merge', types: [{ id: 'custom:支架 端口', label: '另一名称' }] }), draft);
+});
+
+test('组件导出包含接口类型目录', () => {
+  let draft = createComponentDocument();
+  draft = componentReducer(draft, { type: 'interface.types.merge', types: [{ id: 'custom:设备安装面', label: '设备安装面' }] });
+  const exported = JSON.parse(serializeComponent(draft));
+  assert.deepEqual(exported.stages.interfaceTypes, [{ id: 'custom:设备安装面', label: '设备安装面' }]);
 });
 
 test('新增成员时按长宽高名称默认绑定，并允许移除尺寸来源', () => {
@@ -334,7 +381,9 @@ test('对外接口可按成员逐项开放、取消和改名', () => {
 test('槽位支持基准接口、兼容占用、重复防护和成员清理', () => {
   const first = { ...member('base'), interfaces: [{ ...member('base').interfaces[0], connectionGender: 'male', interfaceSize: { diameter: 10 }, connectionMethod: '插接' }] };
   const second = { ...member('candidate'), interfaces: [{ ...member('candidate').interfaces[0], connectionGender: 'female', interfaceSize: { diameter: 10 }, connectionMethod: '插接' }] };
-  const incompatible = { ...member('bad'), interfaces: [{ ...member('bad').interfaces[0], connectionGender: 'female', interfaceSize: { diameter: 12 }, connectionMethod: '插接' }] };
+  const incompatible = { ...member('bad'), interfaces: [{ ...member('bad').interfaces[0], mating: {
+    version: 1, family: 'pin-hole', role: 'hole', dimensions: {}, allowedRelations: ['同轴'], capacity: 1,
+  } }] };
   let draft = { ...createComponentDocument(), assembly: { members: [first, second, incompatible], mates: [] } };
   draft = componentReducer(draft, { type: 'slot.add', slot: { id: 'slot-a', name: '  安装位  ', required: true, baseInterface: null, memberId: null, interfaceId: null } });
   assert.equal(draft.slots[0].name, '安装位');

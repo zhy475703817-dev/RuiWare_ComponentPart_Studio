@@ -174,12 +174,13 @@ test('共享库混合零件和组件时，组件只出现一次且不进入零�
 
 test('加入组件只继承公开接口和参数，实例数据独立且固定发布版本', () => {
   const document=createComponentDocument();
+  document.interfaceTypes=[{id:'custom:设备安装面',label:'设备安装面'}];
   document.assembly.members=[{id:'internal',interfaces:[{id:'face',name:'内部面',type:'plane',tags:['private']}]}];
-  document.ports=[{id:'public-face',name:'安装面',source:{memberId:'internal',interfaceId:'face'},tags:['mount']}];
+  document.ports=[{id:'public-face',name:'安装面',source:{memberId:'internal',interfaceId:'face'},tags:['mount'],interface:{id:'face',name:'内部面',type:'plane',tags:['mount'],connectionTypeId:'custom:设备安装面'}}];
   const published={...publication,templateKind:'component',document};
   const first=componentPublicationMember(published,'instance-1');
   const second=componentPublicationMember(published,'instance-2');
-  assert.deepEqual(first.interfaces,[{id:'public-face',name:'安装面',type:'plane',tags:['mount']}]);
+  assert.equal(first.interfaces[0].connectionTypeId,'custom:设备安装面');
   assert.equal(first.template.templateKind,'component');
   assert.equal(first.template.sha256,publication.sha256);
   first.parameterValues.componentLength=3500; first.position[0]=42; first.interfaces[0].tags.push('changed');

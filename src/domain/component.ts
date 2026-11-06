@@ -14,6 +14,7 @@ export type PartInterface = {
   name: string;
   type: "plane" | "axis" | "point";
   tags: string[];
+  connectionTypeId?: string | null;
   declarationMode?: "staticGeometry" | "featureDerived";
   interfaceType?: string;
   locatingType?: string;
@@ -27,7 +28,29 @@ export type PartInterface = {
   /** Physical connection envelope. Values are millimetres unless a unit is provided. */
   interfaceSize?: { diameter?: number; width?: number; height?: number; depth?: number; tolerance?: number; unit?: string };
   connectionMethod?: string;
+  referenceFrame?: { originRef?: string | null; axis: "x" | "y" | "z" | "-x" | "-y" | "-z" };
+  mating?: MatingContract;
   region?: { mode?: string; uStart?: number; vStart?: number; uSpan?: number; vSpan?: number; uSpanExpression?: string; vSpanExpression?: string; countExpression?: string };
+};
+
+export type ComponentInterfaceType = { id: string; label: string };
+
+export type MatingDimension = {
+  nominal: number;
+  lowerTolerance: number;
+  upperTolerance: number;
+  unit: "mm" | "cm" | "m" | "in";
+  parameterRef?: string | null;
+};
+export type MatingContract = {
+  version: number;
+  family: string;
+  role: string;
+  standardId?: string | null;
+  connectionMethod?: string | null;
+  dimensions: Record<string, MatingDimension>;
+  allowedRelations: Array<"贴合" | "同轴" | "重合">;
+  capacity: number;
 };
 
 export type MemberParameterDefinition = {
@@ -116,6 +139,7 @@ export type ComponentDocument = {
   definition: ComponentDefinition;
   assembly: { members: ComponentMember[]; mates: Mate[] };
   ports: ComponentPort[];
+  interfaceTypes: ComponentInterfaceType[];
   slots: ComponentSlot[];
   parameters: ComponentParameter[];
   bindings: ParameterBinding[];
@@ -138,7 +162,7 @@ export function createComponentDocument(): ComponentDocument {
       },
       designConstraints: "", evidenceFiles: [], evidence: [],
     },
-    assembly: { members: [], mates: [] }, ports: [], slots: [], bindings: [], patterns: [],
+    assembly: { members: [], mates: [] }, ports: [], interfaceTypes: [], slots: [], bindings: [], patterns: [],
     parameters: [
       { id: "componentLength", label: "组件总长", value: 2400, unit: "mm", min: 1000, max: 6000 },
       { id: "componentWidth", label: "组件总宽", value: 600, unit: "mm", min: 100, max: 3000 },

@@ -28,11 +28,53 @@ class PartTemplateReference(ComponentModel):
         return data
 
 
+class MatingDimension(ComponentModel):
+    nominal: Number = Field(gt=0)
+    lowerTolerance: Number = 0
+    upperTolerance: Number = 0
+    unit: Literal["mm", "cm", "m", "in"] = "mm"
+    parameterRef: str | None = None
+
+    @model_validator(mode="after")
+    def validate_tolerances(self):
+        if self.lowerTolerance > 0 or self.upperTolerance < 0:
+            raise ValueError("Invalid mating dimension tolerance")
+        if self.parameterRef is not None and not self.parameterRef.strip():
+            raise ValueError("Invalid mating dimension parameter reference")
+        return self
+
+
+class MatingContract(ComponentModel):
+    version: Annotated[int, Field(strict=True, ge=1)]
+    family: str = Field(min_length=1, max_length=80)
+    role: str = Field(min_length=1, max_length=80)
+    standardId: str | None = Field(default=None, max_length=120)
+    connectionMethod: str | None = Field(default=None, max_length=80)
+    dimensions: dict[str, MatingDimension] = Field(default_factory=dict, max_length=16)
+    allowedRelations: list[Literal["贴合", "同轴", "重合"]] = Field(min_length=1, max_length=3)
+    capacity: Annotated[int, Field(strict=True, ge=1, le=100)] = 1
+
+    @model_validator(mode="after")
+    def validate_contract(self):
+        if len(set(self.allowedRelations)) != len(self.allowedRelations):
+            raise ValueError("Duplicate allowed mating relation")
+        return self
+
+    @model_serializer(mode="wrap")
+    def preserve_optional_metadata(self, handler):
+        data = handler(self)
+        for field in ("standardId", "connectionMethod"):
+            if field not in self.model_fields_set:
+                data.pop(field, None)
+        return data
+
+
 class PartInterface(ComponentModel):
     id: str
     name: str
     type: Literal["plane", "axis", "point"]
     tags: list[str]
+    connectionTypeId: str | None = Field(default=None, max_length=120)
     declarationMode: Literal["staticGeometry", "featureDerived"] | None = None
     interfaceType: Literal["locating", "connecting", "supporting", "adjustable", "processDatum", "other"] | None = None
     locatingType: Literal["planeContact", "axisCoincident", "pinHole", "edgeStop", "slotAdjustable", "keyedAntiError"] | None = None
@@ -44,12 +86,14 @@ class PartInterface(ComponentModel):
     connectionGender: Literal["male", "female", "neutral"] | None = None
     interfaceSize: dict[str, object] | None = None
     connectionMethod: str | None = None
+    referenceFrame: dict[str, object] | None = None
+    mating: MatingContract | None = None
     region: dict[str, object] | None = None
 
     @model_serializer(mode="wrap")
     def preserve_optional_metadata(self, handler):
         data = handler(self)
-        for field in ("declarationMode", "interfaceType", "locatingType", "role", "geometryRefs", "parameterRefs", "description", "required", "connectionGender", "interfaceSize", "connectionMethod", "region"):
+        for field in ("declarationMode", "interfaceType", "locatingType", "role", "geometryRefs", "parameterRefs", "description", "required", "connectionGender", "interfaceSize", "connectionMethod", "connectionTypeId", "referenceFrame", "mating", "region"):
             if field not in self.model_fields_set:
                 data.pop(field, None)
         return data
@@ -117,6 +161,19 @@ class ComponentPort(ComponentModel):
         if "interface" not in self.model_fields_set:
             data.pop("interface", None)
         return data
+
+
+class ComponentInterfaceType(ComponentModel):
+    id: str = Field(min_length=8, max_length=120, pattern=r"^custom:.+$")
+    label: str = Field(min_length=1, max_length=80)
+
+    @model_validator(mode="after")
+    def validate_custom_type(self):
+        if self.label != self.label.strip() or not self.label.strip():
+            raise ValueError("Invalid custom interface type label")
+        if self.id != f"custom:{self.label}":
+            raise ValueError("Custom interface type ID must match its label")
+        return self
 
 
 class ComponentSlot(ComponentModel):
@@ -233,11 +290,19 @@ class ComponentDocument(ComponentModel):
     definition: ComponentDefinition
     assembly: Assembly
     ports: list[ComponentPort]
+    interfaceTypes: list[ComponentInterfaceType] = Field(default_factory=list, max_length=500)
     slots: list[ComponentSlot]
     parameters: list[ComponentParameter]
     bindings: list[ParameterBinding]
     patterns: list[ComponentPattern] = Field(default_factory=list)
     rules: list[ComponentRule]
+
+    @model_validator(mode="after")
+    def validate_interface_types(self):
+        identifiers = [item.id for item in self.interfaceTypes]
+        if len(set(identifiers)) != len(identifiers):
+            raise ValueError("Duplicate custom interface type ID")
+        return self
 
 
 class PatchModel(ComponentModel):
@@ -345,6 +410,19 @@ class PortRenameAction(ComponentModel):
     name: str
 
 
+class InterfaceTypeSetAction(ComponentModel):
+    type: Literal["interface.type.set"]
+    memberId: str = Field(min_length=1, max_length=120)
+    interfaceId: str = Field(min_length=1, max_length=120)
+    connectionTypeId: str | None = Field(max_length=120)
+    customTypeLabel: str | None = Field(default=None, max_length=80)
+
+
+class InterfaceTypesMergeAction(ComponentModel):
+    type: Literal["interface.types.merge"]
+    types: list[ComponentInterfaceType] = Field(max_length=500)
+
+
 class ParameterValueAction(ComponentModel):
     type: Literal["parameter.value"]
     id: str
@@ -395,7 +473,7 @@ class RuleRemoveAction(ComponentModel):
 
 TypedAction = Annotated[
     ResetAction | DefinitionPatchAction | MemberAddAction | MemberPatchAction | MemberRemoveAction
-    | MateAddAction | SlotAddAction | SlotPatchAction | SlotRemoveAction | PortAddAction | PortRemoveAction | PortRenameAction | ParameterValueAction | ParameterAddAction | ParameterRemoveAction | BindingSetAction | PatternAddAction | PatternRemoveAction | RuleAddAction | RuleRemoveAction | RuleExpressionAction,
+    | MateAddAction | SlotAddAction | SlotPatchAction | SlotRemoveAction | PortAddAction | PortRemoveAction | PortRenameAction | InterfaceTypeSetAction | InterfaceTypesMergeAction | ParameterValueAction | ParameterAddAction | ParameterRemoveAction | BindingSetAction | PatternAddAction | PatternRemoveAction | RuleAddAction | RuleRemoveAction | RuleExpressionAction,
     Field(discriminator="type"),
 ]
 ComponentAction = TypeAdapter(TypedAction)

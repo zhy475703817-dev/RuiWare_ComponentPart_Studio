@@ -59,7 +59,7 @@ test('重建接口会映射单体平台的接口类型和兼容标签',async t=>
 
 test('读取重建信息时保留默认参数下展开的接口实例和实体尺寸',async t=>{
   const info={publication,parameters:[],interfaces:[
-    {id:'slot',name:'可调长孔',type:'plane',tags:['mount'],declarationMode:'featureDerived',interfaceType:'adjustable',locatingType:'slotAdjustable',geometryRefs:['slotFace'],parameterRefs:['slotWidth'],region:{mode:'rectangle',uSpanExpression:'slotWidth',vSpanExpression:'slotHeight'}},
+    {id:'slot',name:'可调长孔',type:'plane',tags:['mount'],connectionTypeId:'custom:设备安装面',declarationMode:'featureDerived',interfaceType:'adjustable',locatingType:'slotAdjustable',geometryRefs:['slotFace'],parameterRefs:['slotWidth'],region:{mode:'rectangle',uSpanExpression:'slotWidth',vSpanExpression:'slotHeight'}},
   ],resolvedInterfaces:[
     {id:'slot.cut.001',sourceInterfaceId:'slot',declarationMode:'featureDerived',interfaceType:'adjustable',geometryRefs:['face.side'],parameterRefs:['slotWidth'],region:{mode:'rectangle',uStart:50,vStart:40,uSpan:100,vSpan:12},sourceFeatureRuleId:'cut',sourceFeatureId:'cut.001'},
     {id:'slot.cut.002',sourceInterfaceId:'slot',declarationMode:'featureDerived',interfaceType:'adjustable',geometryRefs:['face.side'],parameterRefs:['slotWidth'],region:{mode:'rectangle',uStart:150,vStart:40,uSpan:100,vSpan:12},sourceFeatureRuleId:'cut',sourceFeatureId:'cut.002'},
@@ -67,6 +67,7 @@ test('读取重建信息时保留默认参数下展开的接口实例和实体�
   t.mock.method(globalThis,'fetch',async()=>Response.json(info));
   const result=await loadReconstructionInfo(publication,new AbortController().signal);
   assert.equal(result.interfaces[0].geometryRefs[0],'slotFace');
+  assert.equal(result.interfaces[0].connectionTypeId,'custom:设备安装面');
   assert.equal(result.interfaces[0].parameterRefs[0],'slotWidth');
   assert.equal(result.resolvedInterfaces.length,2);
   assert.deepEqual([result.resolvedInterfaces[0].region.uSpan,result.resolvedInterfaces[0].region.vSpan],[100,12]);

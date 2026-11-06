@@ -1,7 +1,7 @@
 import { getInterface, hasInterface, samePartInterface } from "./component.ts";
 import type { ComponentDocument } from "./component.ts";
 import { effectiveParameterBounds } from "./parameterMetrics.ts";
-import { interfacesCompatible } from "./interfaceCompatibility.ts";
+import { assessInterfaceCompatibility } from "./interfaceCompatibility.ts";
 
 export type ValidationCheck = { id: string; label: string; status: "pass" | "fail" | "pending"; message: string };
 
@@ -19,14 +19,24 @@ export function validateComponent(document: ComponentDocument): ValidationCheck[
     const key = `${slot.memberId}:${slot.interfaceId}`;
     if (occupiedInterfaces.has(key)) return false;
     occupiedInterfaces.add(key);
-    return interfacesCompatible(getInterface(document, slot.baseInterface), getInterface(document, assignment)).compatible;
+    const baseMember = members.find(member => member.id === slot.baseInterface!.memberId);
+    const targetMember = members.find(member => member.id === assignment.memberId);
+    return assessInterfaceCompatibility(getInterface(document, slot.baseInterface), getInterface(document, assignment), undefined, baseMember, targetMember).status === "compatible";
   }) && new Set(document.slots.map(slot => slot.id)).size === document.slots.length;
   const check = (id: string, label: string, passed: boolean, failure: string): ValidationCheck => ({ id, label, status: passed ? "pass" : "fail", message: passed ? "基础数据检查通过" : failure });
   return [
     check("definition", "组件名称", document.definition.name.trim().length > 0, "请填写组件名称"),
     check("members", "装配成员", members.length > 0 && members.every(member => member.id.trim()) && memberIds.size === members.length, "请加入零部件，成员标识需唯一"),
     check("references", "固定版本引用", members.length > 0 && members.every(member => member.template.publicationId.trim() && member.template.templateId.trim() && Number.isSafeInteger(member.template.version) && member.template.version > 0 && /^[a-f0-9]{64}$/i.test(member.template.sha256)), "成员需引用有效发布版本及模板包校验值"),
-    check("mates", "内部连接数据", (members.length < 2 || mates.length > 0) && new Set(mates.map(mate => mate.id)).size === mates.length && mates.every(mate => hasInterface(document, mate.from) && hasInterface(document, mate.to) && mate.from.memberId !== mate.to.memberId && Number.isFinite(mate.offset)), "请检查连接两端的成员与接口；多成员组件需建立内部连接"),
+    check("mates", "内部连接数据", new Set(mates.map(mate => mate.id)).size === mates.length && mates.every(mate => {
+      if (!hasInterface(document, mate.from) || !hasInterface(document, mate.to) || mate.from.memberId === mate.to.memberId || !Number.isFinite(mate.offset)) return false;
+      const source = getInterface(document, mate.from), target = getInterface(document, mate.to);
+      const sourceMember = members.find(member => member.id === mate.from.memberId), targetMember = members.find(member => member.id === mate.to.memberId);
+      if (assessInterfaceCompatibility(source, target, mate.relation, sourceMember, targetMember).status !== "compatible") return false;
+      const endpoints = [[mate.from.memberId, mate.from.interfaceId, source?.mating?.capacity], [mate.to.memberId, mate.to.interfaceId, target?.mating?.capacity]] as const;
+      return endpoints.every(([memberId, interfaceId, capacity]) => capacity !== undefined && mates.filter(item =>
+        item.from.memberId === memberId && item.from.interfaceId === interfaceId || item.to.memberId === memberId && item.to.interfaceId === interfaceId).length <= capacity);
+    }), "连接两端必须有明确兼容契约、允许所选关系并遵守接口容量；历史未评估连接需复核"),
     check("ports", "对外接口", document.ports.length > 0 && document.ports.every(port => port.name.trim().length > 0 && hasInterface(document, port.source) && (port.interface === undefined || samePartInterface(port.interface, getInterface(document, port.source)))), "请继承有效的零部件接口，并检查接口信息是否仍与来源一致"),
     check("parameters", "参数范围", document.parameters.length > 0 && parameterIds.size === document.parameters.length && document.parameters.every(parameter => parameter.value !== null && Number.isFinite(parameter.value) && Number.isFinite(parameter.min) && Number.isFinite(parameter.max) && parameter.min <= parameter.max && parameter.value >= parameter.min && parameter.value <= parameter.max), "参数需为范围内的有效数值"),
     check("bindings", "参数绑定来源", document.bindings.every(binding => {
