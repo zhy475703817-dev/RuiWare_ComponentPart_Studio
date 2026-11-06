@@ -101,7 +101,8 @@ def execute_cleanup(state, report: dict, identifiers: list[str], *, automatic=Fa
                 deleted_versions = state.published_storage.delete_part(record, expected_sha256=row['sha256'])
                 deleted = True
                 deleted_ids.add(identifier)
-                state.library_cache.remove_publications([identifier])
+                if not automatic:
+                    state.library_cache.remove_publications([identifier])
                 state.cleanup_store.append_audit({**audit, 'status': 'deleted', 'deletedVersions': deleted_versions,
                                                   'finishedAt': datetime.now(timezone.utc).isoformat()})
                 results.append({'publicationId': identifier, 'status': 'deleted', 'backupId': backup['backupId'],
