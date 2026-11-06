@@ -10,7 +10,7 @@ export type ComponentAction =
   | { type: "reset" }
   | { type: "definition.patch"; patch: Partial<ComponentDefinition> }
   | { type: "member.add"; member: ComponentMember }
-  | { type: "member.patch"; id: string; patch: Partial<Pick<ComponentMember, "role" | "position" | "rotation" | "parameterValues">> }
+  | { type: "member.patch"; id: string; patch: Partial<Pick<ComponentMember, "role" | "position" | "rotation" | "planarMovement" | "parameterValues">> }
   | { type: "member.remove"; id: string }
   | { type: "mate.add"; mate: Mate }
   | { type: "slot.add"; slot: ComponentSlot }

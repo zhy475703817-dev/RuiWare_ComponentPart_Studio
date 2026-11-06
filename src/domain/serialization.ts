@@ -15,6 +15,7 @@ export function serializeComponent(document: ComponentDocument): string {
           partTemplateRef: { publicationId: member.template.publicationId, templateId: member.template.templateId, version: member.template.version, sha256: member.template.sha256 },
           name: member.name, code: member.code, role: member.role,
           position: member.position, rotation: member.rotation, parameterValues: member.parameterValues,
+          ...(member.planarMovement ? { planarMovement: true } : {}),
           parameterDefinitions: member.parameterDefinitions || [],
           resolvedInterfaces: member.resolvedInterfaces || [],
           bindings: { ...member.parameterValues, ...Object.fromEntries(bindings.filter(binding => binding.memberId === member.id).map(binding => [binding.memberParameterId, binding.parameterId])) },

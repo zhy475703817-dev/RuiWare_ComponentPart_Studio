@@ -86,7 +86,9 @@ export function App() {
   function renderStage() {
     switch (stage) {
       case "definition": return <DefinitionStage definition={document.definition} members={members} draftId={workspace.shared.draftId} selectedMemberId={workspace.selectedMemberId} hoveredMemberId={hoveredMemberId} compatibleMemberIds={compatibleIds} onSelectMember={selectPanelMember} onHoverMember={setHoveredMemberId} onChange={patch => dispatch({ type: "definition.patch", patch })}/>;
-      case "assembly": return <AssemblyStage members={members} mates={mates} onAddMate={workspace.addMate}/>;
+      case "assembly": return <AssemblyStage members={members} mates={mates} onAddMate={workspace.addMate}
+        selectedMember={members.find(member => member.id === workspace.selectedMemberId)} bindings={document.bindings}
+        onMemberChange={patch => { if (workspace.selectedMemberId) dispatch({ type: "member.patch", id: workspace.selectedMemberId, patch }); }}/>;
       case "interfaces": return <InterfacesStage members={members} ports={document.ports} slots={document.slots} interfaceTypes={document.interfaceTypes ?? []} selectedInterface={selectedInterface} interfacePreview={interfacePreview} editable={workspace.editable} onSelectInterface={selectInterface} onSetInterfaceExposure={workspace.setInterfaceExposure} onSetInterfaceType={workspace.setInterfaceType} onRenamePort={workspace.renamePort} onAddSlot={workspace.addSlot} onPatchSlot={workspace.patchSlot} onRemoveSlot={workspace.removeSlot}/>;
       case "parameters": return <ParametersStage parameters={document.parameters} bindings={document.bindings} patterns={document.patterns} rules={document.rules} members={members} definitionName={document.definition.name} definitionCode={document.definition.code} onChange={(id, value) => dispatch({ type: "parameter.value", id, value })} onBindingChange={(id, binding) => dispatch({ type: "binding.set", id, binding })} onAddParameter={parameter => dispatch({ type: "parameter.add", parameter })} onRemoveParameter={id => dispatch({ type: "parameter.remove", id })} onAddPattern={pattern => dispatch({ type: "pattern.add", pattern })} onRemovePattern={id => dispatch({ type: "pattern.remove", id })} onAddRule={rule => dispatch({ type: "rule.add", rule })} onRemoveRule={id => dispatch({ type: "rule.remove", id })}/>;
       case "rules": return <RulesStage rules={document.rules} onChange={(id, expression) => dispatch({ type: "rule.expression", id, expression })}/>;
@@ -113,6 +115,7 @@ export function App() {
        patterns={document.patterns}
       mateCount={mates.length}
       previewTemplate={workspace.previewTemplate}
+      onShowAssembly={() => workspace.setPreviewTemplate(null)}
       selectedMemberId={workspace.selectedMemberId}
       selectedInterface={selectedInterface}
       selectedInterfaceResolved={sameInterfaceSelection(interfacePreview?.selection || null, selectedInterface) && interfacePreview?.status === "ready" ? interfacePreview.resolvedInterfaces : undefined}
@@ -120,7 +123,9 @@ export function App() {
       onSelectMember={selectViewportMember}
       onHoverMember={setHoveredMemberId}
       compatibleMemberIds={compatibleIds}
-      onMoveMember={workspace.moveMember}
+      onTransformMember={workspace.transformMember}
+      onSetPlanarMovement={(id, enabled) => dispatch({ type: "member.patch", id, patch: { planarMovement: enabled } })}
+      onGroundMember={workspace.groundMember}
       onCopyMember={workspace.copyMember}
       onRemoveMember={workspace.removeMember}
       onDropTemplate={() => {

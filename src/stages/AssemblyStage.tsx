@@ -1,9 +1,10 @@
 import { useMemo, useState } from "react";
 import { Link2 } from "lucide-react";
-import type { ComponentMember, Mate, PartInterface } from "../domain/component";
+import type { ComponentMember, Mate, ParameterBinding, PartInterface } from "../domain/component";
 import { assessInterfaceCompatibility, type CompatibilityAssessment } from "../domain/interfaceCompatibility";
 
-type Props = { members: ComponentMember[]; mates: Mate[]; onAddMate: (mate: Mate) => boolean };
+type Props = { members: ComponentMember[]; mates: Mate[]; onAddMate: (mate: Mate) => boolean; selectedMember?: ComponentMember; bindings: ParameterBinding[];
+  onMemberChange: (patch: Partial<Pick<ComponentMember, "position" | "rotation" | "parameterValues">>) => void };
 type Endpoint = { memberId: string; interfaceId: string };
 
 function endpointKey(value: Endpoint) { return `${value.memberId}\u0000${value.interfaceId}`; }
@@ -12,7 +13,7 @@ function statusLabel(result: CompatibilityAssessment) {
   return result.status === "compatible" ? "兼容" : result.status === "needs_review" ? "待复核" : "不兼容";
 }
 
-export function AssemblyStage({ members, mates, onAddMate }: Props) {
+export function AssemblyStage({ members, mates, onAddMate, selectedMember: member, bindings, onMemberChange }: Props) {
   const endpoints = useMemo(() => members.flatMap(member => member.interfaces.map(item => ({ member, item, value: { memberId: member.id, interfaceId: item.id } }))), [members]);
   const [fromKey, setFromKey] = useState("");
   const [toKey, setToKey] = useState("");
@@ -34,6 +35,34 @@ export function AssemblyStage({ members, mates, onAddMate }: Props) {
     if (added) setToKey("");
   };
   return <>
+    {member && <section className="assembly-member-editor" aria-label="所选成员设置">
+      <h4>{member.name} · V{member.template.version}</h4>
+      {(["position", "rotation"] as const).map(field => <div key={field} className="assembly-vector">
+        {["X", "Y", "Z"].map((axis, index) => <label key={axis}>{field === "position" ? "位置" : "旋转"} {axis}（{field === "position" ? "mm" : "°"}）
+          <input type="number" step="any" disabled={field === "position" && index === 2 && Boolean(member.planarMovement)} value={Number((member[field][index] * (field === "rotation" ? 180 / Math.PI : 1)).toFixed(6))}
+            onChange={event => {
+              if (!Number.isFinite(event.target.valueAsNumber)) return;
+              const vector: ComponentMember[typeof field] = [...member[field]];
+              vector[index] = event.target.valueAsNumber * (field === "rotation" ? Math.PI / 180 : 1);
+              onMemberChange({ [field]: vector });
+            }}/>
+        </label>)}
+      </div>)}
+      {member.parameterDefinitions?.map(parameter => {
+        const bound = bindings.some(binding => binding.memberId === member.id && binding.memberParameterId === parameter.id);
+        const value = member.parameterValues[parameter.id] ?? parameter.default;
+        const numeric = ["number", "integer"].includes(parameter.valueType);
+        const update = (next: string | number | boolean) => onMemberChange({ parameterValues: { ...member.parameterValues, [parameter.id]: next } });
+        return <label key={parameter.id}>{parameter.label} {parameter.unit}
+          {parameter.valueType === "boolean"
+            ? <input type="checkbox" aria-label={`成员参数 ${parameter.label}`} checked={Boolean(value)} disabled={bound} onChange={event => update(event.target.checked)}/>
+            : <input aria-label={`成员参数 ${parameter.label}`} type={numeric ? "number" : "text"} value={String(value)} disabled={bound}
+                min={parameter.minimum ?? undefined} max={parameter.maximum ?? undefined} step={parameter.valueType === "integer" ? 1 : "any"}
+                onChange={event => { if (!numeric || event.target.validity.valid && Number.isFinite(event.target.valueAsNumber)) update(numeric ? event.target.valueAsNumber : event.target.value); }}/>}
+          {bound && <small className="hint">由组件参数统一控制，请在“参数”阶段调整。</small>}
+        </label>;
+      })}
+    </section>}
     <div className="callout">先明确选择两端接口。只有契约规则明确判定为兼容时才能记录连接；成功只表示“声明兼容，未求解”，不会自动改变成员位置。</div>
     <h4>新建接口连接</h4>
     <div className="form-grid">

@@ -117,6 +117,7 @@ class ComponentMember(ComponentModel):
     template: PartTemplateReference
     position: Vector3
     rotation: Vector3
+    planarMovement: bool = False
     parameterValues: dict[str, ParameterValue]
     parameterDefinitions: list[MemberParameterDefinition] = Field(default_factory=list)
     resolvedInterfaces: list[dict[str, object]] = Field(default_factory=list)
@@ -125,7 +126,7 @@ class ComponentMember(ComponentModel):
     @model_serializer(mode="wrap")
     def preserve_legacy_members(self, handler):
         data = handler(self)
-        for field in ("parameterDefinitions", "resolvedInterfaces"):
+        for field in ("parameterDefinitions", "resolvedInterfaces", "planarMovement"):
             if field not in self.model_fields_set:
                 data.pop(field, None)
         return data
@@ -337,6 +338,7 @@ class MemberPatch(PatchModel):
     role: str | None = None
     position: Vector3 | None = None
     rotation: Vector3 | None = None
+    planarMovement: bool | None = None
     parameterValues: dict[str, ParameterValue] | None = None
 
 

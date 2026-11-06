@@ -142,6 +142,36 @@ class ComponentTests(unittest.TestCase):
             self.assertEqual(removed.status_code, 200, removed.text)
             self.assertEqual([rule["id"] for rule in removed.json()["document"]["rules"]], ["rule-1", "width-spacing"])
 
+    def test_planar_movement_persists_for_parts_and_components_and_preserves_legacy_export(self):
+        with TestClient(create_app(dist_dir=None)) as client:
+            draft = self.create(client)
+            part = member("part")
+            component = member("nested")
+            component["template"]["templateKind"] = "component"
+            for item in (part, component):
+                added = self.action(client, draft, {"type": "member.add", "member": item})
+                self.assertEqual(added.status_code, 200, added.text)
+                draft = added.json()
+            legacy_members = draft["document"]["assembly"]["members"]
+            self.assertTrue(all("planarMovement" not in item for item in legacy_members))
+            export_url = f"/api/component-drafts/{draft['draftId']}/export"
+            self.assertTrue(all("planarMovement" not in item for item in client.get(export_url).json()["stages"]["assembly"]["members"]))
+            for identifier in ("part", "nested"):
+                updated = self.action(client, draft, {"type": "member.patch", "id": identifier, "patch": {"planarMovement": True}})
+                self.assertEqual(updated.status_code, 200, updated.text)
+                draft = updated.json()
+            self.assertTrue(all(item["planarMovement"] for item in client.get(export_url).json()["stages"]["assembly"]["members"]))
+
+        with TestClient(create_app(dist_dir=None)) as client:
+            restored = client.get(f"/api/component-drafts/{draft['draftId']}").json()
+            self.assertTrue(all(item["planarMovement"] for item in restored["document"]["assembly"]["members"]))
+            disabled = self.action(client, restored, {"type": "member.patch", "id": "part", "patch": {"planarMovement": False}})
+            self.assertEqual(disabled.status_code, 200, disabled.text)
+            self.assertFalse(disabled.json()["document"]["assembly"]["members"][0]["planarMovement"])
+            exported = client.get(export_url).json()["stages"]["assembly"]["members"]
+            self.assertNotIn("planarMovement", exported[0])
+            self.assertTrue(exported[1]["planarMovement"])
+
     def test_member_add_suggests_length_width_and_height_bindings(self):
         with TestClient(create_app(dist_dir=None)) as client:
             draft = self.create(client)
@@ -199,7 +229,7 @@ class ComponentTests(unittest.TestCase):
         data["bindings"] = [{"id": "b", "parameterId": "componentLength", "memberId": "member.a", "memberParameterId": "length"}]
         actions = [
             {"type": "definition.patch", "patch": {"name": "测试组件", "code": "A"}},
-            {"type": "member.patch", "id": "member.b", "patch": {"position": [1, 2, 3], "parameterValues": {"length": 3000}}},
+            {"type": "member.patch", "id": "member.b", "patch": {"position": [1, 2, 3], "parameterValues": {"length": 3000}, "planarMovement": True}},
             {"type": "parameter.value", "id": "componentLength", "value": 3500},
             {"type": "rule.expression", "id": "rule-1", "expression": "长度约束"},
             {"type": "member.remove", "id": "member.a"},
