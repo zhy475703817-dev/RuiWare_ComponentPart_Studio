@@ -86,10 +86,11 @@ export function InterfacesStage({ members, ports, slots, interfaceTypes, selecte
           return <div className={`interface-select ${selected ? "selected" : ""} ${externalPort ? "exposed" : ""}`} key={`${member.id}:${item.id}`}>
             <label className="interface-exposure"><input type="checkbox" checked={Boolean(externalPort)} aria-label={`将 ${item.name} 设置为对外接口`} onChange={event => onSetInterfaceExposure(member.id, item.id, event.currentTarget.checked)}/><span>对外开放</span></label>
             <button type="button" className="interface-preview-button" aria-pressed={selected} onClick={() => onSelectInterface({ memberId: member.id, interfaceId: item.id })}>
-              <span className="interface-select-name"><b>{item.name}</b><small>ID：{item.id}</small><small>接口类型：{interfaceTypeLabel(item.connectionTypeId, member.interfaces, interfaceTypes)}</small><small>{interfaceSummary(item, members, interfaceTypes)}</small><small>来源 ID：{sourceId}{sourceFeature ? ` · 特征：${sourceFeature}` : ""}</small>{item.geometryRefs?.length ? <small>语义面：{item.geometryRefs.join("、")}</small> : null}</span>
+              <span className="interface-select-name"><b>{item.name}</b><small>ID：{item.id}</small>{item.geometryRefs?.length ? <small>语义面：{item.geometryRefs.join("、")}</small> : null}</span>
               {previewable ? <CheckCircle2 size={14} aria-label="可按语义面预览"/> : <CircleHelp size={14} aria-label="缺少可定位几何数据"/>}
             </button>
             {selected && <div className="interface-type-editor" aria-label="接口类型设置">
+              <div className="interface-select-name"><small>{interfaceSummary(item, members, interfaceTypes)}</small><small>来源 ID：{sourceId}{sourceFeature ? ` · 特征：${sourceFeature}` : ""}</small></div>
               <label>接口类型<select aria-label={`${item.name}：接口类型`} disabled={!editable} value={item.connectionTypeId || ""} onChange={event => onSetInterfaceType(member.id, item.id, event.currentTarget.value || null)}>
                 <option value="">未分类</option>
                 <optgroup label="预置类型">{PRESET_INTERFACE_TYPES.map(type => <option key={type.id} value={type.id}>{type.label}</option>)}</optgroup>
