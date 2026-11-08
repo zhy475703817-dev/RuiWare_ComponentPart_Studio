@@ -12,7 +12,7 @@ export type DraftChange = {
 };
 export type DraftEnvelope = { draftId: string; document: ComponentDocument; checks: ValidationCheck[];
   changes?: DraftChange[]; changesTruncated?: boolean; reconciled?: boolean };
-export type DraftSummary = { draftId: string; name: string; revision: number; updatedAt: string };
+export type DraftSummary = { draftId: string; name: string; code: string; revision: number; updatedAt: string };
 export type DraftApi = {
   list: () => Promise<{ items: DraftSummary[] }>;
   create: () => Promise<DraftEnvelope>;

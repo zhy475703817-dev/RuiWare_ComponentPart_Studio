@@ -1,139 +1,27 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { Download, FileText, Image as ImageIcon, Paperclip, X } from "lucide-react";
-import type { ComponentDefinition, ComponentMember, ConnectionMethod, ConnectionType, EvidenceFile, PartInterface } from "../domain/component";
-import { interfaceGender } from "../domain/interfaceCompatibility";
-import { interfacesForReconstruction, loadReconstructionInfo } from "../library/templatePreview";
-import type { PublishedTemplate } from "../library/publishedLibrary";
+import type { ComponentDefinition, ConnectionMethod, ConnectionType, EvidenceFile } from "../domain/component";
+import { isValidComponentCode, normalizeComponentCode } from "../domain/componentCode";
 
 type Props = {
   definition: ComponentDefinition;
-  members: ComponentMember[];
-  selectedMemberId: string | null;
-  hoveredMemberId: string | null;
-  compatibleMemberIds: Set<string>;
-  onSelectMember: (id: string) => void;
-  onHoverMember: (id: string | null) => void;
+  codeUnique: boolean;
   onChange: (patch: Partial<ComponentDefinition>) => void;
   draftId?: string | null;
 };
 
 const connectionOptions: ConnectionType[] = ["螺栓连接", "焊接", "卡扣连接", "插接", "铆接", "胶接", "型材槽连接", "销钉连接", "插接/卡扣"];
 const embeddedFileLimit = 5 * 1024 * 1024;
-const interfaceTypeLabels: Record<string, string> = { locating: "定位", connecting: "连接", supporting: "支撑", adjustable: "可调", processDatum: "工艺基准", other: "其他", plane: "平面", axis: "轴线", point: "点位" };
-const locatingTypeLabels: Record<string, string> = { planeContact: "面接触", axisCoincident: "同轴", pinHole: "销孔定位", edgeStop: "边挡", slotAdjustable: "长孔可调", keyedAntiError: "键防错" };
-const declarationModeLabels: Record<string, string> = { staticGeometry: "固定几何", featureDerived: "特征解析" };
-const regionModeLabels: Record<string, string> = { rectangle: "矩形范围" };
-
-function summarizeInterfaces(members: ComponentMember[]) {
-  const groups = new Map<string, { count: number; dimensions: Set<string>; modes: Set<string>; genders: Set<string>; methods: Set<string> }>();
-  for (const member of members) for (const item of member.interfaces) {
-      const kind = item.interfaceType || item.type;
-      const group = groups.get(kind) || { count: 0, dimensions: new Set<string>(), modes: new Set<string>(), genders: new Set<string>(), methods: new Set<string>() };
-      group.count += 1;
-      const region = item.region;
-      const dimensions = region?.uSpan !== undefined && region.vSpan !== undefined
-        ? `${region.uSpan} × ${region.vSpan} mm`
-        : region?.uSpanExpression || region?.vSpanExpression
-          ? `U ${region.uSpanExpression || "?"} × V ${region.vSpanExpression || "?"}`
-          : "未声明";
-      group.dimensions.add(dimensions);
-      const size = item.interfaceSize;
-      if (size && [size.diameter, size.width, size.height, size.depth].some(value => value !== undefined)) {
-        const physical = [size.diameter !== undefined ? `直径 ${size.diameter}` : "", size.width !== undefined ? `宽 ${size.width}` : "", size.height !== undefined ? `高 ${size.height}` : "", size.depth !== undefined ? `深 ${size.depth}` : ""].filter(Boolean).join(" × ");
-        if (physical) group.dimensions.add(`${physical}${size.unit ? ` ${size.unit}` : " mm"}`);
-      }
-      group.genders.add(interfaceGender(item) === "male" ? "公" : interfaceGender(item) === "female" ? "母" : "中性/未声明");
-      if (item.connectionMethod) group.methods.add(item.connectionMethod);
-      if (item.locatingType) group.modes.add(locatingTypeLabels[item.locatingType] || item.locatingType);
-      if (item.declarationMode) group.modes.add(declarationModeLabels[item.declarationMode] || item.declarationMode);
-      if (region?.mode) group.modes.add(regionModeLabels[region.mode] || region.mode);
-      groups.set(kind, group);
-  }
-  return [...groups].map(([kind, group]) => ({
-    kind: interfaceTypeLabels[kind] || kind,
-    count: group.count,
-    dimensions: [...group.dimensions].join(" / "),
-    modes: [...group.modes, ...[...group.genders].map(gender => `公母：${gender}`), ...[...group.methods].map(method => `连接：${method}`)].join("、") || "未声明",
-  }));
-}
-
 function formatSize(size: number) {
   if (size < 1024) return `${size} B`;
   if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
   return `${(size / 1024 / 1024).toFixed(1)} MB`;
 }
 
-function describeInterfaceDimensions(item: PartInterface): string {
-  const size = item.interfaceSize;
-  if (size && [size.diameter, size.width, size.height, size.depth].some(value => value !== undefined)) {
-    const physical = [
-      size.diameter !== undefined ? `直径 ${size.diameter}` : "",
-      size.width !== undefined ? `宽 ${size.width}` : "",
-      size.height !== undefined ? `高 ${size.height}` : "",
-      size.depth !== undefined ? `深 ${size.depth}` : "",
-    ].filter(Boolean).join(" × ");
-    return `${physical}${size.unit ? ` ${size.unit}` : " mm"}`;
-  }
-  const region = item.region;
-  if (region?.uSpan !== undefined && region.vSpan !== undefined) return `${region.uSpan} × ${region.vSpan} mm`;
-  if (region?.uSpanExpression || region?.vSpanExpression) return `U ${region.uSpanExpression || "?"} × V ${region.vSpanExpression || "?"}`;
-  return "未声明";
-}
-
-function memberInterfaceDimensions(member: ComponentMember): string {
-  return [...new Set(member.interfaces.map(describeInterfaceDimensions))].join("、") || "未声明";
-}
-
-export function DefinitionStage({ definition, members, selectedMemberId, hoveredMemberId, compatibleMemberIds, onSelectMember, onHoverMember, onChange, draftId }: Props) {
+export function DefinitionStage({ definition, codeUnique, onChange, draftId }: Props) {
   const fileInput = useRef<HTMLInputElement>(null);
   const [evidenceError, setEvidenceError] = useState("");
   const [tagInput, setTagInput] = useState("");
-  const memberInterfaceKey = JSON.stringify(members.map(member => ({ id: member.id, template: member.template, values: member.parameterValues })));
-  const [resolvedInterfaceState, setResolvedInterfaceState] = useState<{ key: string; interfacesByMember: Record<string, ComponentMember["interfaces"]>; warning: boolean }>({ key: "", interfacesByMember: {}, warning: false });
-  const displayMembers = useMemo(() => members.map(member => ({
-    ...member,
-    interfaces: resolvedInterfaceState.key === memberInterfaceKey ? resolvedInterfaceState.interfacesByMember[member.id] ?? member.interfaces : member.interfaces,
-  })), [members, memberInterfaceKey, resolvedInterfaceState]);
-  const interfaceSummary = summarizeInterfaces(displayMembers);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    if (!members.length) {
-      setResolvedInterfaceState({ key: memberInterfaceKey, interfacesByMember: {}, warning: false });
-      return () => controller.abort();
-    }
-    const timer = window.setTimeout(() => {
-      const interfacesByMember: Record<string, ComponentMember["interfaces"]> = Object.fromEntries(members
-        .filter(member => member.template.templateKind === "component")
-        .map(member => [member.id, member.interfaces]));
-      let cursor = 0;
-      let warning = false;
-      const resolveNext = async () => {
-        while (!controller.signal.aborted) {
-          const member = members[cursor++];
-          if (!member) return;
-          if (member.template.templateKind === "component") continue;
-          const selected: PublishedTemplate = {
-            templateKind: "part", publicationId: member.template.publicationId, templateId: member.template.templateId,
-            version: member.template.version, sha256: member.template.sha256, code: member.code, name: member.name,
-            createdAt: new Date(0).toISOString(), size: 0, downloadUrl: "",
-          };
-          try {
-            const info = await loadReconstructionInfo(selected, controller.signal, member.parameterValues);
-            interfacesByMember[member.id] = interfacesForReconstruction(info);
-          } catch {
-            if (controller.signal.aborted) return;
-            interfacesByMember[member.id] = member.interfaces;
-            warning = true;
-          }
-        }
-      };
-      void Promise.all(Array.from({ length: Math.min(3, members.length) }, resolveNext)).then(() => {
-        if (!controller.signal.aborted) setResolvedInterfaceState({ key: memberInterfaceKey, interfacesByMember, warning });
-      });
-    }, 200);
-    return () => { window.clearTimeout(timer); controller.abort(); };
-  }, [memberInterfaceKey]);
 
   function addTag() {
     const tag = tagInput.trim();
@@ -218,9 +106,11 @@ export function DefinitionStage({ definition, members, selectedMemberId, hovered
   return <div className="definition-form">
     <div className="definition-group">
       <h4>项目身份</h4>
-      <label>项目名称<input value={definition.name} onChange={event => onChange({ name: event.target.value })}/></label>
+      <label>组件名称<input value={definition.name} onChange={event => onChange({ name: event.target.value })}/></label>
       <label>项目编码<input value={definition.projectCode} placeholder="例如：RACK-2026-001" onChange={event => onChange({ projectCode: event.target.value })}/></label>
-      <label>组件编码<input value={definition.code} placeholder="区别于项目编码的组件 ID" onChange={event => onChange({ code: event.target.value })}/></label>
+      <label>组件编码<input value={definition.code} aria-invalid={!isValidComponentCode(definition.code) || !codeUnique} onChange={event => onChange({ code: normalizeComponentCode(event.target.value) })}/>
+        <small className={!isValidComponentCode(definition.code) || !codeUnique ? "definition-code-error" : "definition-code-hint"}>{!isValidComponentCode(definition.code) ? "大写字母开头，3–40 位，仅限大写字母、数字、_、-" : !codeUnique ? "此编码已被其他组件草稿使用" : "格式正确，且当前唯一"}</small>
+      </label>
       <div className="definition-grid">
         <label>项目负责人<input value={definition.owner} onChange={event => onChange({ owner: event.target.value })}/></label>
         <label>项目所属组织<input value={definition.organization} onChange={event => onChange({ organization: event.target.value })}/></label>
@@ -239,20 +129,6 @@ export function DefinitionStage({ definition, members, selectedMemberId, hovered
       <label>设计说明<textarea rows={4} value={definition.description} onChange={event => onChange({ description: event.target.value })}/></label>
       <label>设计约束与可变范围<textarea rows={5} value={definition.designConstraints} placeholder="描述组合限制、干涉风险、允许的尺寸/数量变化及必须满足的条件" onChange={event => onChange({ designConstraints: event.target.value })}/></label>
     </div>
-
-    <section className="definition-subsection">
-      <h4>成员参数范围与接口</h4>
-      {members.length === 0 ? <p className="empty-text">添加零部件后可查看其参数范围与接口数量</p> : <>
-        {resolvedInterfaceState.key !== memberInterfaceKey && <p className="empty-text">正在按当前零件参数更新接口信息…</p>}
-        {resolvedInterfaceState.key === memberInterfaceKey && resolvedInterfaceState.warning && <p className="empty-text">部分接口信息暂时无法更新，当前显示最近读取的数据。</p>}
-        <ul className="definition-member-list">{displayMembers.map(member => <li key={member.id} className={`${selectedMemberId === member.id ? "selected" : ""} ${hoveredMemberId === member.id ? "hovered" : ""} ${compatibleMemberIds.has(member.id) ? "compatible-candidate" : ""}`} role="button" tabIndex={0} aria-pressed={selectedMemberId === member.id} onClick={() => onSelectMember(member.id)} onMouseEnter={() => onHoverMember(member.id)} onMouseLeave={() => onHoverMember(null)} onKeyDown={event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onSelectMember(member.id); } }}>
-        <b>{member.role || member.name}</b><span>{member.interfaces.length} 个接口</span>
-        <small className="definition-member-interface-size">接口尺寸：{memberInterfaceDimensions(member)}</small>
-        {member.parameterDefinitions?.length ? <small>可调范围：{member.parameterDefinitions.map(parameter => `${parameter.label}: ${parameter.minimum ?? "无下限"} ～ ${parameter.maximum ?? "无上限"}${parameter.unit ? ` ${parameter.unit}` : ""}`).join(" · ")}</small> : <small>未定义可调参数范围</small>}
-      </li>)}</ul>
-        {interfaceSummary.length > 0 && <div className="definition-interface-summary"><b>接口种类汇总 · 零部件之间连接方式：{definition.connectionForms.internal.value}</b>{interfaceSummary.map(item => <div className="definition-interface-item" key={item.kind}><b>{item.kind} · {item.count} 个</b><small>物理尺寸：{item.dimensions}</small><small>接口模式：{item.modes}</small></div>)}</div>}
-      </>}
-    </section>
 
     <section className="definition-subsection">
       <h4>项目检索标签</h4>

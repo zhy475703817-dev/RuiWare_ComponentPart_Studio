@@ -12,7 +12,7 @@ import { STAGES, type StageId } from "./stages";
 import { componentPublicationMember, fetchPublishedComponent, publishComponentDraft } from "../library/componentPublications";
 import { exportEvidenceFiles } from "../domain/evidenceStore";
 
-const initialMessage = "左侧可浏览已发布零部件，点击模板预览或使用加号加入组件";
+const initialMessage = "完善组件定义信息后，可进入装配阶段选择成员";
 
 export function useComponentWorkspace() {
   const [shared, setShared] = useState(initialSharedState);
@@ -36,8 +36,8 @@ export function useComponentWorkspace() {
     const workspace = new SharedDraftController(httpDraftApi);
     controller.current = workspace;
     const unsubscribe = workspace.subscribe(() => setShared(workspace.getSnapshot()));
-    let preferredId = new URL(window.location.href).searchParams.get("draft");
-    try { preferredId ||= localStorage.getItem("component-draft-id"); } catch { /* Storage may be disabled. */ }
+    let preferredId: string | null = null;
+    try { preferredId = localStorage.getItem("component-draft-id"); } catch { /* Storage may be disabled. */ }
     void workspace.start(preferredId);
     const timer = window.setInterval(() => { if (!window.document.hidden) void workspace.poll(); }, 2000);
     const refresh = () => { void workspace.poll(); };
@@ -47,10 +47,7 @@ export function useComponentWorkspace() {
 
   useEffect(() => {
     if (!shared.draftId) return;
-    try { localStorage.setItem("component-draft-id", shared.draftId); } catch { /* A share link still works. */ }
-    const url = new URL(window.location.href);
-    url.searchParams.set("draft", shared.draftId);
-    window.history.replaceState(null, "", url);
+    try { localStorage.setItem("component-draft-id", shared.draftId); } catch { /* The current session remains usable. */ }
   }, [shared.draftId]);
 
   useEffect(() => {
@@ -84,14 +81,9 @@ export function useComponentWorkspace() {
   }
 
   async function selectDraft(id: string) {
-    if (publishing || adding) return;
+    if (publishing || adding || !id || id === shared.draftId) return;
     try { await controller.current?.select(id); if (controller.current?.getSnapshot().status === "ready") resetSelection(); }
     catch { setMessage("请先处理未保存的修改，再切换草稿。"); }
-  }
-
-  async function copyDraftLink() {
-    try { await navigator.clipboard.writeText(window.location.href); setMessage("已复制草稿链接，可用于打开同一份草稿。"); }
-    catch { setMessage("复制失败，可直接复制浏览器地址中的草稿链接。"); }
   }
 
   function removeMember(id: string) {
@@ -145,15 +137,6 @@ export function useComponentWorkspace() {
         setMessage("无法计算模型最低点，请检查该成员的模型或发布版本。");
       }
     }
-  }
-
-  async function openDraftLink(link: string) {
-    let id = link.trim();
-    if (!id) return;
-    try {
-      id = new URL(id, window.location.href).searchParams.get("draft") || id;
-      await selectDraft(id);
-    } catch { setMessage("链接格式不正确，请粘贴包含 draft 参数的草稿链接。"); }
   }
 
   function addMate(mate: Mate) {
@@ -298,13 +281,13 @@ export function useComponentWorkspace() {
     link.download = "组件草稿-本地未保存副本.json";
     link.click();
     setTimeout(() => URL.revokeObjectURL(url), 0);
-    setMessage("已下载本地副本；这些修改尚未保存到共享草稿。");
+    setMessage("已下载本地副本；这些修改尚未保存到组件草稿。");
   }
 
-  const syncMessage = shared.error || (shared.status === "loading" ? "正在读取共享草稿…" : shared.status === "saving" ? "正在保存草稿…" : shared.notice || message);
+  const syncMessage = shared.error || (shared.status === "loading" ? "正在读取组件草稿…" : shared.status === "saving" ? "正在保存组件草稿…" : shared.notice || message);
   return { document, dispatch, stage, setStage, selectedMemberId, setSelectedMemberId, previewTemplate, setPreviewTemplate,
     selectionResetToken, message: syncMessage, setMessage, checks, newDraft, removeMember, addMate, setInterfaceExposure, renamePort, setInterfaceType, addSlot, patchSlot, removeSlot, exportDraft,
-    shared, editable, selectDraft, openDraftLink, copyDraftLink, publishDraft, publishing, adding, addPublishedTemplate, libraryRefreshToken,
+    shared, editable, selectDraft, publishDraft, publishing, adding, addPublishedTemplate, libraryRefreshToken,
     copyMember, moveMember, transformMember, groundMember,
     downloadLocalDraft, dismissAgentChanges: () => controller.current?.dismissAgentChanges(),
     retrySave: () => { void controller.current?.retry().catch(() => {}); },
