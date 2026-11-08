@@ -88,8 +88,6 @@ class LibrarySync:
                 self.cleanup = {'status': 'disabled', 'deleted': [], 'failed': [], 'candidateCount': 0}
                 library = await read_published_library(state.http, state.settings)
                 records = [item for item in library.items if item.templateKind == 'part']
-            # Choose the newest release before admission: an invalid latest model
-            # must not expose an older release as though it were current.
             publications = [record.publication if use_minio else record for record in records]
             latest_ids = {item['publicationId'] for item in latest_catalog_items([
                 publication.model_dump(exclude_unset=True) for publication in publications])}

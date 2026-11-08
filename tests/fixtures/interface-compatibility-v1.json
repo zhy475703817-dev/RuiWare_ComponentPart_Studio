@@ -1,0 +1,84 @@
+{
+  "ruleVersion": "interface-compatibility-v1",
+  "cases": [
+    {
+      "name": "missing-contract",
+      "a": { "id": "a", "name": "a", "type": "axis", "tags": [] },
+      "b": { "id": "b", "name": "b", "type": "axis", "tags": [] },
+      "relation": "同轴",
+      "status": "needs_review",
+      "reasonCodes": ["MISSING_CONTRACT"]
+    },
+    {
+      "name": "pin-hole-clearance-compatible",
+      "a": {
+        "id": "pin", "name": "pin", "type": "axis", "tags": [], "referenceFrame": { "axis": "z" },
+        "mating": {
+          "version": 1, "family": "pin-hole", "role": "pin", "dimensions": {
+            "diameter": { "nominal": 10, "lowerTolerance": 0, "upperTolerance": 0, "unit": "mm" }
+          }, "connectionMethod": "clearance-fit", "allowedRelations": ["同轴"], "capacity": 1
+        }
+      },
+      "b": {
+        "id": "hole", "name": "hole", "type": "axis", "tags": [], "referenceFrame": { "axis": "z" },
+        "mating": {
+          "version": 1, "family": "pin-hole", "role": "hole", "dimensions": {
+            "diameter": { "nominal": 10.1, "lowerTolerance": 0, "upperTolerance": 0, "unit": "mm" }
+          }, "connectionMethod": "clearance-fit", "allowedRelations": ["同轴"], "capacity": 1
+        }
+      },
+      "status": "compatible",
+      "reasonCodes": []
+    },
+    {
+      "name": "pin-hole-role-conflict",
+      "a": {
+        "id": "pin-a", "name": "pin-a", "type": "axis", "tags": [], "referenceFrame": { "axis": "z" },
+        "mating": {
+          "version": 1, "family": "pin-hole", "role": "pin", "dimensions": {
+            "diameter": { "nominal": 10, "lowerTolerance": 0, "upperTolerance": 0, "unit": "mm" }
+          }, "connectionMethod": "clearance-fit", "allowedRelations": ["同轴"], "capacity": 1
+        }
+      },
+      "b": {
+        "id": "pin-b", "name": "pin-b", "type": "axis", "tags": [], "referenceFrame": { "axis": "z" },
+        "mating": {
+          "version": 1, "family": "pin-hole", "role": "pin", "dimensions": {
+            "diameter": { "nominal": 10.1, "lowerTolerance": 0, "upperTolerance": 0, "unit": "mm" }
+          }, "connectionMethod": "clearance-fit", "allowedRelations": ["同轴"], "capacity": 1
+        }
+      },
+      "relation": "同轴",
+      "status": "incompatible",
+      "reasonCodes": ["ROLE_COMPLEMENTARY"]
+    },
+    {
+      "name": "relation-not-allowed",
+      "a": {
+        "id": "face-a", "name": "face-a", "type": "plane", "tags": [], "referenceFrame": { "axis": "z" },
+        "mating": { "version": 1, "family": "plane-contact", "role": "contact-face", "dimensions": {}, "allowedRelations": ["贴合"], "capacity": 1 }
+      },
+      "b": {
+        "id": "face-b", "name": "face-b", "type": "plane", "tags": [], "referenceFrame": { "axis": "z" },
+        "mating": { "version": 1, "family": "plane-contact", "role": "contact-face", "dimensions": {}, "allowedRelations": ["贴合"], "capacity": 1 }
+      },
+      "relation": "同轴",
+      "status": "incompatible",
+      "reasonCodes": ["RELATION_ALLOWED"]
+    },
+    {
+      "name": "unknown-family",
+      "a": {
+        "id": "custom-a", "name": "custom-a", "type": "point", "tags": [],
+        "mating": { "version": 1, "family": "vendor:custom", "role": "port", "dimensions": {}, "allowedRelations": ["贴合"], "capacity": 1 }
+      },
+      "b": {
+        "id": "custom-b", "name": "custom-b", "type": "point", "tags": [],
+        "mating": { "version": 1, "family": "vendor:custom", "role": "port", "dimensions": {}, "allowedRelations": ["贴合"], "capacity": 1 }
+      },
+      "relation": "贴合",
+      "status": "needs_review",
+      "reasonCodes": ["UNKNOWN_FAMILY", "ROLE_UNSUPPORTED"]
+    }
+  ]
+}

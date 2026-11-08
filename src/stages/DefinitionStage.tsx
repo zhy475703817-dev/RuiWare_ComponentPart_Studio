@@ -1,8 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
-import { Download, ExternalLink, Paperclip, X } from "lucide-react";
-import type { ComponentDefinition, ComponentMember, ConnectionMethod, EvidenceAttachment, PartInterface } from "../domain/component";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Download, FileText, Image as ImageIcon, Paperclip, X } from "lucide-react";
+import type { ComponentDefinition, ComponentMember, ConnectionMethod, ConnectionType, EvidenceFile, PartInterface } from "../domain/component";
 import { interfaceGender } from "../domain/interfaceCompatibility";
-import { deleteEvidenceFile, readEvidenceFile, saveEvidenceFile } from "../domain/evidenceStore";
 import { interfacesForReconstruction, loadReconstructionInfo } from "../library/templatePreview";
 import type { PublishedTemplate } from "../library/publishedLibrary";
 
@@ -15,10 +14,11 @@ type Props = {
   onSelectMember: (id: string) => void;
   onHoverMember: (id: string | null) => void;
   onChange: (patch: Partial<ComponentDefinition>) => void;
+  draftId?: string | null;
 };
 
-const connectionOptions = ["螺栓连接", "焊接", "铆接", "插接/卡扣", "型材槽连接", "销钉连接"];
-const maxFileSize = 20 * 1024 * 1024;
+const connectionOptions: ConnectionType[] = ["螺栓连接", "焊接", "卡扣连接", "插接", "铆接", "胶接", "型材槽连接", "销钉连接", "插接/卡扣"];
+const embeddedFileLimit = 5 * 1024 * 1024;
 const interfaceTypeLabels: Record<string, string> = { locating: "定位", connecting: "连接", supporting: "支撑", adjustable: "可调", processDatum: "工艺基准", other: "其他", plane: "平面", axis: "轴线", point: "点位" };
 const locatingTypeLabels: Record<string, string> = { planeContact: "面接触", axisCoincident: "同轴", pinHole: "销孔定位", edgeStop: "边挡", slotAdjustable: "长孔可调", keyedAntiError: "键防错" };
 const declarationModeLabels: Record<string, string> = { staticGeometry: "固定几何", featureDerived: "特征解析" };
@@ -57,6 +57,12 @@ function summarizeInterfaces(members: ComponentMember[]) {
   }));
 }
 
+function formatSize(size: number) {
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / 1024 / 1024).toFixed(1)} MB`;
+}
+
 function describeInterfaceDimensions(item: PartInterface): string {
   const size = item.interfaceSize;
   if (size && [size.diameter, size.width, size.height, size.depth].some(value => value !== undefined)) {
@@ -78,32 +84,10 @@ function memberInterfaceDimensions(member: ComponentMember): string {
   return [...new Set(member.interfaces.map(describeInterfaceDimensions))].join("、") || "未声明";
 }
 
-function ConnectionEditor({ label, method, onChange }: { label: string; method: ConnectionMethod; onChange: (method: ConnectionMethod) => void }) {
-  return <div className="definition-connection">
-    <label>{label}连接方式
-      <select value={method.mode} onChange={event => {
-        const mode = event.target.value as ConnectionMethod["mode"];
-        onChange({ ...method, mode, value: mode === "preset" && !connectionOptions.includes(method.value) ? connectionOptions[0] : method.value });
-      }}>
-        <option value="preset">默认选项</option><option value="custom">用户自定义</option>
-      </select>
-    </label>
-    {method.mode === "preset" ? <label>{label}方式
-      <select value={method.value} onChange={event => onChange({ ...method, value: event.target.value })}>
-        {connectionOptions.map(option => <option key={option}>{option}</option>)}
-      </select>
-    </label> : <label>{label}自定义方式
-      <input value={method.value} placeholder="输入连接方式" onChange={event => onChange({ ...method, value: event.target.value })}/>
-    </label>}
-    <label>{label}连接说明<textarea value={method.details} placeholder="填写连接位置、紧固件或装配要求" onChange={event => onChange({ ...method, details: event.target.value })}/></label>
-  </div>;
-}
-
-export function DefinitionStage({ definition, members, selectedMemberId, hoveredMemberId, compatibleMemberIds, onSelectMember, onHoverMember, onChange }: Props) {
+export function DefinitionStage({ definition, members, selectedMemberId, hoveredMemberId, compatibleMemberIds, onSelectMember, onHoverMember, onChange, draftId }: Props) {
+  const fileInput = useRef<HTMLInputElement>(null);
+  const [evidenceError, setEvidenceError] = useState("");
   const [tagInput, setTagInput] = useState("");
-  const [fileError, setFileError] = useState("");
-  const [savingFiles, setSavingFiles] = useState(false);
-  const [fileUrls, setFileUrls] = useState<Record<string, string>>({});
   const memberInterfaceKey = JSON.stringify(members.map(member => ({ id: member.id, template: member.template, values: member.parameterValues })));
   const [resolvedInterfaceState, setResolvedInterfaceState] = useState<{ key: string; interfacesByMember: Record<string, ComponentMember["interfaces"]>; warning: boolean }>({ key: "", interfacesByMember: {}, warning: false });
   const displayMembers = useMemo(() => members.map(member => ({
@@ -151,18 +135,6 @@ export function DefinitionStage({ definition, members, selectedMemberId, hovered
     return () => { window.clearTimeout(timer); controller.abort(); };
   }, [memberInterfaceKey]);
 
-  useEffect(() => {
-    let cancelled = false;
-    const urls: Record<string, string> = {};
-    void Promise.all(definition.evidence.map(async item => {
-      try {
-        const file = await readEvidenceFile(item.id);
-        if (file) urls[item.id] = URL.createObjectURL(file);
-      } catch { /* The metadata remains available if local file access is blocked. */ }
-    })).then(() => { if (!cancelled) setFileUrls(urls); else Object.values(urls).forEach(URL.revokeObjectURL); });
-    return () => { cancelled = true; Object.values(urls).forEach(URL.revokeObjectURL); };
-  }, [definition.evidence]);
-
   function addTag() {
     const tag = tagInput.trim();
     if (!tag || definition.searchTags.includes(tag)) return setTagInput("");
@@ -172,36 +144,101 @@ export function DefinitionStage({ definition, members, selectedMemberId, hovered
 
   async function addFiles(files: FileList | null) {
     if (!files?.length) return;
-    setSavingFiles(true);
-    setFileError("");
-    const added: EvidenceAttachment[] = [];
-    try {
-      for (const file of Array.from(files)) {
-        if (file.size > maxFileSize) throw new Error(`${file.name} 超过单文件 20 MB 限制`);
-        const id = crypto.randomUUID();
-        await saveEvidenceFile(id, file);
-        added.push({ id, name: file.name, mediaType: file.type || "application/octet-stream", size: file.size, addedAt: new Date().toISOString() });
+    const additions: EvidenceFile[] = [];
+    const metadata: ComponentDefinition["evidence"] = [];
+    let message = "";
+    for (const file of Array.from(files)) {
+      if (file.size > embeddedFileLimit) { message = `${file.name} 超过单文件 5 MB 限制`; continue; }
+      if (!draftId) { message = "草稿尚未就绪，暂时无法上传文件"; continue; }
+      if (definition.evidenceFiles.length + additions.length >= 10 || definition.evidenceFiles.reduce((sum, item) => sum + item.size, 0) + additions.reduce((sum, item) => sum + item.size, 0) + file.size > 15 * 1024 * 1024) {
+        message = "每个草稿最多添加 10 个文件，总大小不超过 15 MB";
+        break;
       }
-      onChange({ evidence: [...definition.evidence, ...added] });
-    } catch (error) {
-      await Promise.all(added.map(item => deleteEvidenceFile(item.id).catch(() => undefined)));
-      setFileError(error instanceof Error ? error.message : "附件保存失败，请重试");
-    } finally {
-      setSavingFiles(false);
+      try {
+        const id = crypto.randomUUID();
+        const query = new URLSearchParams({ fileName: file.name });
+        const response = await fetch(`/api/component-drafts/${encodeURIComponent(draftId)}/evidence/${id}?${query}`, {
+          method: "PUT", headers: { "Content-Type": file.type || "application/octet-stream" }, body: file,
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result?.error?.code || "文件上传失败");
+        additions.push(result as EvidenceFile);
+        metadata.push({ id, name: file.name, mediaType: file.type || "application/octet-stream", size: file.size, addedAt: new Date().toISOString() });
+      } catch (error) {
+        message = error instanceof Error ? `上传失败：${error.message}` : "文件上传失败";
+      }
+    }
+    if (additions.length) onChange({ evidenceFiles: [...definition.evidenceFiles, ...additions], evidence: [...definition.evidence, ...metadata] });
+    setEvidenceError(message);
+    if (fileInput.current) fileInput.current.value = "";
+  }
+
+  function updateConnection(which: "internal" | "interComponent", method: ConnectionMethod) {
+    const connectionForms = { ...definition.connectionForms, [which]: method };
+    const type = method.mode === "custom" ? "自定义" : method.value as ConnectionType;
+    if (which === "internal") {
+      onChange({ connectionForms, partConnectionType: type, partConnectionCustom: method.mode === "custom" ? method.value : "" });
+    } else {
+      onChange({ connectionForms, componentConnectionType: type, componentConnectionCustom: method.mode === "custom" ? method.value : "" });
     }
   }
 
+  function removeEvidence(id: string) {
+    onChange({
+      evidenceFiles: definition.evidenceFiles.filter(file => file.id !== id),
+      evidence: definition.evidence.filter(file => file.id !== id),
+    });
+  }
+
+  const connectionField = (label: string, which: "internal" | "interComponent") => {
+    const method = definition.connectionForms[which];
+    return (
+    <div className="definition-connection">
+      <label>{label}输入方式
+        <select value={method.mode} onChange={event => {
+          const mode = event.target.value as ConnectionMethod["mode"];
+          const value = mode === "custom" && method.mode === "preset" ? "" : mode === "preset" && !connectionOptions.includes(method.value as ConnectionType) ? connectionOptions[0] : method.value;
+          updateConnection(which, { ...method, mode, value });
+        }}>
+          <option value="preset">默认选项</option><option value="custom">用户自定义</option>
+        </select>
+      </label>
+      {method.mode === "preset" ? <label>{label}方式
+        <select value={method.value} onChange={event => updateConnection(which, { ...method, value: event.target.value })}>
+          {connectionOptions.map(option => <option key={option} value={option}>{option}</option>)}
+        </select>
+      </label> : <label>{label}自定义方式
+        <input value={method.value} placeholder="输入连接方式" onChange={event => updateConnection(which, { ...method, value: event.target.value })}/>
+      </label>}
+      <label>{label}连接说明<textarea value={method.details} placeholder="填写连接位置、紧固件或装配要求" onChange={event => updateConnection(which, { ...method, details: event.target.value })}/></label>
+    </div>
+    );
+  };
+
   return <div className="definition-form">
-    <div className="definition-grid">
-      <label>组件名称<input value={definition.name} onChange={event => onChange({ name: event.target.value })}/></label>
-      <label>组件编码<input value={definition.code} onChange={event => onChange({ code: event.target.value })}/></label>
-      <label>项目编码<input value={definition.projectCode} placeholder="项目唯一标识" onChange={event => onChange({ projectCode: event.target.value })}/></label>
+    <div className="definition-group">
+      <h4>项目身份</h4>
+      <label>项目名称<input value={definition.name} onChange={event => onChange({ name: event.target.value })}/></label>
+      <label>项目编码<input value={definition.projectCode} placeholder="例如：RACK-2026-001" onChange={event => onChange({ projectCode: event.target.value })}/></label>
+      <label>组件编码<input value={definition.code} placeholder="区别于项目编码的组件 ID" onChange={event => onChange({ code: event.target.value })}/></label>
+      <div className="definition-grid">
+        <label>项目负责人<input value={definition.owner} onChange={event => onChange({ owner: event.target.value })}/></label>
+        <label>项目所属组织<input value={definition.organization} onChange={event => onChange({ organization: event.target.value })}/></label>
+      </div>
       <label>组件类型<select value={definition.category} onChange={event => onChange({ category: event.target.value })}><option>货架组件</option><option>连接组件</option><option>支撑组件</option></select></label>
-      <label>项目负责人<input value={definition.owner} onChange={event => onChange({ owner: event.target.value })}/></label>
-      <label>项目所属组织<input value={definition.organization} onChange={event => onChange({ organization: event.target.value })}/></label>
     </div>
 
-    <label>设计说明<textarea value={definition.description} onChange={event => onChange({ description: event.target.value })}/></label>
+    <div className="definition-group">
+      <h4>连接形式</h4>
+      {connectionField("组件内部零部件连接", "internal")}
+      {connectionField("不同组件之间连接", "interComponent")}
+    </div>
+
+    <div className="definition-group">
+      <h4>设计说明</h4>
+      <label>设计说明<textarea rows={4} value={definition.description} onChange={event => onChange({ description: event.target.value })}/></label>
+      <label>设计约束与可变范围<textarea rows={5} value={definition.designConstraints} placeholder="描述组合限制、干涉风险、允许的尺寸/数量变化及必须满足的条件" onChange={event => onChange({ designConstraints: event.target.value })}/></label>
+    </div>
 
     <section className="definition-subsection">
       <h4>成员参数范围与接口</h4>
@@ -223,36 +260,19 @@ export function DefinitionStage({ definition, members, selectedMemberId, hovered
       <div className="definition-tags">{definition.searchTags.map(tag => <span key={tag}>{tag}<button type="button" aria-label={`移除标签 ${tag}`} onClick={() => onChange({ searchTags: definition.searchTags.filter(item => item !== tag) })}><X size={13}/></button></span>)}</div>
     </section>
 
-    <section className="definition-subsection">
-      <h4>组件连接形式</h4>
-      <ConnectionEditor label="零部件之间" method={definition.connectionForms.internal} onChange={method => onChange({ connectionForms: { ...definition.connectionForms, internal: method } })}/>
-      <ConnectionEditor label="组件单元之间" method={definition.connectionForms.interComponent} onChange={method => onChange({ connectionForms: { ...definition.connectionForms, interComponent: method } })}/>
-    </section>
-
-    <label>设计约束与可变范围<textarea className="definition-long-text" value={definition.designConstraints} placeholder="说明组合时的干涉、载荷、尺寸边界、安装空间及可调范围" onChange={event => onChange({ designConstraints: event.target.value })}/></label>
-
-    <section className="definition-subsection">
-      <div className="definition-evidence-heading"><h4>证据与参考</h4><label className="ghost definition-file-picker"><Paperclip size={14}/>{savingFiles ? "保存中" : "添加文件"}<input type="file" multiple disabled={savingFiles} onChange={event => { void addFiles(event.target.files); event.currentTarget.value = ""; }}/></label></div>
-      <p className="draft-save-status">图片和文件保存在此浏览器，并随组件导出包提供。</p>
-      {fileError && <p className="definition-file-error" role="alert">{fileError}</p>}
-      {definition.evidence.length === 0 ? <p className="empty-text">尚未添加证据或参考文件</p> : <ul className="definition-evidence-list">
-        {definition.evidence.map(item => <li key={item.id}>
-          {item.mediaType.startsWith("image/") && fileUrls[item.id] ? <a className="definition-image-preview" href={fileUrls[item.id]} target="_blank" rel="noreferrer"><img src={fileUrls[item.id]} alt={item.name}/></a> : <Paperclip size={16}/>}
-          <span className="definition-evidence-name" title={item.name}>{item.name}<small>{formatFileSize(item.size)}{!fileUrls[item.id] && item.mediaType.startsWith("image/") ? " · 本地文件不可用" : ""}</small></span>
-          {fileUrls[item.id] && <a className="definition-evidence-action" href={fileUrls[item.id]} target="_blank" rel="noreferrer" aria-label={`打开 ${item.name}`} title="打开"><ExternalLink size={14}/></a>}
-          {fileUrls[item.id] && <a className="definition-evidence-action" href={fileUrls[item.id]} download={item.name} aria-label={`下载 ${item.name}`} title="下载"><Download size={14}/></a>}
-          <button type="button" className="definition-evidence-action" aria-label={`移除 ${item.name}`} title="移除" onClick={() => {
-            void deleteEvidenceFile(item.id).catch(() => undefined);
-            onChange({ evidence: definition.evidence.filter(file => file.id !== item.id) });
-          }}><X size={14}/></button>
-        </li>)}
-      </ul>}
-    </section>
+    <div className="definition-group">
+      <div className="definition-group-title"><h4>证据与参考</h4><button type="button" className="ghost compact" onClick={() => fileInput.current?.click()}><Paperclip size={13}/>添加文件</button></div>
+      <input ref={fileInput} className="visually-hidden" type="file" multiple onChange={event => { void addFiles(event.target.files); }}/>
+      <p className="field-hint">支持图片和常见文档，单个文件不超过 5 MB；导出组件 JSON 时会嵌入文件内容。</p>
+      {evidenceError && <p className="evidence-error" role="alert">{evidenceError}</p>}
+      {definition.evidenceFiles.length === 0 && <p className="empty-text">尚未添加证据或参考文件</p>}
+      <div className="evidence-list">{definition.evidenceFiles.map(file => <div className="evidence-item" key={file.id}>
+        {file.mediaType.startsWith("image/") && draftId && <img className="evidence-thumbnail" src={`/api/component-drafts/${encodeURIComponent(draftId)}/evidence/${encodeURIComponent(file.id)}`} alt=""/>}
+        <span className="evidence-icon">{file.mediaType.startsWith("image/") ? <ImageIcon size={13}/> : <FileText size={13}/>}</span>
+        <span className="evidence-meta"><b>{file.fileName}</b><small>{file.mediaType} · {formatSize(file.size)}</small></span>
+        {(file.dataUrl || draftId) && <a className="evidence-download" href={file.dataUrl || `/api/component-drafts/${encodeURIComponent(draftId || "")}/evidence/${encodeURIComponent(file.id)}`} download={file.fileName} aria-label={`下载 ${file.fileName}`}><Download size={14}/></a>}
+        <button type="button" className="icon-button" aria-label={`移除 ${file.fileName}`} title={`移除 ${file.fileName}`} onClick={() => removeEvidence(file.id)}><X size={15}/></button>
+      </div>)}</div>
+    </div>
   </div>;
-}
-
-function formatFileSize(size: number): string {
-  if (size < 1024) return `${size} B`;
-  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
-  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
 }

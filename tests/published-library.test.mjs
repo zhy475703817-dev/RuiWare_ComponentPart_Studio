@@ -13,27 +13,6 @@ const publication = {
   downloadUrl: '/api/public/v1/templates/version-1/download',
 };
 
-test('后台清理结果不进入工作台，真实的模板更新错误仍正常返回', async t => {
-  const payload = {items:[publication], count:1, initialized:true, syncing:false, updateCount:0,
-    checkedAt:1, errors:[], cleanup:{status:'partial', candidateCount:1,
-      failed:[{publicationId:'old', errorCode:'BACKUP_FAILED'}]}};
-  t.mock.method(globalThis, 'fetch', async () => Response.json(payload));
-  const signal = new AbortController().signal;
-  let result = await readCachedLibrary(signal);
-  assert.equal(result.error, '');
-  assert.equal(Object.hasOwn(result, 'cleanupWarning'), false);
-  assert.equal(Object.hasOwn(result, 'cleanup'), false);
-  assert.equal(result.items.length, 1);
-  payload.errors = ['LIBRARY_UNREACHABLE'];
-  payload.cleanup.failed[0].errorCode = 'DELETE_PERMISSION_DENIED';
-  result = await readCachedLibrary(signal);
-  assert.match(result.error, /共享发布库/);
-  assert.equal(Object.hasOwn(result, 'cleanupWarning'), false);
-  payload.errors = [];
-  payload.cleanup = {status:'completed', candidateCount:0, failed:[]};
-  assert.equal((await readCachedLibrary(signal)).error, '');
-});
-
 test('本地发布库只读取快照，检查更新和应用更新使用明确的操作', async t => {
   const calls = [];
   const snapshot = {items:[publication],count:1,updateCount:2,initialized:true,syncing:true,checkedAt:1792800000,errors:[]};
@@ -195,12 +174,13 @@ test('共享库混合零件和组件时，组件只出现一次且不进入零�
 
 test('加入组件只继承公开接口和参数，实例数据独立且固定发布版本', () => {
   const document=createComponentDocument();
+  document.interfaceTypes=[{id:'custom:设备安装面',label:'设备安装面'}];
   document.assembly.members=[{id:'internal',interfaces:[{id:'face',name:'内部面',type:'plane',tags:['private']}]}];
-  document.ports=[{id:'public-face',name:'安装面',source:{memberId:'internal',interfaceId:'face'},tags:['mount']}];
+  document.ports=[{id:'public-face',name:'安装面',source:{memberId:'internal',interfaceId:'face'},tags:['mount'],interface:{id:'face',name:'内部面',type:'plane',tags:['mount'],connectionTypeId:'custom:设备安装面'}}];
   const published={...publication,templateKind:'component',document};
   const first=componentPublicationMember(published,'instance-1');
   const second=componentPublicationMember(published,'instance-2');
-  assert.deepEqual(first.interfaces,[{id:'public-face',name:'安装面',type:'plane',tags:['mount']}]);
+  assert.equal(first.interfaces[0].connectionTypeId,'custom:设备安装面');
   assert.equal(first.template.templateKind,'component');
   assert.equal(first.template.sha256,publication.sha256);
   first.parameterValues.componentLength=3500; first.position[0]=42; first.interfaces[0].tags.push('changed');

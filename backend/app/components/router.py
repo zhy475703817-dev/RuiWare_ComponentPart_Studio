@@ -3,8 +3,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse, Response
 
-from .models import ActionRequest, ComponentDocument, CreateDraftRequest, PublishRequest
-from .service import serialize_component
+from .models import ActionRequest, CreateDraftRequest, PublishRequest
 
 
 router = APIRouter(prefix="/api/component-drafts", tags=["组件草稿"])

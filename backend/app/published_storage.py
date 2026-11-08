@@ -94,8 +94,6 @@ class PublishedStorage:
         """Atomic S3 conditional creation; recovery must never overwrite a writer."""
         self.require_write()
         try:
-            # MinIO's public put_object does not expose conditional headers.
-            # Use its signed single-object request (packages are bounded to 128 MiB).
             self.client._put_object(self.settings.bucket, object_key, payload,
                                     headers={"Content-Type": content_type, "If-None-Match": "*"})
         except Exception as error:
@@ -323,8 +321,6 @@ class PublishedStorage:
         ])
 
     def restore_objects_if_absent(self, objects: list[tuple[str, bytes, str]]) -> None:
-        # Check the pair before creating either object; conditional writes below
-        # still protect against another client arriving after this preflight.
         for object_key, content, _content_type in objects:
             self._restore_target_exists(object_key, content)
         for object_key, content, content_type in objects:
