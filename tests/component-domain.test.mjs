@@ -8,14 +8,33 @@ import { validateComponent } from '../src/domain/validation.ts';
 import { serializeComponent } from '../src/domain/serialization.ts';
 import { deriveComponentMetrics, effectiveParameterBounds } from '../src/domain/parameterMetrics.ts';
 import { resolveComponentComposition } from '../src/domain/composition.ts';
+import { interfacesCompatible } from '../src/domain/interfaceCompatibility.ts';
 
 const template = { publicationId: 'version.1', templateId: 'part.1', version: 3, sha256: 'a'.repeat(64) };
 const member = id => ({
   id, name: '横梁', code: 'BEAM', role: id, template: { ...template },
   position: [0, 0, 0], rotation: [0, 0, 0], parameterValues: { length: 2400 },
-  interfaces: [{ id: 'face.left', name: '左端面', type: 'plane', tags: ['end-face'] }],
+  interfaces: [{ id: 'face.left', name: '左端面', type: 'plane', tags: ['end-face'], referenceFrame: { axis: 'z' }, mating: {
+    version: 1, family: 'plane-contact', role: 'contact-face', dimensions: {}, allowedRelations: ['贴合', '重合'], capacity: 1,
+  } }],
 });
 const source = memberId => ({ memberId, interfaceId: 'face.left' });
+
+test('平面移动按成员保存，旧成员和关闭选项的导出保持兼容', () => {
+  let draft = componentReducer(createComponentDocument(), { type: 'member.add', member: member('part') });
+  draft = componentReducer(draft, { type: 'member.add', member: { ...member('nested'), template: { ...template, templateKind: 'component' } } });
+  const exportedMembers = document => JSON.parse(serializeComponent(document)).stages.assembly.members;
+  assert.equal(exportedMembers(draft).some(item => 'planarMovement' in item), false);
+  const original = draft;
+  draft = componentReducer(draft, { type: 'member.patch', id: 'nested', patch: { planarMovement: true } });
+  assert.equal(original.assembly.members[1].planarMovement, undefined);
+  assert.equal(draft.assembly.members[1].planarMovement, true);
+  assert.equal(exportedMembers(draft)[1].planarMovement, true);
+  assert.equal('planarMovement' in exportedMembers(draft)[0], false);
+  draft = componentReducer(draft, { type: 'member.patch', id: 'nested', patch: { planarMovement: false } });
+  assert.equal(draft.assembly.members[1].planarMovement, false);
+  assert.equal('planarMovement' in exportedMembers(draft)[1], false);
+});
 
 test('新加入的成员按包络尺寸沿画布地面错开放置', () => {
   const bounds = new Box3(new Vector3(-150, -30, -20), new Vector3(150, 30, 80));
@@ -60,6 +79,50 @@ test('组件间构成规则默认为空，并与其他限制条件独立保存�
   draft = componentReducer(draft, { type: 'rule.remove', id: 'clearance' });
   assert.equal(draft.rules.some(rule => rule.id === 'clearance'), false);
   assert.equal(draft.rules.some(rule => rule.id === 'width-spacing'), true);
+});
+
+test('接口可分类为预置或自定义类型，开放接口快照同步且分类不参与连接判定', () => {
+  let draft = createComponentDocument();
+  draft = componentReducer(draft, { type: 'member.add', member: member('a') });
+  draft = componentReducer(draft, { type: 'member.add', member: member('b') });
+  draft = componentReducer(draft, { type: 'port.add', port: { id: 'port-a', name: 'A接口', source: source('a'), tags: [] } });
+  draft = componentReducer(draft, { type: 'interface.type.set', memberId: 'a', interfaceId: 'face.left', connectionTypeId: 'bolt.male.v1' });
+  assert.equal(draft.assembly.members[0].interfaces[0].connectionTypeId, 'bolt.male.v1');
+  assert.equal(draft.ports[0].interface.connectionTypeId, 'bolt.male.v1');
+  draft = componentReducer(draft, { type: 'interface.type.set', memberId: 'a', interfaceId: 'face.left', connectionTypeId: 'custom:专用支架接口', customTypeLabel: '专用支架接口' });
+  draft = componentReducer(draft, { type: 'interface.type.set', memberId: 'b', interfaceId: 'face.left', connectionTypeId: 'bolt.female.v1' });
+  assert.equal(draft.interfaceTypes[0].label, '专用支架接口');
+  assert.notEqual(draft.assembly.members[1].interfaces[0].connectionTypeId, draft.assembly.members[0].interfaces[0].connectionTypeId);
+  assert.equal(draft.assembly.members[1].interfaces[0].mating.family, draft.assembly.members[0].interfaces[0].mating.family);
+  assert.equal(draft.assembly.members[1].interfaces[0].mating.role, draft.assembly.members[0].interfaces[0].mating.role);
+  assert.equal(interfacesCompatible(draft.assembly.members[0].interfaces[0], draft.assembly.members[1].interfaces[0]).status, 'compatible');
+  assert.equal(draft.ports[0].interface.connectionTypeId, 'custom:专用支架接口');
+  const slot = { id: 'slot-a', name: '替换槽', required: false, baseInterface: null, memberId: null, interfaceId: null };
+  draft = componentReducer(draft, { type: 'slot.add', slot });
+  draft = componentReducer(draft, { type: 'slot.patch', id: 'slot-a', patch: { baseInterface: source('a'), memberId: 'b', interfaceId: 'face.left' } });
+  assert.equal(draft.slots[0].memberId, 'b');
+  const cleared = componentReducer(draft, { type: 'interface.type.set', memberId: 'a', interfaceId: 'face.left', connectionTypeId: null });
+  assert.equal(cleared.assembly.members[0].interfaces[0].connectionTypeId, null);
+  assert.equal(cleared.interfaceTypes.length, 1);
+  assert.equal(cleared.ports[0].interface.connectionTypeId, null);
+  assert.equal(componentReducer(cleared, { type: 'interface.type.set', memberId: 'missing', interfaceId: 'face.left', connectionTypeId: 'bolt.male.v1' }), cleared);
+  assert.equal(componentReducer(cleared, { type: 'interface.type.set', memberId: 'a', interfaceId: 'face.left', connectionTypeId: 'custom:未知' }), cleared);
+});
+
+test('嵌套组件的自定义接口类型目录可合并且名称冲突会拒绝', () => {
+  let draft = createComponentDocument();
+  draft = componentReducer(draft, { type: 'interface.types.merge', types: [{ id: 'custom:支架  端口', label: '支架  端口' }] });
+  assert.deepEqual(draft.interfaceTypes, [{ id: 'custom:支架 端口', label: '支架 端口' }]);
+  const same = componentReducer(draft, { type: 'interface.types.merge', types: [{ id: 'custom:支架 端口', label: '支架 端口' }] });
+  assert.equal(same, draft);
+  assert.equal(componentReducer(draft, { type: 'interface.types.merge', types: [{ id: 'custom:支架 端口', label: '另一名称' }] }), draft);
+});
+
+test('组件导出包含接口类型目录', () => {
+  let draft = createComponentDocument();
+  draft = componentReducer(draft, { type: 'interface.types.merge', types: [{ id: 'custom:设备安装面', label: '设备安装面' }] });
+  const exported = JSON.parse(serializeComponent(draft));
+  assert.deepEqual(exported.stages.interfaceTypes, [{ id: 'custom:设备安装面', label: '设备安装面' }]);
 });
 
 test('新增成员时按长宽高名称默认绑定，并允许移除尺寸来源', () => {
@@ -306,6 +369,57 @@ test('添加连接及继承接口使用结构化引用并拒绝不存在的来�
   assert.equal(componentReducer(draft, { type: 'port.add', port: { ...port, id: 'again' } }), draft);
 });
 
+test('对外接口可按成员逐项开放、取消和改名', () => {
+  let draft = createComponentDocument();
+  const first = member('member.a');
+  const second = member('member.b');
+  first.name = '横梁';
+  second.name = '立柱';
+  draft.assembly.members = [first, second];
+  const firstPort = { id: 'port.a', name: '横梁-左端面', source: source('member.a'), tags: ['end-face'] };
+  const secondPort = { id: 'port.b', name: '立柱-左端面', source: source('member.b'), tags: ['end-face'] };
+
+  draft = componentReducer(draft, { type: 'port.add', port: firstPort });
+  draft = componentReducer(draft, { type: 'port.add', port: secondPort });
+  assert.deepEqual(draft.ports.map(port => port.source.memberId), ['member.a', 'member.b']);
+  assert.equal(componentReducer(draft, { type: 'port.add', port: { ...secondPort, id: 'port.duplicate' } }), draft);
+
+  const renamed = componentReducer(draft, { type: 'port.rename', id: 'port.b', name: '  安装接口  ' });
+  assert.equal(renamed.ports[1].name, '安装接口');
+  assert.equal(componentReducer(renamed, { type: 'port.rename', id: 'port.b', name: '   ' }), renamed);
+  assert.equal(JSON.parse(serializeComponent(renamed)).stages.ports[1].name, '安装接口');
+
+  const removed = componentReducer(renamed, { type: 'port.remove', id: 'port.a' });
+  assert.deepEqual(removed.ports.map(port => port.id), ['port.b']);
+  assert.equal(componentReducer(removed, { type: 'port.remove', id: 'missing' }), removed);
+});
+
+test('槽位支持基准接口、兼容占用、重复防护和成员清理', () => {
+  const first = { ...member('base'), interfaces: [{ ...member('base').interfaces[0], connectionGender: 'male', interfaceSize: { diameter: 10 }, connectionMethod: '插接' }] };
+  const second = { ...member('candidate'), interfaces: [{ ...member('candidate').interfaces[0], connectionGender: 'female', interfaceSize: { diameter: 10 }, connectionMethod: '插接' }] };
+  const incompatible = { ...member('bad'), interfaces: [{ ...member('bad').interfaces[0], mating: {
+    version: 1, family: 'pin-hole', role: 'hole', dimensions: {}, allowedRelations: ['同轴'], capacity: 1,
+  } }] };
+  let draft = { ...createComponentDocument(), assembly: { members: [first, second, incompatible], mates: [] } };
+  draft = componentReducer(draft, { type: 'slot.add', slot: { id: 'slot-a', name: '  安装位  ', required: true, baseInterface: null, memberId: null, interfaceId: null } });
+  assert.equal(draft.slots[0].name, '安装位');
+  draft = componentReducer(draft, { type: 'slot.patch', id: 'slot-a', patch: { required: false } });
+  assert.equal(draft.slots[0].required, false);
+  draft = componentReducer(draft, { type: 'slot.patch', id: 'slot-a', patch: { required: true } });
+  draft = componentReducer(draft, { type: 'slot.patch', id: 'slot-a', patch: { baseInterface: source('base') } });
+  draft = componentReducer(draft, { type: 'slot.patch', id: 'slot-a', patch: { memberId: 'candidate', interfaceId: 'face.left' } });
+  assert.equal(draft.slots[0].memberId, 'candidate');
+  assert.equal(validateComponent(draft).find(check => check.id === 'slots').status, 'pass');
+  assert.equal(componentReducer(draft, { type: 'slot.patch', id: 'slot-a', patch: { memberId: 'bad', interfaceId: 'face.left' } }), draft);
+  const duplicate = componentReducer(draft, { type: 'slot.add', slot: { id: 'slot-b', name: '第二槽位', required: false, baseInterface: source('base'), memberId: null, interfaceId: null } });
+  assert.notEqual(duplicate, draft);
+  assert.equal(componentReducer(duplicate, { type: 'slot.patch', id: 'slot-b', patch: { memberId: 'candidate', interfaceId: 'face.left' } }), duplicate);
+  const removed = componentReducer(draft, { type: 'member.remove', id: 'base' });
+  assert.equal(removed.slots[0].baseInterface, null);
+  assert.equal(removed.slots[0].memberId, 'candidate');
+  assert.equal(validateComponent({ ...removed, slots: [{ id: 'legacy', name: '旧槽位', required: false, memberId: null }] }).find(check => check.id === 'slots').status, 'fail');
+});
+
 test('基础验证检查固定版本、来源、绑定和数值，未执行能力不会显示通过', () => {
   let draft = createComponentDocument();
   draft.assembly.members = [member('a')];
@@ -368,4 +482,34 @@ test('导出保留旧连接和接口字段，并附带可无歧义读取的结�
   assert.equal(result.stages.ports[0].sourceMemberId, 'a');
   assert.equal(result.stages.ports[0].sourceInterfaceId, 'face.left');
   assert.equal(result.stages.assembly.members[0].bindings.length, 2400);
+});
+
+test('组件编码匹配零部件平台的大写字母数字格式', () => {
+  const draft = createComponentDocument();
+  draft.definition.code = 'CMP-001_A';
+  assert.equal(validateComponent(draft).find(check => check.id === 'code.format').status, 'pass');
+  draft.definition.code = 'bad code';
+  assert.equal(validateComponent(draft).find(check => check.id === 'code.format').status, 'fail');
+  draft.definition.code = 'AB';
+  assert.equal(validateComponent(draft).find(check => check.id === 'code.format').status, 'fail');
+});
+
+test('定义阶段的项目元数据、两级连接说明、约束和证据引用会保存并导出', () => {
+  const original = createComponentDocument();
+  const evidenceFiles = [{ id: 'evidence-1', fileName: '连接示意.png', mediaType: 'image/png', size: 12, sha256: 'b'.repeat(64), dataUrl: 'data:image/png;base64,AA==' }];
+  const draft = componentReducer(original, { type: 'definition.patch', patch: {
+    projectCode: 'RACK-2026-001', owner: '张工', organization: '结构组', searchTags: ['货架', '横梁'],
+    partConnectionType: '自定义', partConnectionCustom: '零部件采用端板螺栓连接',
+    componentConnectionType: '卡扣连接', designConstraints: '横梁长度可调，端部需避开立柱加强筋', evidenceFiles,
+  } });
+  const exported = JSON.parse(serializeComponent(draft));
+  assert.equal(draft.definition.projectCode, 'RACK-2026-001');
+  assert.equal(draft.definition.code, '');
+  assert.equal(draft.definition.owner, '张工');
+  assert.equal(exported.stages.definition.organization, '结构组');
+  assert.deepEqual(exported.stages.definition.searchTags, ['货架', '横梁']);
+  assert.equal(exported.stages.definition.partConnectionCustom, '零部件采用端板螺栓连接');
+  assert.equal(exported.stages.definition.componentConnectionType, '卡扣连接');
+  assert.equal(exported.stages.definition.designConstraints, '横梁长度可调，端部需避开立柱加强筋');
+  assert.deepEqual(exported.stages.definition.evidenceFiles, evidenceFiles);
 });

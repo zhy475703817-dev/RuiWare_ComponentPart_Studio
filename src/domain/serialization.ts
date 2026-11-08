@@ -8,13 +8,14 @@ export function serializeComponent(document: ComponentDocument): string {
     revision: document.revision, name: definition.name,
     unitSystem: document.unitSystem, coordinateSystem: document.coordinateSystem,
     stages: {
-      definition,
+      definition: { ...definition },
       assembly: {
         members: assembly.members.map(member => ({
           memberId: member.id, partTemplateVersion: member.template.publicationId,
           partTemplateRef: { publicationId: member.template.publicationId, templateId: member.template.templateId, version: member.template.version, sha256: member.template.sha256 },
           name: member.name, code: member.code, role: member.role,
           position: member.position, rotation: member.rotation, parameterValues: member.parameterValues,
+          ...(member.planarMovement ? { planarMovement: true } : {}),
           parameterDefinitions: member.parameterDefinitions || [],
           resolvedInterfaces: member.resolvedInterfaces || [],
           bindings: { ...member.parameterValues, ...Object.fromEntries(bindings.filter(binding => binding.memberId === member.id).map(binding => [binding.memberParameterId, binding.parameterId])) },
@@ -26,6 +27,7 @@ export function serializeComponent(document: ComponentDocument): string {
         })),
       },
       ports: ports.map(port => ({ id: port.id, name: port.name, sourceMemberId: port.source.memberId, sourceInterfaceId: port.source.interfaceId, source: port.source, tags: port.tags, interface: port.interface })),
+      interfaceTypes: document.interfaceTypes ?? [],
       slots, parameters: Object.fromEntries(parameters.map(parameter => [parameter.id, parameter.value])),
       parameterDefinitions: parameters, bindings, patterns: document.patterns, rules,
       validation: validateComponent(document).map(check => ({ name: check.label, passed: check.status === "pass", ...check })),

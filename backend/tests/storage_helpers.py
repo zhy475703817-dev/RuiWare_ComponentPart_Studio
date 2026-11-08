@@ -42,7 +42,8 @@ class MemoryMinio:
     def list_objects(self, bucket_name, prefix, recursive, include_version=False):
         if self.fail_list:
             raise ConnectionError('private connection details must not reach the user')
-        return [SimpleNamespace(object_name=key) for bucket, key in self.objects if bucket == bucket_name and key.startswith(prefix)]
+        return [SimpleNamespace(object_name=key, version_id=None, is_delete_marker=False)
+                for bucket, key in self.objects if bucket == bucket_name and key.startswith(prefix)]
 
     def remove_object(self, bucket_name, object_name, version_id=None):
         self.objects.pop((bucket_name, object_name), None)

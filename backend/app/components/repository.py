@@ -16,8 +16,8 @@ from .service import ComponentError, apply_action, create_component_document, va
 from pydantic import TypeAdapter
 
 
-def envelope(draft_id: str, document: ComponentDocument) -> dict:
-    return {"draftId": draft_id, "document": document.model_dump(by_alias=True), "checks": validate_component(document)}
+def envelope(draft_id: str, document: ComponentDocument, *, code_unique: bool = True) -> dict:
+    return {"draftId": draft_id, "document": document.model_dump(by_alias=True), "checks": validate_component(document, code_unique=code_unique)}
 
 
 class DraftRepository:
@@ -45,6 +45,7 @@ class DraftRepository:
                 checks TEXT NOT NULL, package BLOB NOT NULL,
                 UNIQUE(draft_id, revision), UNIQUE(draft_id, version)
             )""")
+            self._backfill_missing_codes(connection)
 
     def _connect(self):
         connection = sqlite3.connect(self.path, timeout=15)
@@ -62,15 +63,23 @@ class DraftRepository:
             document = ComponentDocument.model_validate(data)
         draft_id = str(uuid4())
         with closing(self._connect()) as connection, connection:
+            connection.execute("BEGIN IMMEDIATE")
+            if not document.definition.code.strip():
+                data = document.model_dump(by_alias=True)
+                data["definition"]["code"] = self._next_code(connection)
+                document = ComponentDocument.model_validate(data)
+            document = self._store_embedded_evidence(connection, draft_id, document)
+            self._require_evidence_content(connection, draft_id, document)
             connection.execute("INSERT INTO component_drafts VALUES (?, ?, ?, ?, ?)", (
                 draft_id, document.definition.name, document.revision, document.model_dump_json(by_alias=True), self._now(),
             ))
-        return envelope(draft_id, document)
+            return envelope(draft_id, document, code_unique=self._code_is_unique(connection, document.definition.code, draft_id))
 
     def list(self) -> dict:
         with closing(self._connect()) as connection:
-            rows = connection.execute("SELECT id, name, revision, updated_at FROM component_drafts ORDER BY updated_at DESC, id").fetchall()
-        return {"items": [{"draftId": row["id"], "name": row["name"], "revision": row["revision"], "updatedAt": row["updated_at"]} for row in rows]}
+            rows = connection.execute("SELECT id, name, revision, updated_at, document FROM component_drafts ORDER BY updated_at DESC, id").fetchall()
+        return {"items": [{"draftId": row["id"], "name": row["name"], "code": json.loads(row["document"])["definition"]["code"],
+                           "revision": row["revision"], "updatedAt": row["updated_at"]} for row in rows]}
 
     def get(self, draft_id: str, after_revision: int = 0) -> dict:
         with closing(self._connect()) as connection, connection:
@@ -87,12 +96,12 @@ class DraftRepository:
     def cleanup_sources(self):
         """Read current drafts and immutable retry snapshots in one local snapshot."""
         with closing(self._connect()) as connection, connection:
-            connection.execute('BEGIN')
-            drafts = connection.execute('SELECT id, document FROM component_drafts').fetchall()
-            publications = connection.execute('SELECT id, document FROM component_publications').fetchall()
-        return [{'kind': kind, 'id': row['id'],
-                 'document': ComponentDocument.model_validate_json(row['document']).model_dump(by_alias=True)}
-                for kind, rows in (('local-draft', drafts), ('local-snapshot', publications)) for row in rows]
+            connection.execute("BEGIN")
+            drafts = connection.execute("SELECT id, document FROM component_drafts").fetchall()
+            publications = connection.execute("SELECT id, document FROM component_publications").fetchall()
+        return [{"kind": kind, "id": row["id"],
+                 "document": ComponentDocument.model_validate_json(row["document"]).model_dump(by_alias=True)}
+                for kind, rows in (("local-draft", drafts), ("local-snapshot", publications)) for row in rows]
 
     def publication(self, publication_id: str) -> dict:
         with closing(self._connect()) as connection:
@@ -120,8 +129,14 @@ class DraftRepository:
             if existing:
                 row = self._publication(connection, existing["id"])
                 return {**json.loads(row["metadata"]), "document": json.loads(row["document"]), "checks": json.loads(row["checks"])}
-            checks = validate_component(document)
-            if not document.definition.name.strip() or (document.assembly.members and next(check for check in checks if check["id"] == "references")["status"] != "pass"):
+            code_unique = self._code_is_unique(connection, document.definition.code, draft_id)
+            checks = validate_component(document, code_unique=code_unique)
+            code_checks_pass = all(next(check for check in checks if check["id"] == identifier)["status"] == "pass"
+                                   for identifier in ("code.format", "code.unique"))
+            if (not code_checks_pass or not document.definition.name.strip()
+                    or (document.assembly.members and next(check for check in checks if check["id"] == "references")["status"] != "pass")
+                    or any(check["id"] in {"mates", "slots"} and check["status"] == "fail" for check in checks)
+                    or (document.assembly.members and any(check["id"] == "references" and check["status"] == "fail" for check in checks))):
                 raise ComponentError(422, "COMPONENT_PUBLICATION_INVALID")
             # Dependency checks use the shared publication service before preparing this
             # immutable retry snapshot. Network operations never hold the SQLite write lock.
@@ -173,6 +188,8 @@ class DraftRepository:
                     raise ComponentError(409, code, self._envelope(connection, draft_id, document, expected_revision)) from error
                 raise
             if updated.revision != document.revision:
+                updated = self._store_embedded_evidence(connection, draft_id, updated)
+                self._require_evidence_content(connection, draft_id, updated)
                 now = self._now()
                 connection.execute("UPDATE component_drafts SET name = ?, revision = ?, document = ?, updated_at = ? WHERE id = ?", (
                     updated.definition.name, updated.revision, updated.model_dump_json(by_alias=True), now, draft_id,
@@ -224,17 +241,46 @@ class DraftRepository:
 
         document = ComponentDocument.model_validate(self.get(draft_id)["document"])
         result = serialize_component(document)
-        for evidence in result["stages"]["definition"].get("evidence", []):
-            try:
-                stored = self.get_evidence(draft_id, evidence["id"])
-            except ComponentError:
-                continue
+        for evidence in result["stages"]["definition"]["evidenceFiles"]:
+            stored = self.get_evidence(draft_id, evidence["id"])
             evidence["dataUrl"] = f"data:{stored['mediaType']};base64,{base64.b64encode(stored['content']).decode('ascii')}"
         return result
 
     @staticmethod
+    def _store_embedded_evidence(connection, draft_id: str, document: ComponentDocument) -> ComponentDocument:
+        data = document.model_dump(by_alias=True)
+        files = data["definition"]["evidenceFiles"]
+        for item in files:
+            data_url = item.get("dataUrl")
+            if not data_url:
+                continue
+            match = re.fullmatch(r"data:([^;,]+);base64,([A-Za-z0-9+/]*={0,2})", data_url)
+            if not match or match.group(1) != item["mediaType"]:
+                raise ComponentError(422, "INVALID_EVIDENCE")
+            try:
+                content = base64.b64decode(match.group(2), validate=True)
+            except ValueError as error:
+                raise ComponentError(422, "INVALID_EVIDENCE") from error
+            if (len(content) != item["size"] or len(content) > 5 * 1024 * 1024
+                    or hashlib.sha256(content).hexdigest() != item["sha256"]):
+                raise ComponentError(422, "INVALID_EVIDENCE")
+            connection.execute("""INSERT INTO component_draft_evidence VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(draft_id, id) DO UPDATE SET file_name=excluded.file_name,
+                media_type=excluded.media_type, size=excluded.size, sha256=excluded.sha256, content=excluded.content""",
+                (draft_id, item["id"], item["fileName"], item["mediaType"], len(content), item["sha256"], content))
+            item["dataUrl"] = None
+        clean = ComponentDocument.model_validate(data)
+        return clean
+
+    @staticmethod
+    def _require_evidence_content(connection, draft_id: str, document: ComponentDocument):
+        for item in document.definition.evidenceFiles:
+            if connection.execute("SELECT 1 FROM component_draft_evidence WHERE draft_id = ? AND id = ?", (draft_id, item.id)).fetchone() is None:
+                raise ComponentError(422, "EVIDENCE_CONTENT_MISSING")
+
+    @staticmethod
     def _remove_unreferenced_evidence(connection, draft_id: str, document: ComponentDocument):
-        referenced = {item.id for item in document.definition.evidence}
+        referenced = {item.id for item in document.definition.evidenceFiles}
         rows = connection.execute("SELECT id FROM component_draft_evidence WHERE draft_id = ?", (draft_id,)).fetchall()
         for row in rows:
             if row["id"] not in referenced:
@@ -245,10 +291,39 @@ class DraftRepository:
         rows = connection.execute("""SELECT * FROM component_draft_changes
             WHERE draft_id = ? AND revision > ? AND revision <= ? ORDER BY revision DESC LIMIT 51""",
             (draft_id, after_revision, document.revision)).fetchall()
-        return {**envelope(draft_id, document), "changesTruncated": len(rows) > 50, "changes": [
+        code_unique = DraftRepository._code_is_unique(connection, document.definition.code, draft_id)
+        return {**envelope(draft_id, document, code_unique=code_unique), "changesTruncated": len(rows) > 50, "changes": [
             {"actor": row["actor"], "fromRevision": row["revision"] - 1, "revision": row["revision"],
              "createdAt": row["created_at"], "items": json.loads(row["items"])} for row in reversed(rows[:50])
         ]}
+
+    @staticmethod
+    def _code_is_unique(connection, code, exclude_id=None):
+        normalized = code.strip().upper()
+        if not normalized:
+            return True
+        rows = connection.execute("SELECT id, document FROM component_drafts").fetchall()
+        return all(row["id"] == exclude_id or json.loads(row["document"])["definition"].get("code", "").strip().upper() != normalized for row in rows)
+
+    @staticmethod
+    def _next_code(connection):
+        rows = connection.execute("SELECT document FROM component_drafts").fetchall()
+        used = {json.loads(row["document"])["definition"].get("code", "").strip().upper() for row in rows}
+        index = 1
+        while f"CMP-{index:04d}" in used:
+            index += 1
+        return f"CMP-{index:04d}"
+
+    @classmethod
+    def _backfill_missing_codes(cls, connection):
+        rows = connection.execute("SELECT id, document FROM component_drafts ORDER BY updated_at, id").fetchall()
+        for row in rows:
+            data = json.loads(row["document"])
+            if data["definition"].get("code", "").strip():
+                continue
+            data["definition"]["code"] = cls._next_code(connection)
+            connection.execute("UPDATE component_drafts SET document = ? WHERE id = ?",
+                               (json.dumps(data, ensure_ascii=False, separators=(",", ":")), row["id"]))
 
     @staticmethod
     def _read(connection, draft_id: str) -> ComponentDocument:

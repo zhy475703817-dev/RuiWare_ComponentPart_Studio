@@ -88,10 +88,10 @@ class MCPTests(unittest.TestCase):
                 draft = self.call(client, "component_create_draft", {"name": literal})["structuredContent"]
                 self.assertEqual(draft["document"]["definition"]["name"], literal)
                 result = self.call(client, "component_update_definition", {
-                    "draftId": draft["draftId"], "expectedRevision": 1, "patch": {"code": literal},
+                    "draftId": draft["draftId"], "expectedRevision": 1, "patch": {"projectCode": literal},
                 })
                 self.assertFalse(result.get("isError", False), result)
-                self.assertEqual(result["structuredContent"]["document"]["definition"]["code"], literal)
+                self.assertEqual(result["structuredContent"]["document"]["definition"]["projectCode"], literal)
 
     def test_member_connection_interface_rule_and_validation_tools(self):
         from backend.tests.test_components import member

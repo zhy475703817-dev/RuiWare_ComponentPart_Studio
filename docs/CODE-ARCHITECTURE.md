@@ -23,8 +23,6 @@ backend/app/library.py            发布库响应模型、只读调用和 API �
 backend/app/published_storage.py  共享 MinIO 发布记录、包校验与上传边界
 backend/app/library_cache.py      SQLite 发布包、默认模型和活动/待应用列表快照
 backend/app/library_sync.py       后台增量同步、模型准入及缓存列表 API
-backend/app/library_cleanup.py    MinIO 重复与旧版扫描、备份、逐项确认、删除与审计
-backend/app/reference_registry.py 跨客户端固定引用登记、持久身份、后台重试和同步状态
 backend/app/preview.py            包下载校验、安全 ZIP 读取、模型缓存和预览路由
 backend/app/main.py               FastAPI 入口、生命周期、健康检查、静态页面
 backend/app/components/           共享工程模型、编辑/验证/导出、SQLite 修订事务、REST
@@ -41,12 +39,6 @@ tests/                           Node 原生领域和前端列表测试
 前端依赖方向：`app → stages / library / viewport / domain`，`stages → domain（类型）`，`viewport → domain / library（类型）`。`domain` 不导入 React、DOM、网络、服务端配置或 Three.js。后端 Python 模块不进入浏览器构建。
 
 运行链路：`浏览器 → Vite :5180 /api 转发 → FastAPI :8020 → SQLite 快照`，后台直接从共享 MinIO 读取零部件和组件发布记录、按需下载并校验包，准备待应用的新列表。两类发布使用同一个 bucket，以 `templateKind` 区分，旧记录默认是零部件；无需启动零部件平台。`metadata.json` 是发布完成标记，包路径须与记录处于同一发布目录，包大小和 SHA-256 必须一致。读取仅需存储连接与读取目录，组件发布另外要求成员写入目录。
-
-工作台列表由 `library.latest_catalog_items` 按零件模板 ID 选择最高版本，同版本按实际发布时间和发布 ID 稳定选择；组件仍按发布 ID 保留各版本。`library_sync` 使用完整元数据选择最新零件后再下载和检查模型，`library_cache` 对旧快照同样先合并版本再过滤模型，并按模板身份统计更新。原始发布查询及固定版本下载不使用此列表投影，旧组件的版本引用不受影响。
-
-存储维护由后端负责，工作台不挂载维护弹窗或显示清理状态。维护接口 `POST /api/template-library/cleanup-preview` 读取完整发布元数据、校验组件包、收集本地与已登记客户端引用，并为每个零件包计算内容相似度。每次 MinIO 同步自动备份并删除同模板旧版与 SHA-256 完全重复包；高度相似项仍需通过维护接口逐项确认，疑似相似只记录。清理失败保留在后端状态和审计中，不阻断列表同步，也不作为模板更新错误返回给工作台。引用用于告知影响，不阻止删除；固定引用不会自动迁移。扫描 ID 有效期 24 小时，删除时后端重新扫描并验证对象 key、发布身份和哈希；备份位于组件平台本机 `template-cleanup` 目录，默认保留 30 天，恢复使用条件写入防止覆盖新对象。组件发布、引用登记、SQL 草稿与模型缓存不在清理范围。引用统计只覆盖本机和已登记客户端，扫描不完整会阻止候选清理。
-
-`ReferenceRegistry` 在应用生命周期启动后立即补登记，每 5 秒读取本机固定版本引用并比较摘要，变化或失败时写入共享 bucket 的 `{prefix}/reference-registry/{clientId}.json`，无变化时每 5 分钟心跳更新。完成写入与回读校验后才持久化成功摘要；上传期间的新增改动仍显示待同步，下轮继续上传。SQLite `reference_clients` 按存储命名空间与主机/数据库路径保存身份及同步状态，不含存储凭据。登记只含草稿/快照名称与固定版本引用，普通 REST 与 MCP 修改都会被下一轮观察到。单实例内同步操作用锁串行；单个数据库按一个后端进程部署，尚无跨进程或发布/删除互斥。同步失败不回滚草稿，不删除上次成功登记；离线客户端的旧引用永不自动过期。损坏或无法读取的登记会阻断候选判断。状态接口与手动同步接口均返回 `Cache-Control: no-store`；维护接口手动同步完成后可重新扫描。
 
 仅在未配置 MinIO 读取连接时，零部件回退到旧 HTTP 发布接口，保留最近 1000 条限制、超时和拒绝重定向行为。MinIO 连接故障不会切换来源，已有缓存保留。业务异常保留安全错误码，不返回 SDK 内部详情或密钥。配置来自根目录 `.env`、`.env.local` 和系统环境变量，系统环境变量优先。
 
@@ -65,6 +57,8 @@ FastAPI 提供 `/api/health`、`/api/published-templates`、兼容 STL 预览接
 | publish | PublishStage | 汇总检查结果并导出草稿 |
 
 阶段只是编辑视角。切换阶段不修改工程数据，也不表示该阶段已完成。
+
+定义阶段主区域仅显示组件定义表单、组件选择器和新增操作，不挂载发布库、3D 画布或草稿管理侧栏；其他阶段显示原发布库、画布和阶段面板。顶部持续显示当前组件名称和编码。草稿后端自动保存，Agent 通过 MCP 读取和修改同一份后端草稿。编码格式及唯一性由前后端共同校验，新建草稿自动分配 `CMP-NNNN` 编码。阶段切换不清理草稿成员或参数。
 
 ## 三类状态
 

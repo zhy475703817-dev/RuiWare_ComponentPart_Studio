@@ -12,7 +12,7 @@ export type DraftChange = {
 };
 export type DraftEnvelope = { draftId: string; document: ComponentDocument; checks: ValidationCheck[];
   changes?: DraftChange[]; changesTruncated?: boolean; reconciled?: boolean };
-export type DraftSummary = { draftId: string; name: string; revision: number; updatedAt: string };
+export type DraftSummary = { draftId: string; name: string; code: string; revision: number; updatedAt: string };
 export type DraftApi = {
   list: () => Promise<{ items: DraftSummary[] }>;
   create: () => Promise<DraftEnvelope>;
@@ -36,7 +36,24 @@ const errorMessage = (error: unknown): string => errorCode(error) === "REVISION_
   ? "其他网页也修改了草稿，或变更历史不完整。本页输入已保留，请下载本地副本并核对最新版本。"
   : errorCode(error) === "EDIT_TARGET_REMOVED" ? "Agent 已删除正在编辑的对象或其引用，无法直接合并。本页输入已保留，请下载本地副本后核对差异。"
   : errorCode(error) === "EDIT_STRUCTURE_CONFLICT" ? "Agent 修改了相关结构，无法直接合并。本页输入已保留，请下载本地副本后核对差异。"
+  : errorCode(error) === "INVALID_PORT_NAME" ? "对外接口名称不能为空。"
+  : errorCode(error) === "INVALID_SLOT_NAME" ? "槽位名称不能为空。"
+  : errorCode(error) === "INVALID_SLOT_REFERENCE" ? "槽位接口引用无效，请重新选择基准接口或占用接口。"
+  : errorCode(error) === "INCOMPATIBLE_SLOT_INTERFACE" ? "占用接口与槽位基准接口不兼容。"
+  : errorCode(error) === "DUPLICATE_SLOT_INTERFACE" ? "该接口已被其他槽位占用。"
+  : errorCode(error) === "INVALID_INTERFACE_TYPE" ? "接口类型无效，请重新选择或输入类型名称。"
+  : errorCode(error) === "INTERFACE_TYPE_LIMIT" ? "自定义接口类型已达到数量上限。"
   : errorCode(error) === "DRAFT_NOT_FOUND" ? "该草稿已不存在，请选择其他草稿。" : "草稿操作失败。未保存输入已保留，请检查连接后重试。";
+
+// These errors mean the server understood and rejected the requested edit.
+// They should not freeze the whole editor or leave a doomed action at the
+// front of the queue; transport failures and revision conflicts still keep
+// the pending input for an explicit retry/reload.
+const rejectedEditCodes = new Set([
+  "DUPLICATE_ID", "DUPLICATE_PORT", "INTERFACE_SNAPSHOT_MISMATCH",
+  "INVALID_PORT_NAME", "INVALID_SLOT_NAME", "INVALID_SLOT_REFERENCE",
+  "INCOMPATIBLE_SLOT_INTERFACE", "DUPLICATE_SLOT_INTERFACE", "INVALID_INTERFACE_TYPE", "INTERFACE_TYPE_LIMIT",
+]);
 
 const legacyDimensionSpecs = [
   { id: "componentLength", label: "组件总长", min: 1000, max: 6000, fallback: 2400, axis: "length" as const, aliases: ["componentLength", "length", "overallLength", "总长", "长度"] },
@@ -45,8 +62,14 @@ const legacyDimensionSpecs = [
 ] as const;
 
 function normalizeDraftDocument(document: ComponentDocument): ComponentDocument {
+  const interfaceTypes = Array.isArray(document.interfaceTypes) ? document.interfaceTypes : [];
   const members = Array.isArray(document.assembly?.members) ? document.assembly.members : [];
   const patterns = Array.isArray(document.patterns) ? document.patterns : [];
+  const slots = (Array.isArray(document.slots) ? document.slots : []).map(slot => ({
+    ...slot,
+    baseInterface: slot.baseInterface ?? null,
+    interfaceId: slot.interfaceId ?? null,
+  }));
   const sourceParameters = Array.isArray(document.parameters) ? document.parameters : [];
   const inferred = inferEnvelopeDimensions(sourceParameters, members, patterns);
   const parameters = [...sourceParameters];
@@ -74,7 +97,7 @@ function normalizeDraftDocument(document: ComponentDocument): ComponentDocument 
       bindings.push({ id: `${member.id}:${parameter.id}:${definition.id}`, parameterId: parameter.id, memberId: member.id, memberParameterId: definition.id });
     }
   }
-  return { ...document, parameters, bindings };
+  return { ...document, parameters, bindings, slots, interfaceTypes };
 }
 
 function draftMigrationActions(document: ComponentDocument): ComponentAction[] {
@@ -126,6 +149,7 @@ export class SharedDraftController {
     this.listeners.forEach(listener => listener());
   }
   private accept(draft: DraftEnvelope) {
+    draft = { ...draft, document: normalizeDraftDocument(draft.document) };
     const migrationActions = draftMigrationActions(draft.document);
     const queuedActions = new Set(this.pending.map(actionIdentity));
     this.pending = [
@@ -139,10 +163,13 @@ export class SharedDraftController {
     for (const action of this.pending) {
       const next = componentReducer(projection, action);
       const missingTarget = ((action.type === "member.patch" || action.type === "member.remove") && !projection.assembly.members.some(item => item.id === action.id))
+        || (action.type === "interface.type.set" && !projection.assembly.members.some(member => member.id === action.memberId && member.interfaces.some(item => item.id === action.interfaceId)))
+        || ((action.type === "port.remove" || action.type === "port.rename") && !projection.ports.some(item => item.id === action.id))
+        || ((action.type === "slot.patch" || action.type === "slot.remove") && !projection.slots.some(item => item.id === action.id))
         || (action.type === "parameter.value" && !projection.parameters.some(item => item.id === action.id))
         || (action.type === "rule.expression" && !projection.rules.some(item => item.id === action.id))
         || (action.type === "rule.remove" && !projection.rules.some(item => item.id === action.id));
-      const invalidAddition = ["member.add", "mate.add", "port.add", "rule.add"].includes(action.type) && next === projection;
+      const invalidAddition = ["member.add", "mate.add", "port.add", "slot.add", "rule.add", "interface.types.merge"].includes(action.type) && next === projection;
       if (missingTarget || invalidAddition) {
         // Keep the full visible local document for download; reprojecting would silently drop queued additions.
         this.publish({ status: "conflict", dirty: true, error: "Agent 修改影响了后续操作的对象或引用，无法直接合并。本页完整输入已保留，请下载本地副本后核对差异。" });
@@ -226,6 +253,11 @@ export class SharedDraftController {
       } catch (error) {
         const current = (error as { current?: DraftEnvelope })?.current;
         if (current?.draftId === this.confirmed.draftId) this.recordChanges(current);
+        if (rejectedEditCodes.has(errorCode(error))) {
+          this.pending.shift();
+          this.project({ status: this.pending.length ? "saving" : "ready", error: null, notice: errorMessage(error) });
+          continue;
+        }
         const conflict = ["REVISION_CONFLICT", "EDIT_TARGET_REMOVED", "EDIT_STRUCTURE_CONFLICT"].includes(errorCode(error));
         this.publish({ status: conflict ? "conflict" : "error", error: errorMessage(error) });
         return;

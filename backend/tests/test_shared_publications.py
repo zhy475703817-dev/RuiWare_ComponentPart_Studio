@@ -169,6 +169,7 @@ class SharedPublicationTests(unittest.TestCase):
         from backend.app.components.models import ComponentDocument
         parent = drafts.create(name='Legacy parent')
         document = parent['document']
+        document['definition']['code'] = 'CMP-PARENT'
         document['assembly']['members'] = [{
             'id': 'child', 'name': snapshot['name'], 'code': snapshot['code'], 'role': 'base',
             'template': {'templateKind': 'component', **{k: snapshot[k] for k in ('publicationId', 'templateId', 'version', 'sha256')}},

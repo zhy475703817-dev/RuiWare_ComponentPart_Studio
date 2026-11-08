@@ -20,7 +20,10 @@ def member(identifier):
         "id": identifier, "name": "横梁", "code": "BEAM", "role": identifier,
         "template": {"publicationId": "version.1", "templateId": "part.1", "version": 3, "sha256": "a" * 64},
         "position": [0, 0, 0], "rotation": [0, 0, 0], "parameterValues": {"length": 2400},
-        "interfaces": [{"id": "face.left", "name": "左端面", "type": "plane", "tags": ["end-face"]}],
+        "interfaces": [{"id": "face.left", "name": "左端面", "type": "plane", "tags": ["end-face"], "referenceFrame": {"axis": "z"}, "mating": {
+            "version": 1, "family": "plane-contact", "role": "contact-face", "dimensions": {},
+            "allowedRelations": ["贴合", "重合"], "capacity": 1,
+        }}],
     }
 
 
@@ -44,10 +47,102 @@ class ComponentTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()
 
+    def test_interface_types_are_user_defined_reusable_and_synced_to_ports(self):
+        with TestClient(create_app(dist_dir=None)) as client:
+            draft = self.create(client)
+            for identifier in ("a", "b"):
+                added = self.action(client, draft, {"type": "member.add", "member": member(identifier)})
+                self.assertEqual(added.status_code, 200, added.text)
+                draft = added.json()
+            exposed = self.action(client, draft, {"type": "port.add", "port": {
+                "id": "port-a", "name": "A接口", "source": source("a"), "tags": [],
+            }})
+            self.assertEqual(exposed.status_code, 200, exposed.text)
+            draft = exposed.json()
+            custom = self.action(client, draft, {"type": "interface.type.set", "memberId": "a", "interfaceId": "face.left",
+                "connectionTypeId": "custom:专用支架接口", "customTypeLabel": "专用支架接口"})
+            self.assertEqual(custom.status_code, 200, custom.text)
+            draft = custom.json()
+            self.assertEqual(draft["document"]["interfaceTypes"], [{"id": "custom:专用支架接口", "label": "专用支架接口"}])
+            self.assertEqual(draft["document"]["ports"][0]["interface"]["connectionTypeId"], "custom:专用支架接口")
+            exported = client.get(f"/api/component-drafts/{draft['draftId']}/export")
+            self.assertEqual(exported.status_code, 200, exported.text)
+            self.assertEqual(exported.json()["stages"]["interfaceTypes"], draft["document"]["interfaceTypes"])
+            reused = self.action(client, draft, {"type": "interface.type.set", "memberId": "b", "interfaceId": "face.left",
+                "connectionTypeId": "custom:专用支架接口"})
+            self.assertEqual(reused.status_code, 200, reused.text)
+            draft = reused.json()
+            cleared = self.action(client, draft, {"type": "interface.type.set", "memberId": "a", "interfaceId": "face.left", "connectionTypeId": None})
+            self.assertEqual(cleared.status_code, 200, cleared.text)
+            self.assertIsNone(cleared.json()["document"]["ports"][0]["interface"]["connectionTypeId"])
+            self.assertEqual(len(cleared.json()["document"]["interfaceTypes"]), 1)
+            invalid = self.action(client, cleared.json(), {"type": "interface.type.set", "memberId": "b", "interfaceId": "face.left", "connectionTypeId": "custom:missing"})
+            self.assertEqual(invalid.status_code, 422)
+            missing = self.action(client, cleared.json(), {"type": "interface.type.set", "memberId": "missing", "interfaceId": "face.left", "connectionTypeId": "bolt.male.v1"})
+            self.assertEqual(missing.status_code, 404)
+
+    def test_nested_component_interface_type_catalog_merge(self):
+        from backend.app.components.models import ComponentAction
+        from backend.app.components.service import apply_action, create_component_document
+
+        document = create_component_document()
+        document = apply_action(document, ComponentAction.validate_python({"type": "interface.types.merge", "types": [
+            {"id": "custom:设备安装面", "label": "设备安装面"},
+            {"id": "custom:设备安装面", "label": "设备安装面"},
+        ]}))
+        self.assertEqual(document.interfaceTypes[0].id, "custom:设备安装面")
+        unchanged = apply_action(document, ComponentAction.validate_python({"type": "interface.types.merge", "types": [
+            {"id": "custom:设备安装面", "label": "设备安装面"},
+        ]}))
+        self.assertEqual(unchanged.interfaceTypes, document.interfaceTypes)
+        with self.assertRaises(Exception):
+            apply_action(document, ComponentAction.validate_python({"type": "interface.types.merge", "types": [
+                {"id": "custom:设备安装面", "label": "冲突名称"},
+            ]}))
+
     def action(self, client, draft, action, revision=None):
         return client.post(f"/api/component-drafts/{draft['draftId']}/actions", json={
             "expectedRevision": draft["document"]["revision"] if revision is None else revision, "action": action,
         })
+
+    def test_component_codes_are_generated_and_duplicates_fail_validation(self):
+        from backend.app.components.models import ComponentAction
+        from backend.app.components.repository import DraftRepository
+
+        repository = DraftRepository(Path(self.directory.name) / "codes.sqlite3")
+        first = repository.create()
+        second = repository.create()
+        self.assertEqual(first["document"]["definition"]["code"], "CMP-0001")
+        self.assertEqual(second["document"]["definition"]["code"], "CMP-0002")
+        self.assertEqual({item["code"] for item in repository.list()["items"]}, {"CMP-0001", "CMP-0002"})
+        action = ComponentAction.validate_python({"type": "definition.patch", "patch": {"code": "cmp_custom-3"}})
+        normalized = repository.update(second["draftId"], second["document"]["revision"], action)
+        self.assertEqual(normalized["document"]["definition"]["code"], "CMP_CUSTOM-3")
+        self.assertEqual(next(check for check in normalized["checks"] if check["id"] == "code.format")["status"], "pass")
+        action = ComponentAction.validate_python({"type": "definition.patch", "patch": {"code": "CMP-0001"}})
+        duplicate = repository.update(second["draftId"], normalized["document"]["revision"], action)
+        self.assertEqual(next(check for check in duplicate["checks"] if check["id"] == "code.unique")["status"], "fail")
+
+    def test_legacy_drafts_without_a_code_receive_one_without_changing_revision(self):
+        from contextlib import closing
+        import sqlite3
+        from backend.app.components.repository import DraftRepository
+
+        path = Path(self.directory.name) / "legacy.sqlite3"
+        repository = DraftRepository(path)
+        draft = repository.create()
+        data = draft["document"]
+        data["definition"]["code"] = ""
+        data["revision"] = 7
+        with closing(sqlite3.connect(path)) as connection, connection:
+            connection.execute("UPDATE component_drafts SET document = ?, revision = 7 WHERE id = ?",
+                               (json.dumps(data, ensure_ascii=False), draft["draftId"]))
+
+        upgraded = DraftRepository(path)
+        restored = upgraded.get(draft["draftId"])
+        self.assertEqual(restored["document"]["definition"]["code"], "CMP-0001")
+        self.assertEqual(restored["document"]["revision"], 7)
+        self.assertEqual(upgraded.list()["items"][0]["code"], "CMP-0001")
 
     def test_persistence_atomic_conflict_and_draft_discovery(self):
         with TestClient(create_app(dist_dir=None)) as client:
@@ -85,6 +180,36 @@ class ComponentTests(unittest.TestCase):
             removed = self.action(client, composition.json(), {"type": "rule.remove", "id": "clearance"})
             self.assertEqual(removed.status_code, 200, removed.text)
             self.assertEqual([rule["id"] for rule in removed.json()["document"]["rules"]], ["rule-1", "width-spacing"])
+
+    def test_planar_movement_persists_for_parts_and_components_and_preserves_legacy_export(self):
+        with TestClient(create_app(dist_dir=None)) as client:
+            draft = self.create(client)
+            part = member("part")
+            component = member("nested")
+            component["template"]["templateKind"] = "component"
+            for item in (part, component):
+                added = self.action(client, draft, {"type": "member.add", "member": item})
+                self.assertEqual(added.status_code, 200, added.text)
+                draft = added.json()
+            legacy_members = draft["document"]["assembly"]["members"]
+            self.assertTrue(all("planarMovement" not in item for item in legacy_members))
+            export_url = f"/api/component-drafts/{draft['draftId']}/export"
+            self.assertTrue(all("planarMovement" not in item for item in client.get(export_url).json()["stages"]["assembly"]["members"]))
+            for identifier in ("part", "nested"):
+                updated = self.action(client, draft, {"type": "member.patch", "id": identifier, "patch": {"planarMovement": True}})
+                self.assertEqual(updated.status_code, 200, updated.text)
+                draft = updated.json()
+            self.assertTrue(all(item["planarMovement"] for item in client.get(export_url).json()["stages"]["assembly"]["members"]))
+
+        with TestClient(create_app(dist_dir=None)) as client:
+            restored = client.get(f"/api/component-drafts/{draft['draftId']}").json()
+            self.assertTrue(all(item["planarMovement"] for item in restored["document"]["assembly"]["members"]))
+            disabled = self.action(client, restored, {"type": "member.patch", "id": "part", "patch": {"planarMovement": False}})
+            self.assertEqual(disabled.status_code, 200, disabled.text)
+            self.assertFalse(disabled.json()["document"]["assembly"]["members"][0]["planarMovement"])
+            exported = client.get(export_url).json()["stages"]["assembly"]["members"]
+            self.assertNotIn("planarMovement", exported[0])
+            self.assertTrue(exported[1]["planarMovement"])
 
     def test_member_add_suggests_length_width_and_height_bindings(self):
         with TestClient(create_app(dist_dir=None)) as client:
@@ -131,8 +256,8 @@ class ComponentTests(unittest.TestCase):
         with TestClient(create_app(dist_dir=None)) as client:
             data = self.create(client)["document"]
         data["assembly"]["members"] = [member("member.a"), member("member.b")]
-        data["assembly"]["members"][0]["parameterDefinitions"] = [{"id": "length", "label": "长度", "unit": "mm", "valueType": "integer", "minimum": 100, "maximum": 5000, "default": 2400}]
-        data["assembly"]["members"][0]["interfaces"][0].update({
+        data["assembly"]["members"][1]["parameterDefinitions"] = [{"id": "length", "label": "长度", "unit": "mm", "valueType": "integer", "minimum": 100, "maximum": 5000, "default": 2400}]
+        data["assembly"]["members"][1]["interfaces"][0].update({
             "interfaceType": "locating", "locatingType": "planeContact", "declarationMode": "featureDerived",
             "geometryRefs": ["leftFace"], "parameterRefs": ["sectionWidth"], "description": "左端连接面", "required": True,
             "region": {"mode": "rectangle", "uSpanExpression": "sectionWidth", "vSpanExpression": "sectionHeight", "countExpression": "holeCount"},
@@ -143,7 +268,7 @@ class ComponentTests(unittest.TestCase):
         data["bindings"] = [{"id": "b", "parameterId": "componentLength", "memberId": "member.a", "memberParameterId": "length"}]
         actions = [
             {"type": "definition.patch", "patch": {"name": "测试组件", "code": "A"}},
-            {"type": "member.patch", "id": "member.b", "patch": {"position": [1, 2, 3], "parameterValues": {"length": 3000}}},
+            {"type": "member.patch", "id": "member.b", "patch": {"position": [1, 2, 3], "parameterValues": {"length": 3000}, "planarMovement": True}},
             {"type": "parameter.value", "id": "componentLength", "value": 3500},
             {"type": "rule.expression", "id": "rule-1", "expression": "长度约束"},
             {"type": "member.remove", "id": "member.a"},
@@ -162,16 +287,27 @@ console.log(JSON.stringify({document:result,checks:validateComponent(result),exp
         expected = json.loads(result.stdout)
         document = ComponentDocument.model_validate(data)
         # Check metadata on the member before the actions deliberately remove it.
-        member_export = serialize_component(document)["stages"]["assembly"]["members"][0]
+        member_export = serialize_component(document)["stages"]["assembly"]["members"][1]
         self.assertEqual(member_export["parameterDefinitions"][0]["minimum"], 100)
         self.assertEqual(member_export["interfaces"][0]["region"]["mode"], "rectangle")
         self.assertEqual(member_export["interfaces"][0]["geometryRefs"], ["leftFace"])
         self.assertEqual(member_export["interfaces"][0]["region"]["countExpression"], "holeCount")
         for action in actions:
             document = apply_action(document, ComponentAction.validate_python(action))
-        self.assertEqual(document.model_dump(by_alias=True), expected["document"])
+        def normalize_numbers(value):
+            if isinstance(value, dict):
+                return {key: normalize_numbers(item) for key, item in value.items()}
+            if isinstance(value, list):
+                return [normalize_numbers(item) for item in value]
+            return int(value) if isinstance(value, float) and value.is_integer() else value
+        self.assertEqual(normalize_numbers(document.model_dump(by_alias=True)), expected["document"])
         self.assertEqual(validate_component(document), expected["checks"])
         self.assertEqual(serialize_component(document), expected["export"])
+        member_export = expected["export"]["stages"]["assembly"]["members"][0]
+        self.assertEqual(member_export["parameterDefinitions"][0]["minimum"], 100)
+        self.assertEqual(member_export["interfaces"][0]["region"]["mode"], "rectangle")
+        self.assertEqual(member_export["interfaces"][0]["geometryRefs"], ["leftFace"])
+        self.assertEqual(member_export["interfaces"][0]["region"]["countExpression"], "holeCount")
         self.assertEqual(document.assembly.mates, [])
         self.assertEqual(document.ports, [])
         self.assertEqual(document.bindings, [])
@@ -230,6 +366,91 @@ console.log(JSON.stringify({document:result,checks:validateComponent(result),exp
         stale_document = type(document).model_validate(stale_data)
         self.assertEqual(next(check for check in validate_component(stale_document) if check["id"] == "ports")["status"], "fail")
 
+    def test_component_port_can_be_removed_and_renamed(self):
+        from backend.app.components.models import ComponentAction
+        from backend.app.components.service import ComponentError, apply_action, create_component_document, serialize_component
+
+        document = apply_action(create_component_document(), ComponentAction.validate_python({"type": "member.add", "member": member("upright")}))
+        document = apply_action(document, ComponentAction.validate_python({
+            "type": "port.add", "port": {"id": "port.one", "name": "立柱-左端面", "source": source("upright"), "tags": []},
+        }))
+        document = apply_action(document, ComponentAction.validate_python({"type": "port.rename", "id": "port.one", "name": "  安装接口  "}))
+        self.assertEqual(document.ports[0].name, "安装接口")
+        self.assertEqual(serialize_component(document)["stages"]["ports"][0]["name"], "安装接口")
+
+        with self.assertRaises(ComponentError) as invalid:
+            apply_action(document, ComponentAction.validate_python({"type": "port.rename", "id": "port.one", "name": "   "}))
+        self.assertEqual(invalid.exception.code, "INVALID_PORT_NAME")
+        document = apply_action(document, ComponentAction.validate_python({"type": "port.remove", "id": "port.one"}))
+        self.assertEqual(document.ports, [])
+
+    def test_port_selection_actions_persist_and_export(self):
+        with TestClient(create_app(dist_dir=None)) as client:
+            draft = self.create(client)
+            draft = self.action(client, draft, {"type": "member.add", "member": member("upright")}).json()
+            draft = self.action(client, draft, {"type": "member.add", "member": member("beam")}).json()
+            first_port = {"id": "port.one", "name": "立柱-左端面", "source": source("upright"), "tags": []}
+            second_port = {"id": "port.two", "name": "横梁-左端面", "source": source("beam"), "tags": []}
+            draft = self.action(client, draft, {"type": "port.add", "port": first_port}).json()
+            draft = self.action(client, draft, {"type": "port.add", "port": second_port}).json()
+            duplicate = self.action(client, draft, {"type": "port.add", "port": {**first_port, "id": "port.duplicate"}})
+            self.assertEqual(duplicate.status_code, 422)
+
+            invalid_name = self.action(client, draft, {"type": "port.rename", "id": "port.one", "name": "   "})
+            self.assertEqual(invalid_name.status_code, 422)
+            self.assertEqual(invalid_name.json()["error"]["code"], "INVALID_PORT_NAME")
+            draft = self.action(client, draft, {"type": "port.rename", "id": "port.one", "name": "  安装接口  "}).json()
+
+            persisted = client.get(f"/api/component-drafts/{draft['draftId']}").json()
+            exported = client.get(f"/api/component-drafts/{draft['draftId']}/export").json()
+            self.assertEqual([port["name"] for port in persisted["document"]["ports"]], ["安装接口", "横梁-左端面"])
+            self.assertEqual([port["name"] for port in exported["stages"]["ports"]], ["安装接口", "横梁-左端面"])
+            self.assertEqual(next(check for check in draft["checks"] if check["id"] == "ports")["status"], "pass")
+
+            removed = self.action(client, draft, {"type": "port.remove", "id": "port.one"})
+            self.assertEqual(removed.status_code, 200, removed.text)
+            self.assertEqual([port["id"] for port in removed.json()["document"]["ports"]], ["port.two"])
+            self.assertEqual(next(check for check in removed.json()["checks"] if check["id"] == "ports")["status"], "pass")
+            removed = self.action(client, removed.json(), {"type": "port.remove", "id": "port.two"})
+            self.assertEqual(removed.status_code, 200, removed.text)
+            self.assertEqual(removed.json()["document"]["ports"], [])
+            self.assertEqual(next(check for check in removed.json()["checks"] if check["id"] == "ports")["status"], "fail")
+
+    def test_slot_actions_require_compatible_unique_interfaces_and_export(self):
+        with TestClient(create_app(dist_dir=None)) as client:
+            draft = self.create(client)
+            first = member("base")
+            first["interfaces"][0].update({"connectionGender": "male", "interfaceSize": {"diameter": 10}, "connectionMethod": "插接"})
+            second = member("candidate")
+            second["interfaces"][0].update({"connectionGender": "female", "interfaceSize": {"diameter": 10}, "connectionMethod": "插接"})
+            bad = member("bad")
+            bad["interfaces"][0]["mating"] = {"version": 1, "family": "pin-hole", "role": "hole", "dimensions": {}, "allowedRelations": ["同轴"], "capacity": 1}
+            draft = self.action(client, draft, {"type": "member.add", "member": first}).json()
+            draft = self.action(client, draft, {"type": "member.add", "member": second}).json()
+            draft = self.action(client, draft, {"type": "member.add", "member": bad}).json()
+            slot = {"id": "slot.one", "name": "安装位", "required": True, "baseInterface": None, "memberId": None, "interfaceId": None}
+            draft = self.action(client, draft, {"type": "slot.add", "slot": slot}).json()
+            draft = self.action(client, draft, {"type": "slot.patch", "id": "slot.one", "patch": {"required": False}}).json()
+            self.assertFalse(draft["document"]["slots"][0]["required"])
+            draft = self.action(client, draft, {"type": "slot.patch", "id": "slot.one", "patch": {"required": True}}).json()
+            source_base = source("base")
+            draft = self.action(client, draft, {"type": "slot.patch", "id": "slot.one", "patch": {"baseInterface": source_base}}).json()
+            incompatible = self.action(client, draft, {"type": "slot.patch", "id": "slot.one", "patch": {"memberId": "bad", "interfaceId": "face.left"}})
+            self.assertEqual(incompatible.status_code, 422)
+            self.assertEqual(incompatible.json()["error"]["code"], "INCOMPATIBLE_SLOT_INTERFACE")
+            draft = self.action(client, draft, {"type": "slot.patch", "id": "slot.one", "patch": {"memberId": "candidate", "interfaceId": "face.left"}}).json()
+            self.assertEqual(draft["document"]["slots"][0]["interfaceId"], "face.left")
+            persisted = client.get(f"/api/component-drafts/{draft['draftId']}").json()
+            exported = client.get(f"/api/component-drafts/{draft['draftId']}/export").json()
+            self.assertEqual(persisted["document"]["slots"][0]["baseInterface"], source_base)
+            self.assertEqual(exported["stages"]["slots"][0]["interfaceId"], "face.left")
+            duplicate = self.action(client, draft, {"type": "slot.add", "slot": {**slot, "id": "slot.two", "baseInterface": source_base}}).json()
+            duplicate_assignment = self.action(client, duplicate, {"type": "slot.patch", "id": "slot.two", "patch": {"memberId": "candidate", "interfaceId": "face.left"}})
+            self.assertEqual(duplicate_assignment.status_code, 422)
+            self.assertEqual(duplicate_assignment.json()["error"]["code"], "DUPLICATE_SLOT_INTERFACE")
+            removed = self.action(client, duplicate, {"type": "member.remove", "id": "base"}).json()
+            self.assertIsNone(removed["document"]["slots"][0]["baseInterface"])
+
     def test_clearing_component_parameter_removes_member_override(self):
         from backend.app.components.models import ComponentAction
         from backend.app.components.service import apply_action, create_component_document
@@ -266,32 +487,35 @@ console.log(JSON.stringify({document:result,checks:validateComponent(result),exp
             self.assertEqual(client.post("/api/component-drafts", json={"document": invalid}).status_code, 422)
             self.assertEqual(self.action(client, imported, {"type": "definition.patch", "patch": {"name": None}}).status_code, 422)
 
-    def test_definition_extensions_persist_and_export(self):
-        patch = {
-            "projectCode": "RACK-2026-01", "owner": "张工", "organization": "研发部",
-            "searchTags": ["横梁", "可调"],
-            "connectionForms": {
-                "internal": {"mode": "preset", "value": "螺栓连接", "details": "M8 紧固"},
-                "interComponent": {"mode": "custom", "value": "挂钩插接", "details": "免工具拆装"},
-            },
-            "designConstraints": "跨度不超过 2400 mm", "evidence": [{
-                "id": "e1", "name": "安装参考.png", "mediaType": "image/png", "size": 1024,
-                "addedAt": "2026-10-28T00:00:00.000Z",
-            }],
-        }
+    def test_mate_service_rejects_unassessed_contracts_and_consumed_endpoints(self):
         with TestClient(create_app(dist_dir=None)) as client:
-            draft = self.create(client)
-            updated = self.action(client, draft, {"type": "definition.patch", "patch": patch})
-            self.assertEqual(updated.status_code, 200, updated.text)
-            self.assertEqual(updated.json()["document"]["definition"]["projectCode"], "RACK-2026-01")
-            persisted = client.get(f"/api/component-drafts/{draft['draftId']}").json()
-            self.assertEqual(persisted["document"]["definition"]["connectionForms"]["interComponent"]["mode"], "custom")
-            self.assertEqual(persisted["document"]["definition"]["evidence"][0]["name"], "安装参考.png")
-            exported = client.get(f"/api/component-drafts/{draft['draftId']}/export").json()
-            self.assertEqual(exported["stages"]["definition"]["searchTags"], ["横梁", "可调"])
-            self.assertEqual(exported["stages"]["definition"]["designConstraints"], "跨度不超过 2400 mm")
+            data = self.create(client)["document"]
+            data["assembly"]["members"] = [member("a"), member("b"), member("c")]
+            data["assembly"]["members"][2]["interfaces"][0].pop("mating")
+            draft = self.create(client, document=data)
+            valid_mate = {"id": "ab", "from": source("a"), "to": source("b"), "relation": "贴合", "offset": 0}
+            added = self.action(client, draft, {"type": "mate.add", "mate": valid_mate})
+            self.assertEqual(added.status_code, 200, added.text)
+            consumed = self.action(client, added.json(), {"type": "mate.add", "mate": {
+                "id": "ac", "from": source("a"), "to": source("c"), "relation": "贴合", "offset": 0,
+            }})
+            self.assertEqual(consumed.status_code, 422)
+            self.assertEqual(consumed.json()["error"]["code"], "INTERFACE_REQUIRES_REVIEW")
+            self.assertEqual(consumed.json()["error"]["current"][0]["code"], "MISSING_CONTRACT")
 
-    def test_evidence_upload_is_referenced_and_cleaned_up(self):
+            fresh = self.create(client, document={**data, "assembly": {"members": data["assembly"]["members"][:2], "mates": []}})
+            first = self.action(client, fresh, {"type": "mate.add", "mate": valid_mate})
+            self.assertEqual(first.status_code, 200, first.text)
+            third = member("third")
+            appended = self.action(client, first.json(), {"type": "member.add", "member": third})
+            self.assertEqual(appended.status_code, 200, appended.text)
+            over_capacity = self.action(client, appended.json(), {"type": "mate.add", "mate": {
+                "id": "ac", "from": source("a"), "to": source("third"), "relation": "贴合", "offset": 0,
+            }})
+            self.assertEqual(over_capacity.status_code, 422)
+            self.assertEqual(over_capacity.json()["error"]["code"], "ENDPOINT_ALREADY_CONSUMED")
+
+    def test_definition_metadata_and_portable_evidence_export(self):
         import base64
         from uuid import uuid4
 
@@ -304,18 +528,35 @@ console.log(JSON.stringify({document:result,checks:validateComponent(result),exp
                 content=content, headers={"Content-Type": "image/png"},
             )
             self.assertEqual(upload.status_code, 200, upload.text)
-            reference = {"id": evidence_id, "name": "连接示意.png", "mediaType": "image/png",
-                         "size": len(content), "addedAt": "2026-10-28T00:00:00.000Z"}
-            patched = self.action(client, draft, {"type": "definition.patch", "patch": {"evidence": [reference]}})
+            reference = upload.json()
+            patched = self.action(client, draft, {"type": "definition.patch", "patch": {
+                "projectCode": "RACK-2026-001", "owner": "张工", "organization": "结构组",
+                "searchTags": ["货架", "横梁"], "partConnectionType": "自定义",
+                "partConnectionCustom": "端板螺栓连接", "componentConnectionType": "卡扣连接",
+                "designConstraints": "端部需避开立柱加强筋", "evidenceFiles": [reference],
+            }})
             self.assertEqual(patched.status_code, 200, patched.text)
+            definition = patched.json()["document"]["definition"]
+            self.assertEqual(definition["projectCode"], "RACK-2026-001")
+            self.assertRegex(definition["code"], r"^CMP-\d{4,}$")
+            self.assertEqual(definition["code"], draft["document"]["definition"]["code"])
+            self.assertEqual(definition["owner"], "张工")
+            self.assertEqual(definition["componentConnectionType"], "卡扣连接")
+            self.assertIsNone(definition["evidenceFiles"][0]["dataUrl"])
             downloaded = client.get(f"/api/component-drafts/{draft['draftId']}/evidence/{evidence_id}")
             self.assertEqual(downloaded.content, content)
-            exported = client.get(f"/api/component-drafts/{draft['draftId']}/export").json()
-            self.assertEqual(
-                exported["stages"]["definition"]["evidence"][0]["dataUrl"],
-                f"data:image/png;base64,{base64.b64encode(content).decode('ascii')}",
-            )
-            removed = self.action(client, patched.json(), {"type": "definition.patch", "patch": {"evidence": []}})
+            exported = client.get(f"/api/component-drafts/{draft['draftId']}/export")
+            self.assertEqual(exported.status_code, 200, exported.text)
+            portable = exported.json()["stages"]["definition"]["evidenceFiles"][0]
+            self.assertEqual(portable["dataUrl"], f"data:image/png;base64,{base64.b64encode(content).decode('ascii')}")
+
+            import_document = patched.json()["document"]
+            import_document["definition"]["evidenceFiles"] = [portable]
+            restored = self.create(client, document=import_document)
+            roundtrip = client.get(f"/api/component-drafts/{restored['draftId']}/evidence/{evidence_id}")
+            self.assertEqual(roundtrip.content, content)
+
+            removed = self.action(client, patched.json(), {"type": "definition.patch", "patch": {"evidenceFiles": []}})
             self.assertEqual(removed.status_code, 200, removed.text)
             self.assertEqual(client.get(f"/api/component-drafts/{draft['draftId']}/evidence/{evidence_id}").status_code, 404)
 
