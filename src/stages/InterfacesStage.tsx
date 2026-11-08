@@ -5,6 +5,7 @@ import { sameInterfaceSelection, supportsInterfacePreview } from "../domain/inte
 import { interfacesCompatible } from "../domain/interfaceCompatibility";
 import { assessInterfaceCompatibility } from "../domain/interfaceCompatibility";
 import { interfaceTypeLabel, PRESET_INTERFACE_TYPES } from "../domain/interfaceTypes";
+import { interfaceContractGroups } from "../domain/interfaceContractGroups";
 
 function interfaceSummary(item: PartInterface, members: ComponentMember[], customTypes: { id: string; label: string }[]): string {
   const size = item.interfaceSize;
@@ -167,9 +168,12 @@ export function InterfacesStage({ members, ports, slots, mates, interfaceTypes, 
     <div className="member-interface-list">
       {members.map(member => <section className="member-interface-group" key={member.id} aria-label={`${member.name}接口`}>
         <div className="member-interface-heading"><b>{member.role || member.name}</b><small>{member.interfaces.length} 个 · {member.code}</small></div>
+        <small className="interface-resize-hint">拖动右下角可独立调整窗口高度</small>
         {member.interfaces.length === 0 && <p className="empty-text">该零部件未定义接口</p>}
         <div className="member-interface-items">
-        {member.interfaces.map(item => {
+        {interfaceContractGroups(member.interfaces).map(group => <details className="interface-contract-group" key={group.key} open>
+        <summary><strong>{group.label}</strong><span>{group.interfaces.length} 个接口</span></summary>
+        {group.interfaces.map(item => {
           const selected = sameInterfaceSelection(selectedInterface, { memberId: member.id, interfaceId: item.id });
           const activePreview = selected && sameInterfaceSelection(interfacePreview?.selection || null, selectedInterface) ? interfacePreview : undefined;
           const resolvedInterfaces = activePreview?.status === "ready" ? activePreview.resolvedInterfaces : member.resolvedInterfaces;
@@ -184,7 +188,7 @@ export function InterfacesStage({ members, ports, slots, mates, interfaceTypes, 
               {previewable ? <CheckCircle2 size={14} aria-label="可按语义面预览"/> : <CircleHelp size={14} aria-label="缺少可定位几何数据"/>}
             </button>
           </div>;
-        })}
+        })}</details>)}
         </div>
       </section>)}
       {members.length === 0 && <p className="empty-text">添加零部件后可查看已定义接口</p>}

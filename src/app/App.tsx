@@ -140,6 +140,9 @@ export function App() {
        bindings={document.bindings}
        patterns={document.patterns}
       mateCount={mates.length}
+      undoCount={workspace.undoCount}
+      onUndoModel={workspace.undoModel}
+      undoDisabled={!workspace.editable || workspace.undoing}
       previewTemplate={workspace.previewTemplate}
       onShowAssembly={() => workspace.setPreviewTemplate(null)}
       selectedMemberId={workspace.selectedMemberId}

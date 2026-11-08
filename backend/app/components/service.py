@@ -151,7 +151,9 @@ def interfaces_compatible(a, b):
 def apply_action(document: ComponentDocument, action: TypedAction) -> ComponentDocument:
     action = ComponentAction.validate_python(action)
     data = document.model_dump(by_alias=True)
-    if action.type == "reset":
+    if action.type == "model.restore":
+        data.update(action.model.model_dump(by_alias=True))
+    elif action.type == "reset":
         data = create_component_document().model_dump(by_alias=True)
         data["revision"] = document.revision
     elif action.type == "definition.patch":

@@ -32,6 +32,19 @@ def source(identifier):
 
 
 class ComponentTests(unittest.TestCase):
+    def test_model_restore_preserves_non_model_edits(self):
+        with TestClient(create_app(dist_dir=None)) as client:
+            draft = self.create(client)
+            model = {key: draft['document'][key] for key in ('assembly', 'ports', 'bindings', 'patterns', 'slots')}
+            added = self.action(client, draft, {'type': 'member.add', 'member': member('a')})
+            self.assertEqual(added.status_code, 200, added.text)
+            renamed = self.action(client, added.json(), {'type': 'definition.patch', 'patch': {'name': '保留名称'}})
+            self.assertEqual(renamed.status_code, 200, renamed.text)
+            restored = self.action(client, renamed.json(), {'type': 'model.restore', 'model': model})
+            self.assertEqual(restored.status_code, 200, restored.text)
+            self.assertEqual(restored.json()['document']['assembly']['members'], [])
+            self.assertEqual(restored.json()['document']['definition']['name'], '保留名称')
+
     def test_remove_mate_preserves_interfaces_and_allows_followup_edits(self):
         with TestClient(create_app(dist_dir=None)) as client:
             draft = self.create(client)

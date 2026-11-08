@@ -491,8 +491,21 @@ class RuleRemoveAction(ComponentModel):
     id: str
 
 
+class ModelRestoreState(ComponentModel):
+    assembly: Assembly
+    ports: list[ComponentPort]
+    bindings: list[ParameterBinding]
+    patterns: list[ComponentPattern]
+    slots: list[ComponentSlot]
+
+
+class ModelRestoreAction(ComponentModel):
+    type: Literal["model.restore"]
+    model: ModelRestoreState
+
+
 TypedAction = Annotated[
-    ResetAction | DefinitionPatchAction | MemberAddAction | MemberPatchAction | MemberRemoveAction
+    ModelRestoreAction | ResetAction | DefinitionPatchAction | MemberAddAction | MemberPatchAction | MemberRemoveAction
     | MateAddAction | MateRemoveAction | SlotAddAction | SlotPatchAction | SlotRemoveAction | PortAddAction | PortRemoveAction | PortRenameAction | InterfaceTypeSetAction | InterfaceTypesMergeAction | ParameterValueAction | ParameterAddAction | ParameterRemoveAction | BindingSetAction | PatternAddAction | PatternRemoveAction | RuleAddAction | RuleRemoveAction | RuleExpressionAction,
     Field(discriminator="type"),
 ]

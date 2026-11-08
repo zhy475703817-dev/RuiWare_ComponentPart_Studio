@@ -35,6 +35,32 @@ export function useComponentWorkspace() {
   const addingLock = useRef(false);
   const [libraryRefreshToken, setLibraryRefreshToken] = useState(0);
   const { document, checks } = shared;
+  type ModelState = Extract<ComponentAction, { type: "model.restore" }>["model"];
+  const modelHistory = useRef<ModelState[]>([]);
+  const [undoCount, setUndoCount] = useState(0);
+  const [undoing, setUndoing] = useState(false);
+  useEffect(() => { modelHistory.current = []; setUndoCount(0); }, [shared.draftId]);
+  function rememberModel() {
+    const current = controller.current?.getSnapshot().document;
+    if (!current) return;
+    const { assembly, ports, bindings, patterns, slots } = current;
+    modelHistory.current = [...modelHistory.current, structuredClone({ assembly, ports, bindings, patterns, slots })].slice(-10);
+    setUndoCount(modelHistory.current.length);
+  }
+  async function undoModel() {
+    const workspace = controller.current;
+    if (!workspace || undoing || !editable || !modelHistory.current.length) return;
+    setUndoing(true);
+    try {
+      await workspace.flush();
+      const model = modelHistory.current.at(-1)!;
+      if (!workspace.dispatch({ type: "model.restore", model })) return;
+      await workspace.flush();
+      modelHistory.current.pop(); setUndoCount(modelHistory.current.length);
+      resetSelection(); setMessage("已撤回上一步模型操作。");
+    } catch { setMessage("撤回尚未保存，请处理草稿同步状态后重试。"); }
+    finally { setUndoing(false); }
+  }
   const assemblyStateKey = connectionStateKey(shared.draftId, document);
   const geometryKey = JSON.stringify([shared.draftId, document.assembly.members.map(member => [member.id, member.template, member.parameterValues]), document.assembly.mates]);
   const syncedGeometry = useRef("");
@@ -127,6 +153,8 @@ export function useComponentWorkspace() {
   }
 
   function removeMember(id: string) {
+    if (!editable || !document.assembly.members.some(member => member.id === id)) return;
+    rememberModel();
     if (!dispatch({ type: "member.remove", id })) return;
     if (selectedMemberId === id) setSelectedMemberId(null);
     setMessage("已删除成员，并清理关联的连接、接口及参数绑定");
@@ -140,6 +168,7 @@ export function useComponentWorkspace() {
     member.name = `${source.name} 副本`;
     member.role = `${source.role} 副本`;
     member.position = [source.position[0] + 40, source.position[1], source.position[2]];
+    rememberModel();
     if (!dispatch({ type: "member.add", member })) return;
     setSelectedMemberId(member.id);
     setMessage(`已复制 ${source.name}`);
@@ -154,6 +183,8 @@ export function useComponentWorkspace() {
   function transformMember(id: string, position: Vector3, rotation: Vector3) {
     const member = document.assembly.members.find(item => item.id === id);
     if (!member) return;
+    if (!editable || JSON.stringify([member.position, member.rotation]) === JSON.stringify([position, rotation])) return;
+    rememberModel();
     const delta: Vector3 = [position[0] - member.position[0], position[1] - member.position[1], position[2] - member.position[2]];
     connectedMemberIds(id).forEach(memberId => {
       const item = document.assembly.members.find(candidate => candidate.id === memberId);
@@ -202,6 +233,7 @@ export function useComponentWorkspace() {
         setMessage("成员已变化，请重新点击贴地。");
         return;
       }
+      rememberModel();
       if (!workspace.dispatch({ type: "member.patch", id, patch: { position } })) return;
       setMessage(`已将 ${currentMember.name} 贴地，当前最低点 z = 0 mm`);
     } catch {
@@ -250,6 +282,7 @@ export function useComponentWorkspace() {
       if (controller.current !== workspace || connectionStateKey(current.draftId, current.document) !== connectionStateKey(initial.draftId, initial.document)) {
         setMessage("模型或连接状态已变化，请重新连接。"); return false;
       }
+      rememberModel();
       if (!workspace.dispatch({ type: "mate.add", mate: { id: crypto.randomUUID(), from, to, relation, offset: 0 } })) return false;
       workspace.dispatch({ type: "member.patch", id: bMember.id, patch });
       await workspace.flush();
@@ -262,6 +295,8 @@ export function useComponentWorkspace() {
   }
 
   function removeConnection(id: string) {
+    if (!editable || !document.assembly.mates.some(mate => mate.id === id)) return;
+    rememberModel();
     if (!dispatch({ type: "mate.remove", id })) { setMessage("连接已不存在或已刷新"); return; }
     setMessage("已删除接口之间的连接；原有接口保留，零部件恢复独立移动");
   }
@@ -378,6 +413,7 @@ export function useComponentWorkspace() {
         if (workspace !== controller.current || workspace.getSnapshot().draftId !== draftId ||
             workspace.getSnapshot().document.revision !== snapshot.document.revision) throw new Error("草稿已更新，请重新加入模板。");
       }
+      rememberModel();
       if (!workspace.dispatch({ type: "member.add", member })) throw new Error("草稿暂不可编辑，请先处理同步问题。");
       // Apply placement separately so inferred component dimensions do not resize the parts again.
       if (position) workspace.dispatch({ type: "member.patch", id: member.id, patch: { position } });
@@ -407,7 +443,7 @@ export function useComponentWorkspace() {
   return { document, dispatch, stage, setStage, selectedMemberId, setSelectedMemberId, previewTemplate, setPreviewTemplate,
     selectionResetToken, message: syncMessage, setMessage, checks, newDraft, removeMember, addMate, connectInterfaces, removeConnection, setInterfaceExposure, renamePort, setInterfaceType, addSlot, patchSlot, removeSlot, exportDraft,
     shared, editable, selectDraft, publishDraft, publishing, adding, addPublishedTemplate, libraryRefreshToken,
-    copyMember, moveMember, transformMember, groundMember,
+    copyMember, moveMember, transformMember, groundMember, undoModel, undoCount, undoing,
     downloadLocalDraft, dismissAgentChanges: () => controller.current?.dismissAgentChanges(),
     retrySave: () => { void controller.current?.retry().catch(() => {}); },
     reloadDraft: () => { void controller.current?.reload(); },

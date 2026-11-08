@@ -7,6 +7,7 @@ import type { ComponentDefinition, ComponentDocument, ComponentMember, Component
 const PRESET_CONNECTION_TYPE_IDS = new Set<string>(PRESET_INTERFACE_TYPES.map(item => item.id));
 
 export type ComponentAction =
+  | { type: "model.restore"; model: Pick<ComponentDocument, "assembly" | "ports" | "bindings" | "patterns" | "slots"> }
   | { type: "reset" }
   | { type: "definition.patch"; patch: Partial<ComponentDefinition> }
   | { type: "member.add"; member: ComponentMember }
@@ -35,6 +36,7 @@ export type ComponentAction =
 export function componentReducer(document: ComponentDocument, action: ComponentAction): ComponentDocument {
   const next = (patch: Partial<ComponentDocument>): ComponentDocument => ({ ...document, ...patch, revision: document.revision + 1 });
   switch (action.type) {
+    case "model.restore": return next(structuredClone(action.model));
     case "reset": return createComponentDocument();
     case "definition.patch":
       if (Object.entries(action.patch).every(([key, value]) => document.definition[key as keyof ComponentDefinition] === value)) return document;
