@@ -37,7 +37,7 @@ class MatingDimension(ComponentModel):
 
     @model_validator(mode="after")
     def validate_tolerances(self):
-        if self.lowerTolerance > 0 or self.upperTolerance < 0:
+        if self.lowerTolerance > self.upperTolerance:
             raise ValueError("Invalid mating dimension tolerance")
         if self.parameterRef is not None and not self.parameterRef.strip():
             raise ValueError("Invalid mating dimension parameter reference")
@@ -89,6 +89,17 @@ class PartInterface(ComponentModel):
     referenceFrame: dict[str, object] | None = None
     mating: MatingContract | None = None
     region: dict[str, object] | None = None
+
+    @model_validator(mode="after")
+    def repair_legacy_face_carrier(self):
+        # Earlier imports incorrectly inferred every connecting interface as an axis.
+        face_refs = {"part.face.front", "part.face.back", "part.face.left", "part.face.right", "part.endFace.start", "part.endFace.end"}
+        if (self.type == "axis" and self.interfaceType == "connecting"
+                and self.locatingType is None and self.mating is not None
+                and self.mating.family == "plane-contact" and self.geometryRefs
+                and all(ref in face_refs for ref in self.geometryRefs)):
+            self.type = "plane"
+        return self
 
     @model_serializer(mode="wrap")
     def preserve_optional_metadata(self, handler):
@@ -340,6 +351,8 @@ class MemberPatch(PatchModel):
     rotation: Vector3 | None = None
     planarMovement: bool | None = None
     parameterValues: dict[str, ParameterValue] | None = None
+    interfaces: list[PartInterface] | None = None
+    resolvedInterfaces: list[dict[str, object]] | None = None
 
 
 class ResetAction(ComponentModel):
@@ -370,6 +383,11 @@ class MemberRemoveAction(ComponentModel):
 class MateAddAction(ComponentModel):
     type: Literal["mate.add"]
     mate: Mate
+
+
+class MateRemoveAction(ComponentModel):
+    type: Literal["mate.remove"]
+    id: str
 
 
 class SlotAddAction(ComponentModel):
@@ -475,7 +493,7 @@ class RuleRemoveAction(ComponentModel):
 
 TypedAction = Annotated[
     ResetAction | DefinitionPatchAction | MemberAddAction | MemberPatchAction | MemberRemoveAction
-    | MateAddAction | SlotAddAction | SlotPatchAction | SlotRemoveAction | PortAddAction | PortRemoveAction | PortRenameAction | InterfaceTypeSetAction | InterfaceTypesMergeAction | ParameterValueAction | ParameterAddAction | ParameterRemoveAction | BindingSetAction | PatternAddAction | PatternRemoveAction | RuleAddAction | RuleRemoveAction | RuleExpressionAction,
+    | MateAddAction | MateRemoveAction | SlotAddAction | SlotPatchAction | SlotRemoveAction | PortAddAction | PortRemoveAction | PortRenameAction | InterfaceTypeSetAction | InterfaceTypesMergeAction | ParameterValueAction | ParameterAddAction | ParameterRemoveAction | BindingSetAction | PatternAddAction | PatternRemoveAction | RuleAddAction | RuleRemoveAction | RuleExpressionAction,
     Field(discriminator="type"),
 ]
 ComponentAction = TypeAdapter(TypedAction)

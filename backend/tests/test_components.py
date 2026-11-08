@@ -32,6 +32,33 @@ def source(identifier):
 
 
 class ComponentTests(unittest.TestCase):
+    def test_remove_mate_preserves_interfaces_and_allows_followup_edits(self):
+        with TestClient(create_app(dist_dir=None)) as client:
+            draft = self.create(client)
+            for identifier in ("a", "b"):
+                response = self.action(client, draft, {"type": "member.add", "member": member(identifier)})
+                self.assertEqual(response.status_code, 200, response.text)
+                draft = response.json()
+            mate = {"id": "connection", "from": source("a"), "to": source("b"), "relation": "贴合", "offset": 0}
+            response = self.action(client, draft, {"type": "mate.add", "mate": mate})
+            self.assertEqual(response.status_code, 200, response.text)
+            draft = response.json()
+            original_members = draft["document"]["assembly"]["members"]
+            response = self.action(client, draft, {"type": "mate.remove", "id": "connection"})
+            self.assertEqual(response.status_code, 200, response.text)
+            draft = response.json()
+            self.assertEqual(draft["document"]["assembly"]["mates"], [])
+            self.assertEqual(draft["document"]["assembly"]["members"], original_members)
+            response = self.action(client, draft, {"type": "mate.remove", "id": "connection"})
+            self.assertEqual(response.status_code, 200, response.text)
+            response = self.action(client, response.json(), {"type": "member.patch", "id": "a", "patch": {"position": [10, 20, 30]}})
+            self.assertEqual(response.status_code, 200, response.text)
+            response = self.action(client, response.json(), {"type": "mate.add", "mate": mate})
+            self.assertEqual(response.status_code, 200, response.text)
+            response = self.action(client, response.json(), {"type": "mate.remove", "id": "connection"})
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json()["document"]["assembly"]["mates"], [])
+
     def setUp(self):
         self.directory = TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
