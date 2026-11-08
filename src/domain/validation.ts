@@ -1,16 +1,19 @@
 import { getInterface, hasInterface, samePartInterface } from "./component.ts";
 import type { ComponentDocument } from "./component.ts";
 import { effectiveParameterBounds } from "./parameterMetrics.ts";
+import { isValidComponentCode } from "./componentCode.ts";
 
 export type ValidationCheck = { id: string; label: string; status: "pass" | "fail" | "pending"; message: string };
 
-export function validateComponent(document: ComponentDocument): ValidationCheck[] {
+export function validateComponent(document: ComponentDocument, codeUnique = true): ValidationCheck[] {
   const { members, mates } = document.assembly;
   const memberIds = new Set(members.map(member => member.id));
   const parameterIds = new Set(document.parameters.map(parameter => parameter.id));
   const check = (id: string, label: string, passed: boolean, failure: string): ValidationCheck => ({ id, label, status: passed ? "pass" : "fail", message: passed ? "基础数据检查通过" : failure });
   return [
     check("definition", "组件名称", document.definition.name.trim().length > 0, "请填写组件名称"),
+    check("code.format", "组件编码格式", isValidComponentCode(document.definition.code), "编码须以大写字母开头，仅包含大写字母、数字、下划线或短横线，长度 3–40 位"),
+    check("code.unique", "组件编码唯一", codeUnique, "该编码已被其他组件草稿使用"),
     check("members", "装配成员", members.length > 0 && members.every(member => member.id.trim()) && memberIds.size === members.length, "请加入零部件，成员标识需唯一"),
     check("references", "固定版本引用", members.length > 0 && members.every(member => member.template.publicationId.trim() && member.template.templateId.trim() && Number.isSafeInteger(member.template.version) && member.template.version > 0 && /^[a-f0-9]{64}$/i.test(member.template.sha256)), "成员需引用有效发布版本及模板包校验值"),
     check("mates", "内部连接数据", (members.length < 2 || mates.length > 0) && new Set(mates.map(mate => mate.id)).size === mates.length && mates.every(mate => hasInterface(document, mate.from) && hasInterface(document, mate.to) && mate.from.memberId !== mate.to.memberId && Number.isFinite(mate.offset)), "请检查连接两端的成员与接口；多成员组件需建立内部连接"),

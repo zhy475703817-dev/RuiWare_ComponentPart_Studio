@@ -369,3 +369,13 @@ test('导出保留旧连接和接口字段，并附带可无歧义读取的结�
   assert.equal(result.stages.ports[0].sourceInterfaceId, 'face.left');
   assert.equal(result.stages.assembly.members[0].bindings.length, 2400);
 });
+
+test('组件编码匹配零部件平台的大写字母数字格式', () => {
+  const draft = createComponentDocument();
+  draft.definition.code = 'CMP-001_A';
+  assert.equal(validateComponent(draft).find(check => check.id === 'code.format').status, 'pass');
+  draft.definition.code = 'bad code';
+  assert.equal(validateComponent(draft).find(check => check.id === 'code.format').status, 'fail');
+  draft.definition.code = 'AB';
+  assert.equal(validateComponent(draft).find(check => check.id === 'code.format').status, 'fail');
+});

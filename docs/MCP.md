@@ -57,7 +57,7 @@
 | `component_search_templates` | 按名称/编码搜索发布版本；`query`、`limit`、`offset` |
 | `component_get_template` | 按 `publicationId` 读取发布元数据，可用 `sha256` 固定版本 |
 | `component_get_template_preview` | 必须提供 `publicationId`、`sha256`，校验包和 STL，返回参数、原始接口和绝对模型地址 |
-| `component_create_draft` | 新建持久化草稿；可设 `name`（省略或空字符串使用默认/文档名称），也可提供符合工具 schema 的内部 `ComponentDocument` |
+| `component_create_draft` | 新建持久化草稿；未提供组件编码时自动分配唯一 `CMP-NNNN` 编码；可设 `name`（省略或空字符串使用默认/文档名称），也可提供符合工具 schema 的内部 `ComponentDocument` |
 | `component_list_drafts` | 列出草稿编号、名称、修订号和更新时间 |
 | `component_get_draft` | 读取草稿及基础验证结果 |
 | `component_update_definition` | 通过 `patch: {name?, code?, category?, description?}` 修改指定定义字段，未提供的字段保留 |
@@ -99,7 +99,7 @@
 
 ## 网页同步
 
-网页自动打开上次使用的草稿；没有草稿时创建一份。右侧“共享草稿”可选择 AI 创建的草稿，并复制包含 `?draft=<编号>` 的链接。当前编号保存在浏览器本地，实际草稿内容存于后端 SQLite，因此刷新页面和重启后端不会丢失已保存内容。
+网页自动打开本机上次使用的草稿；没有草稿时创建一份。草稿编号保存在浏览器本地，实际内容存于后端 SQLite。网页不提供草稿分享链接或草稿切换面板；Agent 通过 MCP 的 `component_list_drafts`、`component_get_draft` 和修改工具定位并编辑草稿，网页自动同步更新。刷新页面和重启后端不会丢失已保存内容。
 
 网页可见时每两秒读取最新状态，窗口重新聚焦时也会读取。编辑期间立即显示本地输入、串行保存；未保存操作不会被轮询覆盖。同步检查成功后显示后端验证结果；保存期间显示的是本地预检查。
 
