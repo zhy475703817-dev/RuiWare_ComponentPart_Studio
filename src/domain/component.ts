@@ -14,6 +14,7 @@ export type PartInterface = {
   name: string;
   type: "plane" | "axis" | "point";
   tags: string[];
+  connectionTypeId?: string | null;
   declarationMode?: "staticGeometry" | "featureDerived";
   interfaceType?: string;
   locatingType?: string;
@@ -27,7 +28,29 @@ export type PartInterface = {
   /** Physical connection envelope. Values are millimetres unless a unit is provided. */
   interfaceSize?: { diameter?: number; width?: number; height?: number; depth?: number; tolerance?: number; unit?: string };
   connectionMethod?: string;
+  referenceFrame?: { originRef?: string | null; axis: "x" | "y" | "z" | "-x" | "-y" | "-z" };
+  mating?: MatingContract;
   region?: { mode?: string; uStart?: number; vStart?: number; uSpan?: number; vSpan?: number; uSpanExpression?: string; vSpanExpression?: string; countExpression?: string };
+};
+
+export type ComponentInterfaceType = { id: string; label: string };
+
+export type MatingDimension = {
+  nominal: number;
+  lowerTolerance: number;
+  upperTolerance: number;
+  unit: "mm" | "cm" | "m" | "in";
+  parameterRef?: string | null;
+};
+export type MatingContract = {
+  version: number;
+  family: string;
+  role: string;
+  standardId?: string | null;
+  connectionMethod?: string | null;
+  dimensions: Record<string, MatingDimension>;
+  allowedRelations: Array<"贴合" | "同轴" | "重合">;
+  capacity: number;
 };
 
 export type MemberParameterDefinition = {
@@ -60,6 +83,7 @@ export type ComponentMember = {
   template: PartTemplateReference;
   position: Vector3;
   rotation: Vector3;
+  planarMovement?: boolean;
   parameterValues: Record<string, ParameterValue>;
   parameterDefinitions?: MemberParameterDefinition[];
   resolvedInterfaces?: ResolvedPartInterface[];
@@ -70,11 +94,22 @@ export type InterfaceSource = { memberId: string; interfaceId: string };
 export type InterfaceSelection = InterfaceSource;
 export type Mate = { id: string; from: InterfaceSource; to: InterfaceSource; relation: "贴合" | "同轴" | "重合"; offset: number };
 export type ComponentPort = { id: string; name: string; source: InterfaceSource; tags: string[]; interface?: PartInterface };
-export type ComponentSlot = { id: string; name: string; memberId: string | null; required: boolean };
+export type ComponentSlot = {
+  id: string;
+  name: string;
+  required: boolean;
+  /** Interface in the existing component that defines this replacement slot. */
+  baseInterface: InterfaceSource | null;
+  /** Member currently occupying the slot; interfaceId must be set with it. */
+  memberId: string | null;
+  interfaceId: string | null;
+};
 export type ComponentParameter = { id: string; label: string; value: number | null; unit: string; min: number; max: number };
 export type ParameterBinding = { id: string; parameterId: string; memberId: string; memberParameterId: string };
 export type ComponentPattern = { id: string; label: string; memberIds: string[]; countParameterId: string; spacingParameterId: string; axis: "x" | "y" | "z" };
 export type ComponentRule = { id: string; kind?: "constraint" | "composition"; label?: string; expression: string };
+export type ConnectionType = "螺栓连接" | "焊接" | "卡扣连接" | "插接" | "铆接" | "胶接" | "型材槽连接" | "销钉连接" | "插接/卡扣" | "自定义";
+export type EvidenceFile = { id: string; fileName: string; mediaType: string; size: number; sha256: string; dataUrl?: string | null };
 export type ConnectionMethod = { mode: "preset" | "custom"; value: string; details: string };
 export type EvidenceAttachment = { id: string; name: string; mediaType: string; size: number; addedAt: string };
 export type ComponentDefinition = {
@@ -86,8 +121,13 @@ export type ComponentDefinition = {
   owner: string;
   organization: string;
   searchTags: string[];
-  connectionForms: { internal: ConnectionMethod; interComponent: ConnectionMethod };
+  partConnectionType: ConnectionType;
+  partConnectionCustom: string;
+  componentConnectionType: ConnectionType;
+  componentConnectionCustom: string;
   designConstraints: string;
+  evidenceFiles: EvidenceFile[];
+  connectionForms: { internal: ConnectionMethod; interComponent: ConnectionMethod };
   evidence: EvidenceAttachment[];
 };
 
@@ -100,6 +140,7 @@ export type ComponentDocument = {
   definition: ComponentDefinition;
   assembly: { members: ComponentMember[]; mates: Mate[] };
   ports: ComponentPort[];
+  interfaceTypes: ComponentInterfaceType[];
   slots: ComponentSlot[];
   parameters: ComponentParameter[];
   bindings: ParameterBinding[];
@@ -114,13 +155,15 @@ export function createComponentDocument(): ComponentDocument {
     definition: {
       name: "横梁组件", code: "", category: "货架组件", description: "由多个已发布零部件组成的可复用组件模板",
       projectCode: "", owner: "", organization: "", searchTags: [],
+      partConnectionType: "螺栓连接", partConnectionCustom: "",
+      componentConnectionType: "螺栓连接", componentConnectionCustom: "",
       connectionForms: {
         internal: { mode: "preset", value: "螺栓连接", details: "" },
         interComponent: { mode: "preset", value: "插接/卡扣", details: "" },
       },
-      designConstraints: "", evidence: [],
+      designConstraints: "", evidenceFiles: [], evidence: [],
     },
-    assembly: { members: [], mates: [] }, ports: [], slots: [], bindings: [], patterns: [],
+    assembly: { members: [], mates: [] }, ports: [], interfaceTypes: [], slots: [], bindings: [], patterns: [],
     parameters: [
       { id: "componentLength", label: "组件总长", value: 2400, unit: "mm", min: 1000, max: 6000 },
       { id: "componentWidth", label: "组件总宽", value: 600, unit: "mm", min: 100, max: 3000 },

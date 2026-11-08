@@ -41,12 +41,11 @@ export function App() {
     {workspace.shared.draftId && <button className="ghost" onClick={workspace.reloadDraft}>{workspace.shared.dirty ? "放弃未保存内容并重新读取" : "重新读取"}</button>}
   </section>;
   const clearInterfacePreview = () => { interfacePreviewAbort.current?.abort(); interfacePreviewAbort.current = null; setSelectedInterface(null); setInterfacePreview(undefined); };
-  const selectPanelMember = (id: string) => { workspace.setPreviewTemplate(null); workspace.setSelectedMemberId(id); clearInterfacePreview(); setPanelSelectionToken(token => token + 1); };
+  const selectPanelMember = (id: string) => { workspace.setSelectedMemberId(id); clearInterfacePreview(); setPanelSelectionToken(token => token + 1); };
   const selectInterface = (selection: InterfaceSelection) => {
     interfacePreviewAbort.current?.abort();
     interfacePreviewAbort.current = null;
     setSelectedInterface(selection);
-    workspace.setPreviewTemplate(null);
     workspace.setSelectedMemberId(selection.memberId);
     setPanelSelectionToken(token => token + 1);
     const member = members.find(item => item.id === selection.memberId);
@@ -92,11 +91,11 @@ export function App() {
 
   function renderStage() {
     switch (stage) {
-      case "definition": return <DefinitionStage definition={document.definition} codeUnique={componentCodeUnique} onChange={patch => dispatch({ type: "definition.patch", patch })}/>;
-      case "assembly": return <AssemblyStage mates={mates} onConnect={workspace.connectFirstInterfaces} onInherit={workspace.inheritInterface}
-        selectedMember={workspace.selectedMember} bindings={document.bindings}
+      case "definition": return <DefinitionStage definition={document.definition} codeUnique={componentCodeUnique} draftId={workspace.shared.draftId} onChange={patch => dispatch({ type: "definition.patch", patch })}/>;
+      case "assembly": return <AssemblyStage members={members} mates={mates} onAddMate={workspace.addMate}
+        selectedMember={members.find(member => member.id === workspace.selectedMemberId)} bindings={document.bindings}
         onMemberChange={patch => { if (workspace.selectedMemberId) dispatch({ type: "member.patch", id: workspace.selectedMemberId, patch }); }}/>;
-      case "interfaces": return <InterfacesStage members={members} ports={document.ports} slots={document.slots} selectedInterface={selectedInterface} interfacePreview={interfacePreview} onSelectInterface={selectInterface}/>;
+      case "interfaces": return <InterfacesStage members={members} ports={document.ports} slots={document.slots} interfaceTypes={document.interfaceTypes ?? []} selectedInterface={selectedInterface} interfacePreview={interfacePreview} editable={workspace.editable} onSelectInterface={selectInterface} onSetInterfaceExposure={workspace.setInterfaceExposure} onSetInterfaceType={workspace.setInterfaceType} onRenamePort={workspace.renamePort} onAddSlot={workspace.addSlot} onPatchSlot={workspace.patchSlot} onRemoveSlot={workspace.removeSlot}/>;
       case "parameters": return <ParametersStage parameters={document.parameters} bindings={document.bindings} patterns={document.patterns} rules={document.rules} members={members} definitionName={document.definition.name} definitionCode={document.definition.code} onChange={(id, value) => dispatch({ type: "parameter.value", id, value })} onBindingChange={(id, binding) => dispatch({ type: "binding.set", id, binding })} onAddParameter={parameter => dispatch({ type: "parameter.add", parameter })} onRemoveParameter={id => dispatch({ type: "parameter.remove", id })} onAddPattern={pattern => dispatch({ type: "pattern.add", pattern })} onRemovePattern={id => dispatch({ type: "pattern.remove", id })} onAddRule={rule => dispatch({ type: "rule.add", rule })} onRemoveRule={id => dispatch({ type: "rule.remove", id })}/>;
       case "rules": return <RulesStage rules={document.rules} onChange={(id, expression) => dispatch({ type: "rule.expression", id, expression })}/>;
       case "validation": return <ValidationStage checks={checks} revision={document.revision} onValidate={() => workspace.setMessage(checks.some(check => check.status === "fail") ? "基础数据检查未通过，请处理失败项" : "基础数据检查通过；装配求解和工程规则执行仍待接入")}/>;
@@ -145,7 +144,9 @@ export function App() {
       onSelectMember={selectViewportMember}
       onHoverMember={setHoveredMemberId}
       compatibleMemberIds={compatibleIds}
-      onMoveMember={workspace.moveMember}
+      onTransformMember={workspace.transformMember}
+      onSetPlanarMovement={(id, enabled) => dispatch({ type: "member.patch", id, patch: { planarMovement: enabled } })}
+      onGroundMember={workspace.groundMember}
       onCopyMember={workspace.copyMember}
       onRemoveMember={workspace.removeMember}
       onDropTemplate={() => {

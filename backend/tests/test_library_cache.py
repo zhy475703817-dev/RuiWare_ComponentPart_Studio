@@ -21,8 +21,8 @@ from backend.tests.storage_helpers import MemoryMinio
 from backend.tests.test_preview import STL, metadata
 
 
-def reconstructable_package(valid=True, *, draft_id='draft-1'):
-    draft = TemplateDraft(id=draft_id, code='BEAM-1', name='缓存横梁')
+def reconstructable_package(valid=True, *, template_id='draft-1', code='BEAM-1'):
+    draft = TemplateDraft(id=template_id, code=code, name='缓存横梁')
     draft.materialValidationSamples = [MaterialValidationSample.model_validate({'id': 'material.nominal', 'role': 'nominal', 'name': 'steel', 'bindingId': 'mat-1',
                                        'bindingMode': 'copy', 'materialCode': 'M1', 'materialName': 'steel',
                                        'materialThickness': 2, 'requiredForAdmission': True})]
@@ -160,29 +160,24 @@ class LibraryCacheTests(unittest.TestCase):
             self.assertEqual(self.worker.call_count, 1)
             self.assertEqual(client.get(f'{prefix}/reconstruction?sha256={"0" * 64}').status_code, 409)
 
-    def test_deleted_history_leaves_catalog_immediately_but_local_package_remains_readable(self):
+    def test_new_and_deleted_templates_require_apply_and_unchanged_models_are_reused(self):
         with self.client() as client:
             self.settled(client)
             self.payloads['version-2'] = self.payloads['version-1']
             self.records.append({**self.records[0], 'publicationId': 'version-2', 'version': 2})
             body = self.settled(client, refresh=True)
-            self.assertEqual(body['count'], 0, 'a deleted old release must leave the active catalog immediately')
+            self.assertEqual(body['count'], 1)
             self.assertEqual(body['updateCount'], 1)
             applied = client.post('/api/template-library/apply').json()
-            self.assertEqual([item['publicationId'] for item in applied['items']], ['version-2'])
+            self.assertEqual(applied['count'], 1)
             self.assertEqual(applied['updateCount'], 0)
-            digest = self.records[0]['sha256']
-            historical = client.post(f'/api/published-templates/version-1/reconstruction/model?sha256={digest}', json={'parameters': {}})
-            self.assertEqual(historical.status_code, 200, historical.text)
-            self.assertEqual(historical.content, STL)
+            model_runs = self.worker.call_count
             self.records = []
             body = self.settled(client, refresh=True)
             self.assertEqual(body['count'], 1)
             self.assertEqual(body['updateCount'], 1)
             self.assertEqual(client.post('/api/template-library/apply').json()['count'], 0)
-        package_key = f"{self.settings.minio.prefix}/version-1/template.rwpart"
-        self.assertGreaterEqual(self.storage.reads.count(package_key), 1)
-        self.assertTrue(list((self.settings.draft_db.parent / 'template-cleanup' / 'backups').glob('*/manifest.json')))
+            self.assertEqual(self.worker.call_count, model_runs)
 
     def test_invalid_templates_stay_hidden_and_transient_failure_can_retry(self):
         self.payloads['version-1'] = reconstructable_package(False)
@@ -324,95 +319,15 @@ class LibraryCacheTests(unittest.TestCase):
         asyncio.run(scenario())
 
     def test_failed_package_does_not_block_healthy_later_templates(self):
-        self.payloads['version-2'] = reconstructable_package(draft_id='another-draft')
-        self.records.append({**metadata(self.payloads['version-2']), 'publicationId': 'version-2', 'templateId': 'another-draft', 'version': 2})
+        self.payloads['version-2'] = reconstructable_package(template_id='draft-2', code='BEAM-2')
+        self.records.append({**metadata(self.payloads['version-2']), 'publicationId': 'version-2',
+                             'templateId': 'draft-2', 'code': 'BEAM-2', 'version': 2})
         self.fail_ids.add('version-1')
         with TestClient(create_app(self.settings, transport=httpx.MockTransport(self.upstream), dist_dir=None)) as client:
             body = self.settled(client)
             self.assertEqual([item['publicationId'] for item in body['items']], ['version-2'])
             self.assertFalse(body['initialized'])
             self.assertIn('REMOTE_STORAGE_UNAVAILABLE', body['errors'])
-
-    def test_only_latest_version_is_reconstructed_and_unreadable_history_blocks_cleanup(self):
-        self.payloads['version-2'] = self.payloads['version-1']
-        self.records[0]['createdAt'] = '2026-11-01T00:00:00Z'
-        self.records.append({**self.records[0], 'publicationId': 'version-2', 'version': 2, 'createdAt': '2026-10-25T00:00:00Z'})
-        self.fail_ids.add('version-1')
-        with self.client() as client:
-            body = self.settled(client)
-            self.assertEqual([item['publicationId'] for item in body['items']], ['version-2'])
-            self.assertEqual(body['errors'], [])
-            self.assertTrue(body['initialized'])
-            self.assertEqual(body['cleanup']['status'], 'blocked')
-        self.assertEqual(self.worker.call_count, 1)
-
-    def test_invalid_latest_version_hides_template_instead_of_falling_back(self):
-        self.payloads['version-2'] = reconstructable_package(False)
-        self.records.append({**metadata(self.payloads['version-2']), 'publicationId': 'version-2', 'version': 2})
-        with self.client() as client:
-            body = self.settled(client)
-            self.assertEqual(body['items'], [])
-            self.assertEqual(body['errors'], [])
-            self.assertTrue(body['initialized'])
-        self.assertIn((self.settings.minio.bucket, f'{self.settings.minio.prefix}/version-1/template.rwpart'), self.storage.objects)
-
-    def test_saved_catalog_collapses_versions_before_model_filter_and_keeps_components(self):
-        from backend.app.library import PublishedTemplate
-        from backend.app.library_cache import LibraryCache
-
-        cache = LibraryCache(self.settings.draft_db, self.settings)
-        old = self.records[0]
-        latest = {**old, 'publicationId': 'version-2', 'version': 2}
-        # Same names and codes do not imply the same template.
-        other = {**old, 'publicationId': 'other-part', 'templateId': 'other-draft'}
-        components = [{**old, 'templateKind': 'component', 'publicationId': f'component-{version}', 'version': version} for version in (1, 2)]
-        for item in (old, latest, other):
-            cache.save_model(PublishedTemplate.model_validate(item), STL)
-        cache.stage('part', [old, latest, other])
-        cache.stage('component', components)
-        body = cache.snapshot()
-        self.assertEqual({item['publicationId'] for item in body['items']}, {'version-2', 'other-part', 'component-1', 'component-2'})
-        cache.save_model(PublishedTemplate.model_validate(latest), False)
-        self.assertEqual({item['publicationId'] for item in cache.snapshot()['items']}, {'other-part', 'component-1', 'component-2'})
-        cache.stage('part', [latest, other])
-        self.assertEqual(cache.snapshot()['updateCount'], 0, 'removing hidden history is not a template update')
-
-    def test_legacy_http_catalog_uses_latest_version_too(self):
-        self.payloads['version-2'] = self.payloads['version-1']
-        self.records.append({**self.records[0], 'publicationId': 'version-2', 'version': 2})
-        settings = Settings(api_url='http://parts.test', api_key='test-secret',
-                            draft_db=Path(self.tmp.name) / 'legacy-latest.sqlite3', minio=MinioSettings())
-        with self.client(settings) as client:
-            body = self.settled(client)
-            self.assertEqual([item['publicationId'] for item in body['items']], ['version-2'])
-        self.assertEqual(self.calls, ['/api/public/v1/templates', '/api/public/v1/templates/version-2/download'])
-
-    def test_repeated_version_uses_actual_publish_time_with_deterministic_tie(self):
-        from backend.app.library import PublishedTemplate
-        from backend.app.library_cache import LibraryCache
-
-        cache = LibraryCache(self.settings.draft_db, self.settings)
-        # 01:00 +08:00 is earlier than 00:00 UTC on the same calendar day.
-        records = [{**self.records[0], 'publicationId': identifier, 'createdAt': created} for identifier, created in (
-            ('z-earlier', '2026-11-01T01:00:00+08:00'),
-            ('a-later', '2026-11-01T00:00:00Z'),
-            ('b-later', '2026-11-01T00:00:00Z'))]
-        for item in records:
-            cache.save_model(PublishedTemplate.model_validate(item), STL)
-        cache.stage('part', records)
-        self.assertEqual([item['publicationId'] for item in cache.snapshot()['items']], ['b-later'])
-        cache.stage('part', list(reversed(records)))
-        self.assertEqual(cache.snapshot()['updateCount'], 0)
-
-    def test_same_name_code_and_revision_with_different_template_ids_are_kept(self):
-        self.records[0]['sourceRevision'] = 7
-        self.payloads['another-part'] = reconstructable_package(draft_id='another-draft')
-        self.records.append({**metadata(self.payloads['another-part']), 'publicationId': 'another-part',
-                             'templateId': 'another-draft', 'sourceRevision': 7})
-        with self.client() as client:
-            body = self.settled(client)
-            self.assertEqual({item['publicationId'] for item in body['items']}, {'version-1', 'another-part'})
-            self.assertEqual(body['errors'], [])
 
 
 if __name__ == '__main__':

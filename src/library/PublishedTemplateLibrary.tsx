@@ -6,7 +6,7 @@ import type { PublishedTemplate } from "./publishedLibrary";
 const formatDate = (value: string) => new Date(value).toLocaleString("zh-CN", { hour12: false });
 const formatSize = (size: number) => size < 1024 ? `${size} B` : size < 1024 ** 2 ? `${(size / 1024).toFixed(1)} KB` : `${(size / 1024 ** 2).toFixed(1)} MB`;
 const libraryGroups = [
-  { kind: "part", source: "零部件平台", title: "已发布零部件", description: "每个零件仅显示最新版本，用于搭建组件", Icon: Box },
+  { kind: "part", source: "零部件平台", title: "已发布零部件", description: "基础零件，用于搭建组件", Icon: Box },
   { kind: "component", source: "组件平台", title: "可复用组件", description: "已发布组件，可再次加入装配", Icon: Layers },
 ] as const;
 
@@ -64,12 +64,12 @@ export function PublishedTemplateLibrary({ onPreview, onAdd, onDragTemplate, mem
       if (timer.current) clearTimeout(timer.current);
     };
   }, [refreshToken]);
-
   useEffect(() => setSelectedId(null), [selectionResetToken]);
 
   const term = query.trim().toLocaleLowerCase();
   const visible = items.filter(item => `${item.name} ${item.code}`.toLocaleLowerCase().includes(term));
   const selected = items.find(item => publicationKey(item) === selectedId);
+  const alreadyAdded = (item: PublishedTemplate) => memberPublicationIds.includes(item.publicationId);
 
   return <section className="published-library" aria-label="已发布模板库">
     <div className="panel-title"><span><Boxes size={16}/>已发布模板</span><div className="library-actions"><small>{initialized || items.length ? items.length : "—"}</small><button className="library-refresh" onClick={() => void refresh("sync")} disabled={loading} aria-label={error ? "重试读取发布库" : "刷新发布库"} title="刷新发布库"><RefreshCw size={14} className={loading ? "spinning" : ""}/></button></div></div>
@@ -95,7 +95,7 @@ export function PublishedTemplateLibrary({ onPreview, onAdd, onDragTemplate, mem
       <button className={`part-card publication-card ${selectedId === publicationKey(item) ? "selected" : ""}`} draggable={!addDisabled} onDragStart={event => { event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData("text/plain", item.publicationId); onDragTemplate?.(item); }} onDragEnd={() => onDragTemplate?.(null)} onClick={() => { setSelectedId(current => current === publicationKey(item) ? null : publicationKey(item)); onPreview(item); }} aria-pressed={selectedId === publicationKey(item)} title="拖动到三维画布以加入组件">
       <i/><span><b>{item.name}</b><small className="publication-source-badge">{group.source}发布</small><small>{item.code} · V{item.version}</small><small>{formatDate(item.createdAt)}</small></span>
     </button>
-    <button className="publication-add" type="button" disabled={addDisabled} onClick={() => onAdd(item)} aria-label={`加入 ${item.name}`} title={added ? "再加入一个实例" : "加入组件"}><Plus size={16}/></button></div>
+    <button className="publication-add" type="button" disabled={added || addDisabled} onClick={() => onAdd(item)} aria-label={added ? `已加入 ${item.name}` : `加入 ${item.name}`} title={added ? "已加入组件" : "加入组件"}><Plus size={16}/></button></div>
     {selected && publicationKey(selected) === publicationKey(item) && <section className="publication-details" aria-label="所选模板发布详情"><h3>发布详情</h3><dl>
       <dt>发布来源</dt><dd>{group.source} · {group.title}</dd>
       <dt>模板名称</dt><dd>{selected.name}</dd>
@@ -106,7 +106,7 @@ export function PublishedTemplateLibrary({ onPreview, onAdd, onDragTemplate, mem
       <dt>模板包大小</dt><dd>{formatSize(selected.size)}</dd>
       <dt>SHA-256</dt><dd className="publication-hash">{selected.sha256}</dd>
     </dl>{selected.templateKind === "component" && selected.engineeringStatus === "incomplete" && <p className="hint">结构版本已发布，工程检查尚未全部通过。</p>}
-    <button className="primary full" disabled={addDisabled} onClick={() => onAdd(selected)}>{added ? "再加入一个实例" : "加入当前组件"}</button>
+    <button className="primary full" disabled={addDisabled || added} onClick={() => onAdd(selected)}>{added ? "已加入当前组件" : "加入当前组件"}</button>
     {selected.templateKind === "component" && <a className="ghost publication-download" href={`/api/published-components/${encodeURIComponent(selected.publicationId)}/download`} download>下载组件包</a>}
     <p className="hint">加入时固定此发布版本；后续发布不会自动替换已有成员。</p></section>}
     </Fragment>;

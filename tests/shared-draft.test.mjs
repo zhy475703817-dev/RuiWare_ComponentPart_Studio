@@ -106,6 +106,23 @@ test('网络失败保留待保存编辑，重试仍用原修订；响应丢失�
   assert.equal(workspace.getSnapshot().document.definition.name, '已保存但响应丢失');
 });
 
+test('服务端拒绝无效槽位操作后恢复编辑状态', async () => {
+  const { api } = server();
+  const apply = api.apply;
+  api.apply = async (...args) => {
+    throw Object.assign(new Error('invalid slot'), { code: 'INVALID_SLOT_NAME' });
+  };
+  const workspace = new SharedDraftController(api);
+  await workspace.start();
+  workspace.dispatch({ type: 'slot.add', slot: { id: 'slot.invalid', name: '无效', required: false, baseInterface: null, memberId: null, interfaceId: null } });
+  await workspace.flush();
+  assert.equal(workspace.getSnapshot().status, 'ready');
+  assert.equal(workspace.getSnapshot().dirty, false);
+  assert.equal(workspace.getSnapshot().document.slots.length, 0);
+  assert.match(workspace.getSnapshot().notice, /槽位名称不能为空/);
+  api.apply = apply;
+});
+
 test('切换草稿前保存，迟到的旧草稿读取不覆盖新选择', async () => {
   const { api, documents } = server();
   const workspace = new SharedDraftController(api);
