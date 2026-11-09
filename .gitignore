@@ -1,0 +1,8 @@
+# Local connection settings may contain an API key.
+.env*.local
+.env
+.venv/
+__pycache__/
+*.pyc
+.runtime/
+node_modules/.vite/
