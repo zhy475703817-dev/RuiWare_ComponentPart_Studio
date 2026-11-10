@@ -357,6 +357,7 @@ test('添加连接及继承接口使用结构化引用并拒绝不存在的来�
   const mate = { id: 'mate', from: source('member.a'), to: source('member.b'), relation: '贴合', offset: 0 };
   draft = componentReducer(draft, { type: 'mate.add', mate });
   assert.equal(draft.assembly.mates[0].from.interfaceId, 'face.left');
+  assert.equal(componentReducer(draft, { type: 'mate.add', mate: { ...mate, id: 'duplicate-endpoint', from: source('member.b'), to: source('member.a') } }), draft);
   assert.equal(componentReducer(draft, { type: 'mate.add', mate: { ...mate, id: 'invalid', to: source('missing') } }), draft);
   const port = { id: 'port', name: '外部接口', source: source('member.a'), tags: [] };
   draft = componentReducer(draft, { type: 'port.add', port });
@@ -367,6 +368,10 @@ test('添加连接及继承接口使用结构化引用并拒绝不存在的来�
   const staleSnapshot = { ...draft, ports: [{ ...draft.ports[0], interface: { ...sourceInterface, name: '旧名称' } }] };
   assert.equal(validateComponent(staleSnapshot).find(check => check.id === 'ports').status, 'fail');
   assert.equal(componentReducer(draft, { type: 'port.add', port: { ...port, id: 'again' } }), draft);
+  const disconnected = componentReducer(draft, { type: 'mate.remove', id: mate.id });
+  assert.equal(disconnected.assembly.mates.length, 0);
+  assert.equal(disconnected.assembly.members[0].interfaces[0].id, sourceInterface.id);
+  assert.equal(disconnected.ports.length, 1);
 });
 
 test('对外接口可按成员逐项开放、取消和改名', () => {

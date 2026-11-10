@@ -94,8 +94,13 @@ export function App() {
       case "definition": return <DefinitionStage definition={document.definition} codeUnique={componentCodeUnique} draftId={workspace.shared.draftId} onChange={patch => dispatch({ type: "definition.patch", patch })}/>;
       case "assembly": return <AssemblyStage members={members} mates={mates} onAddMate={workspace.addMate}
         selectedMember={members.find(member => member.id === workspace.selectedMemberId)} bindings={document.bindings}
-        onMemberChange={patch => { if (workspace.selectedMemberId) dispatch({ type: "member.patch", id: workspace.selectedMemberId, patch }); }}/>;
-      case "interfaces": return <InterfacesStage members={members} ports={document.ports} slots={document.slots} interfaceTypes={document.interfaceTypes ?? []} selectedInterface={selectedInterface} interfacePreview={interfacePreview} editable={workspace.editable} onSelectInterface={selectInterface} onSetInterfaceExposure={workspace.setInterfaceExposure} onSetInterfaceType={workspace.setInterfaceType} onRenamePort={workspace.renamePort} onAddSlot={workspace.addSlot} onPatchSlot={workspace.patchSlot} onRemoveSlot={workspace.removeSlot}/>;
+        onMemberChange={patch => {
+          const member = members.find(item => item.id === workspace.selectedMemberId);
+          if (!member) return;
+          if (patch.position || patch.rotation) workspace.transformMember(member.id, patch.position || member.position, patch.rotation || member.rotation);
+          else dispatch({ type: "member.patch", id: member.id, patch });
+        }}/>
+      case "interfaces": return <InterfacesStage members={members} ports={document.ports} slots={document.slots} mates={mates} interfaceTypes={document.interfaceTypes ?? []} selectedInterface={selectedInterface} interfacePreview={interfacePreview} editable={workspace.editable} onSelectInterface={selectInterface} onConnect={workspace.connectInterfaces} onRemoveConnection={workspace.removeConnection} onSetInterfaceExposure={workspace.setInterfaceExposure} onSetInterfaceType={workspace.setInterfaceType} onRenamePort={workspace.renamePort} onAddSlot={workspace.addSlot} onPatchSlot={workspace.patchSlot} onRemoveSlot={workspace.removeSlot}/>;
       case "parameters": return <ParametersStage parameters={document.parameters} bindings={document.bindings} patterns={document.patterns} rules={document.rules} members={members} definitionName={document.definition.name} definitionCode={document.definition.code} onChange={(id, value) => dispatch({ type: "parameter.value", id, value })} onBindingChange={(id, binding) => dispatch({ type: "binding.set", id, binding })} onAddParameter={parameter => dispatch({ type: "parameter.add", parameter })} onRemoveParameter={id => dispatch({ type: "parameter.remove", id })} onAddPattern={pattern => dispatch({ type: "pattern.add", pattern })} onRemovePattern={id => dispatch({ type: "pattern.remove", id })} onAddRule={rule => dispatch({ type: "rule.add", rule })} onRemoveRule={id => dispatch({ type: "rule.remove", id })}/>;
       case "rules": return <RulesStage rules={document.rules} onChange={(id, expression) => dispatch({ type: "rule.expression", id, expression })}/>;
       case "validation": return <ValidationStage checks={checks} revision={document.revision} onValidate={() => workspace.setMessage(checks.some(check => check.status === "fail") ? "基础数据检查未通过，请处理失败项" : "基础数据检查通过；装配求解和工程规则执行仍待接入")}/>;
@@ -135,6 +140,9 @@ export function App() {
        bindings={document.bindings}
        patterns={document.patterns}
       mateCount={mates.length}
+      undoCount={workspace.undoCount}
+      onUndoModel={workspace.undoModel}
+      undoDisabled={!workspace.editable || workspace.undoing}
       previewTemplate={workspace.previewTemplate}
       onShowAssembly={() => workspace.setPreviewTemplate(null)}
       selectedMemberId={workspace.selectedMemberId}
