@@ -11,6 +11,11 @@ import { interfacesForReconstruction, loadReconstructionInfo } from "../library/
 import { STAGES, type StageId } from "./stages";
 import { componentPublicationMember, fetchPublishedComponent, publishComponentDraft } from "../library/componentPublications";
 import { exportEvidenceFiles } from "../domain/evidenceStore";
+import { assessInterfaceCompatibility } from "../domain/interfaceCompatibility";
+import { alignInterfaceFaces } from "../domain/faceAlignment";
+import { solveConnectedFaces } from "../domain/connectionSolver";
+import { loadConnectionGeometry } from "../library/connectionGeometry";
+import { connectionStateKey } from "../domain/connectionState";
 
 const initialMessage = "完善组件定义信息后，可进入装配阶段选择成员";
 
@@ -30,7 +35,68 @@ export function useComponentWorkspace() {
   const addingLock = useRef(false);
   const [libraryRefreshToken, setLibraryRefreshToken] = useState(0);
   const { document, checks } = shared;
+  type ModelState = Extract<ComponentAction, { type: "model.restore" }>["model"];
+  const modelHistory = useRef<ModelState[]>([]);
+  const [undoCount, setUndoCount] = useState(0);
+  const [undoing, setUndoing] = useState(false);
+  useEffect(() => { modelHistory.current = []; setUndoCount(0); }, [shared.draftId]);
+  function rememberModel() {
+    const current = controller.current?.getSnapshot().document;
+    if (!current) return;
+    const { assembly, ports, bindings, patterns, slots } = current;
+    modelHistory.current = [...modelHistory.current, structuredClone({ assembly, ports, bindings, patterns, slots })].slice(-10);
+    setUndoCount(modelHistory.current.length);
+  }
+  async function undoModel() {
+    const workspace = controller.current;
+    if (!workspace || undoing || !editable || !modelHistory.current.length) return;
+    setUndoing(true);
+    try {
+      await workspace.flush();
+      const model = modelHistory.current.at(-1)!;
+      if (!workspace.dispatch({ type: "model.restore", model })) return;
+      await workspace.flush();
+      modelHistory.current.pop(); setUndoCount(modelHistory.current.length);
+      resetSelection(); setMessage("已撤回上一步模型操作。");
+    } catch { setMessage("撤回尚未保存，请处理草稿同步状态后重试。"); }
+    finally { setUndoing(false); }
+  }
+  const assemblyStateKey = connectionStateKey(shared.draftId, document);
+  const geometryKey = JSON.stringify([shared.draftId, document.assembly.members.map(member => [member.id, member.template, member.parameterValues]), document.assembly.mates]);
+  const syncedGeometry = useRef("");
+  const [geometryStatus, setGeometryStatus] = useState<{ key: string; error: string } | null>(null);
   const editable = (shared.status === "ready" || shared.status === "saving") && !publishing && !adding;
+
+  useEffect(() => {
+    const workspace = controller.current;
+    if (!workspace || shared.status !== "ready" || syncedGeometry.current === geometryKey) return;
+    const abort = new AbortController();
+    const initial = workspace.getSnapshot();
+    void (async () => {
+      try {
+        setGeometryStatus({ key: geometryKey, error: "" });
+        const parts = document.assembly.members.filter(member => member.template.templateKind !== "component");
+        const loaded = await Promise.all(parts.map(member => loadConnectionGeometry(member, abort.signal)));
+        const current = workspace.getSnapshot();
+        if (abort.signal.aborted || connectionStateKey(current.draftId, current.document) !== connectionStateKey(initial.draftId, initial.document)) return;
+        const refreshed = document.assembly.members.map(member => loaded.find(item => item.member.id === member.id)?.member ?? member);
+        const solved = solveConnectedFaces(refreshed, document.assembly.mates, new Map(loaded.map(item => [item.member.id, item.bounds])));
+        syncedGeometry.current = geometryKey;
+        for (const member of solved) {
+          const old = document.assembly.members.find(item => item.id === member.id)!;
+          const patch = { interfaces: member.interfaces, resolvedInterfaces: member.resolvedInterfaces, position: member.position, rotation: member.rotation };
+          if (JSON.stringify(patch) !== JSON.stringify({ interfaces: old.interfaces, resolvedInterfaces: old.resolvedInterfaces, position: old.position, rotation: old.rotation })) {
+            if (!workspace.dispatch({ type: "member.patch", id: member.id, patch })) throw new Error("更新后的接口暂时无法保存。");
+          }
+        }
+        setGeometryStatus(null);
+        setMessage("参数、接口位置和三维连接面已同步，正在保存更新。");
+      } catch (error) {
+        if (!abort.signal.aborted) setGeometryStatus({ key: geometryKey, error: error instanceof Error ? error.message : "接口位置更新失败" });
+      }
+    })();
+    return () => abort.abort();
+  }, [assemblyStateKey, shared.status, geometryKey]);
 
   useEffect(() => {
     const workspace = new SharedDraftController(httpDraftApi);
@@ -87,6 +153,8 @@ export function useComponentWorkspace() {
   }
 
   function removeMember(id: string) {
+    if (!editable || !document.assembly.members.some(member => member.id === id)) return;
+    rememberModel();
     if (!dispatch({ type: "member.remove", id })) return;
     if (selectedMemberId === id) setSelectedMemberId(null);
     setMessage("已删除成员，并清理关联的连接、接口及参数绑定");
@@ -100,17 +168,52 @@ export function useComponentWorkspace() {
     member.name = `${source.name} 副本`;
     member.role = `${source.role} 副本`;
     member.position = [source.position[0] + 40, source.position[1], source.position[2]];
+    rememberModel();
     if (!dispatch({ type: "member.add", member })) return;
     setSelectedMemberId(member.id);
     setMessage(`已复制 ${source.name}`);
   }
 
   function moveMember(id: string, position: Vector3) {
-    dispatch({ type: "member.patch", id, patch: { position } });
+    const member = document.assembly.members.find(item => item.id === id);
+    if (!member) return;
+    moveConnectedMembers(id, [position[0] - member.position[0], position[1] - member.position[1], position[2] - member.position[2]]);
   }
 
   function transformMember(id: string, position: Vector3, rotation: Vector3) {
-    dispatch({ type: "member.patch", id, patch: { position, rotation } });
+    const member = document.assembly.members.find(item => item.id === id);
+    if (!member) return;
+    if (!editable || JSON.stringify([member.position, member.rotation]) === JSON.stringify([position, rotation])) return;
+    rememberModel();
+    const delta: Vector3 = [position[0] - member.position[0], position[1] - member.position[1], position[2] - member.position[2]];
+    connectedMemberIds(id).forEach(memberId => {
+      const item = document.assembly.members.find(candidate => candidate.id === memberId);
+      if (!item) return;
+      dispatch({ type: "member.patch", id: memberId, patch: {
+        position: [item.position[0] + delta[0], item.position[1] + delta[1], item.position[2] + delta[2]],
+        ...(memberId === id ? { rotation } : {}),
+      } });
+    });
+  }
+
+  function connectedMemberIds(id: string): Set<string> {
+    const result = new Set<string>([id]);
+    const queue = [id];
+    while (queue.length) {
+      const current = queue.shift()!;
+      document.assembly.mates.forEach(mate => {
+        const neighbor = mate.from.memberId === current ? mate.to.memberId : mate.to.memberId === current ? mate.from.memberId : null;
+        if (neighbor && !result.has(neighbor)) { result.add(neighbor); queue.push(neighbor); }
+      });
+    }
+    return result;
+  }
+
+  function moveConnectedMembers(id: string, delta: Vector3) {
+    connectedMemberIds(id).forEach(memberId => {
+      const item = document.assembly.members.find(candidate => candidate.id === memberId);
+      if (item) dispatch({ type: "member.patch", id: memberId, patch: { position: [item.position[0] + delta[0], item.position[1] + delta[1], item.position[2] + delta[2]] } });
+    });
   }
 
   async function groundMember(id: string) {
@@ -130,6 +233,7 @@ export function useComponentWorkspace() {
         setMessage("成员已变化，请重新点击贴地。");
         return;
       }
+      rememberModel();
       if (!workspace.dispatch({ type: "member.patch", id, patch: { position } })) return;
       setMessage(`已将 ${currentMember.name} 贴地，当前最低点 z = 0 mm`);
     } catch {
@@ -146,6 +250,55 @@ export function useComponentWorkspace() {
     }
     setMessage("已记录声明兼容的接口连接；装配求解尚未接入，成员位置未改变");
     return true;
+  }
+
+  async function connectInterfaces(from: InterfaceSource, to: InterfaceSource) {
+    if (from.memberId === to.memberId) { setMessage("请选择两个不同零部件的接口"); return false; }
+    const occupied = (source: InterfaceSource) => document.assembly.mates.some(mate =>
+      mate.from.memberId === source.memberId && mate.from.interfaceId === source.interfaceId ||
+      mate.to.memberId === source.memberId && mate.to.interfaceId === source.interfaceId);
+    if (occupied(from) || occupied(to)) { setMessage("一个零部件接口只能连接一次，请先删除原有连接"); return false; }
+    const aMember = document.assembly.members.find(member => member.id === from.memberId);
+    const bMember = document.assembly.members.find(member => member.id === to.memberId);
+    const aInterface = aMember?.interfaces.find(item => item.id === from.interfaceId);
+    const bInterface = bMember?.interfaces.find(item => item.id === to.interfaceId);
+    const relation = (["贴合", "同轴", "重合"] as const).find(value => assessInterfaceCompatibility(aInterface, bInterface, value, aMember, bMember).compatible);
+    if (!relation || !aMember || !bMember || !aInterface || !bInterface) {
+      setMessage("连接失败：接口不存在或连接状态已变化"); return false;
+    }
+    const workspace = controller.current;
+    if (!workspace) return false;
+    const initial = workspace.getSnapshot();
+    try {
+      setMessage("正在读取三维连接面并计算贴合位置…");
+      const signal = new AbortController().signal;
+      const [aGeometry, bGeometry] = await Promise.all([loadConnectionGeometry(aMember, signal), loadConnectionGeometry(bMember, signal)]);
+      const freshA = aGeometry.member.interfaces.find(item => item.id === from.interfaceId);
+      const freshB = bGeometry.member.interfaces.find(item => item.id === to.interfaceId);
+      if (!freshA || !freshB) throw new Error("参数变化后所选接口已不存在，请重新选择。");
+      if (!assessInterfaceCompatibility(freshA, freshB, relation, aGeometry.member, bGeometry.member).compatible) throw new Error("重建后的接口未通过配合检查。");
+      const patch = alignInterfaceFaces(aMember, aGeometry.bounds, freshA, bMember, bGeometry.bounds, freshB);
+      const current = workspace.getSnapshot();
+      if (controller.current !== workspace || connectionStateKey(current.draftId, current.document) !== connectionStateKey(initial.draftId, initial.document)) {
+        setMessage("模型或连接状态已变化，请重新连接。"); return false;
+      }
+      rememberModel();
+      if (!workspace.dispatch({ type: "mate.add", mate: { id: crypto.randomUUID(), from, to, relation, offset: 0 } })) return false;
+      workspace.dispatch({ type: "member.patch", id: bMember.id, patch });
+      await workspace.flush();
+      setMessage("已保存连接，三维连接面中心重合、法向相反。");
+      return true;
+    } catch (error) {
+      setMessage(`连接失败：${error instanceof Error ? error.message : "无法计算连接面"}`);
+      return false;
+    }
+  }
+
+  function removeConnection(id: string) {
+    if (!editable || !document.assembly.mates.some(mate => mate.id === id)) return;
+    rememberModel();
+    if (!dispatch({ type: "mate.remove", id })) { setMessage("连接已不存在或已刷新"); return; }
+    setMessage("已删除接口之间的连接；原有接口保留，零部件恢复独立移动");
   }
 
   function setInterfaceExposure(memberId: string, interfaceId: string, exposed: boolean) {
@@ -260,6 +413,7 @@ export function useComponentWorkspace() {
         if (workspace !== controller.current || workspace.getSnapshot().draftId !== draftId ||
             workspace.getSnapshot().document.revision !== snapshot.document.revision) throw new Error("草稿已更新，请重新加入模板。");
       }
+      rememberModel();
       if (!workspace.dispatch({ type: "member.add", member })) throw new Error("草稿暂不可编辑，请先处理同步问题。");
       // Apply placement separately so inferred component dimensions do not resize the parts again.
       if (position) workspace.dispatch({ type: "member.patch", id: member.id, patch: { position } });
@@ -284,11 +438,12 @@ export function useComponentWorkspace() {
     setMessage("已下载本地副本；这些修改尚未保存到组件草稿。");
   }
 
-  const syncMessage = shared.error || (shared.status === "loading" ? "正在读取组件草稿…" : shared.status === "saving" ? "正在保存组件草稿…" : shared.notice || message);
+  const geometryMessage = geometryStatus?.key === geometryKey ? geometryStatus.error ? `接口位置更新失败：${geometryStatus.error}` : "正在按当前参数更新接口位置和连接面…" : "";
+  const syncMessage = shared.error || geometryMessage || (shared.status === "loading" ? "正在读取组件草稿…" : shared.status === "saving" ? "正在保存组件草稿…" : shared.notice || message);
   return { document, dispatch, stage, setStage, selectedMemberId, setSelectedMemberId, previewTemplate, setPreviewTemplate,
-    selectionResetToken, message: syncMessage, setMessage, checks, newDraft, removeMember, addMate, setInterfaceExposure, renamePort, setInterfaceType, addSlot, patchSlot, removeSlot, exportDraft,
+    selectionResetToken, message: syncMessage, setMessage, checks, newDraft, removeMember, addMate, connectInterfaces, removeConnection, setInterfaceExposure, renamePort, setInterfaceType, addSlot, patchSlot, removeSlot, exportDraft,
     shared, editable, selectDraft, publishDraft, publishing, adding, addPublishedTemplate, libraryRefreshToken,
-    copyMember, moveMember, transformMember, groundMember,
+    copyMember, moveMember, transformMember, groundMember, undoModel, undoCount, undoing,
     downloadLocalDraft, dismissAgentChanges: () => controller.current?.dismissAgentChanges(),
     retrySave: () => { void controller.current?.retry().catch(() => {}); },
     reloadDraft: () => { void controller.current?.reload(); },
