@@ -46,6 +46,11 @@ function checkFit(a: PartInterface, b: PartInterface, contextA: MemberContext | 
   if (!left.connectionMethod || left.connectionMethod !== right.connectionMethod) {
     check(checks, "CONNECTION_METHOD_UNKNOWN", left.connectionMethod && right.connectionMethod ? "fail" : "unknown", "两端需声明相同且受支持的配合机制"); return;
   }
+  if (left.family === "pin-hole" && left.role === right.role && ["pin", "hole"].includes(left.role)) {
+    const passed = Math.max(shaftRange.low, boreRange.low) <= Math.min(shaftRange.high, boreRange.high) + 1e-9;
+    check(checks, "DIAMETER_FIT", passed ? "pass" : "fail", `同角色接口直径公差区间${passed ? "重叠，可同轴连接" : "不重叠，无法匹配"}`);
+    return;
+  }
   const minClearance = boreRange.low - shaftRange.high, maxClearance = boreRange.high - shaftRange.low;
   const passed = left.connectionMethod === "clearance-fit" ? minClearance >= -1e-9
     : left.connectionMethod === "interference-fit" ? maxClearance <= 1e-9
@@ -69,9 +74,11 @@ export function assessInterfaceCompatibility(a: PartInterface | undefined, b: Pa
     const rolePair = rolesByFamily[left.family];
     if (!rolePair) { if (left.role && right.role) check(checks, "ROLE_UNSUPPORTED", "unknown", "当前没有该配合族的角色校验规则"); }
     else {
-      const rolesMatch = rolePair[0] === rolePair[1] ? left.role === rolePair[0] && right.role === rolePair[1]
+      const normalizeRole = (role: string) => left.family === "plane-contact" && role === "surface" ? "contact-face" : role;
+      const rolesMatch = left.family === "pin-hole" ? ["pin", "hole"].includes(left.role) && ["pin", "hole"].includes(right.role)
+        : rolePair[0] === rolePair[1] ? normalizeRole(left.role) === rolePair[0] && normalizeRole(right.role) === rolePair[1]
         : left.role === rolePair[0] && right.role === rolePair[1] || left.role === rolePair[1] && right.role === rolePair[0];
-      check(checks, "ROLE_COMPLEMENTARY", rolesMatch ? "pass" : "fail", rolesMatch ? "配合角色符合规则" : "配合角色不符合该配合族规则");
+      check(checks, "ROLE_COMPLEMENTARY", rolesMatch ? "pass" : "fail", rolesMatch ? "配合角色符合规则" : `配合角色不符合 ${left.family} 规则：“${a.name}”为 ${left.role}，“${b.name}”为 ${right.role}；要求 ${left.family === "plane-contact" ? "surface ↔ surface（兼容 contact-face）" : left.family === "pin-hole" ? "pin ↔ pin、hole ↔ hole 或 pin ↔ hole" : `${rolePair[0]} ↔ ${rolePair[1]}`}。请在模板端核对 mating.role 并发布更新版本。`);
     }
     const kind = requiredType[left.family];
     if (kind) check(checks, "GEOMETRY_KIND", a.type === kind && b.type === kind ? "pass" : "fail", a.type === kind && b.type === kind ? "几何载体符合配合族要求" : `该配合族要求两端几何载体为 ${kind}`);

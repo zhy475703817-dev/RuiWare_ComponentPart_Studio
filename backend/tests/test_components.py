@@ -32,6 +32,46 @@ def source(identifier):
 
 
 class ComponentTests(unittest.TestCase):
+    def test_model_restore_preserves_non_model_edits(self):
+        with TestClient(create_app(dist_dir=None)) as client:
+            draft = self.create(client)
+            model = {key: draft['document'][key] for key in ('assembly', 'ports', 'bindings', 'patterns', 'slots')}
+            added = self.action(client, draft, {'type': 'member.add', 'member': member('a')})
+            self.assertEqual(added.status_code, 200, added.text)
+            renamed = self.action(client, added.json(), {'type': 'definition.patch', 'patch': {'name': '保留名称'}})
+            self.assertEqual(renamed.status_code, 200, renamed.text)
+            restored = self.action(client, renamed.json(), {'type': 'model.restore', 'model': model})
+            self.assertEqual(restored.status_code, 200, restored.text)
+            self.assertEqual(restored.json()['document']['assembly']['members'], [])
+            self.assertEqual(restored.json()['document']['definition']['name'], '保留名称')
+
+    def test_remove_mate_preserves_interfaces_and_allows_followup_edits(self):
+        with TestClient(create_app(dist_dir=None)) as client:
+            draft = self.create(client)
+            for identifier in ("a", "b"):
+                response = self.action(client, draft, {"type": "member.add", "member": member(identifier)})
+                self.assertEqual(response.status_code, 200, response.text)
+                draft = response.json()
+            mate = {"id": "connection", "from": source("a"), "to": source("b"), "relation": "贴合", "offset": 0}
+            response = self.action(client, draft, {"type": "mate.add", "mate": mate})
+            self.assertEqual(response.status_code, 200, response.text)
+            draft = response.json()
+            original_members = draft["document"]["assembly"]["members"]
+            response = self.action(client, draft, {"type": "mate.remove", "id": "connection"})
+            self.assertEqual(response.status_code, 200, response.text)
+            draft = response.json()
+            self.assertEqual(draft["document"]["assembly"]["mates"], [])
+            self.assertEqual(draft["document"]["assembly"]["members"], original_members)
+            response = self.action(client, draft, {"type": "mate.remove", "id": "connection"})
+            self.assertEqual(response.status_code, 200, response.text)
+            response = self.action(client, response.json(), {"type": "member.patch", "id": "a", "patch": {"position": [10, 20, 30]}})
+            self.assertEqual(response.status_code, 200, response.text)
+            response = self.action(client, response.json(), {"type": "mate.add", "mate": mate})
+            self.assertEqual(response.status_code, 200, response.text)
+            response = self.action(client, response.json(), {"type": "mate.remove", "id": "connection"})
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json()["document"]["assembly"]["mates"], [])
+
     def setUp(self):
         self.directory = TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
@@ -119,6 +159,45 @@ class ComponentTests(unittest.TestCase):
         return client.post(f"/api/component-drafts/{draft['draftId']}/actions", json={
             "expectedRevision": draft["document"]["revision"] if revision is None else revision, "action": action,
         })
+
+    def test_component_codes_are_generated_and_duplicates_fail_validation(self):
+        from backend.app.components.models import ComponentAction
+        from backend.app.components.repository import DraftRepository
+
+        repository = DraftRepository(Path(self.directory.name) / "codes.sqlite3")
+        first = repository.create()
+        second = repository.create()
+        self.assertEqual(first["document"]["definition"]["code"], "CMP-0001")
+        self.assertEqual(second["document"]["definition"]["code"], "CMP-0002")
+        self.assertEqual({item["code"] for item in repository.list()["items"]}, {"CMP-0001", "CMP-0002"})
+        action = ComponentAction.validate_python({"type": "definition.patch", "patch": {"code": "cmp_custom-3"}})
+        normalized = repository.update(second["draftId"], second["document"]["revision"], action)
+        self.assertEqual(normalized["document"]["definition"]["code"], "CMP_CUSTOM-3")
+        self.assertEqual(next(check for check in normalized["checks"] if check["id"] == "code.format")["status"], "pass")
+        action = ComponentAction.validate_python({"type": "definition.patch", "patch": {"code": "CMP-0001"}})
+        duplicate = repository.update(second["draftId"], normalized["document"]["revision"], action)
+        self.assertEqual(next(check for check in duplicate["checks"] if check["id"] == "code.unique")["status"], "fail")
+
+    def test_legacy_drafts_without_a_code_receive_one_without_changing_revision(self):
+        from contextlib import closing
+        import sqlite3
+        from backend.app.components.repository import DraftRepository
+
+        path = Path(self.directory.name) / "legacy.sqlite3"
+        repository = DraftRepository(path)
+        draft = repository.create()
+        data = draft["document"]
+        data["definition"]["code"] = ""
+        data["revision"] = 7
+        with closing(sqlite3.connect(path)) as connection, connection:
+            connection.execute("UPDATE component_drafts SET document = ?, revision = 7 WHERE id = ?",
+                               (json.dumps(data, ensure_ascii=False), draft["draftId"]))
+
+        upgraded = DraftRepository(path)
+        restored = upgraded.get(draft["draftId"])
+        self.assertEqual(restored["document"]["definition"]["code"], "CMP-0001")
+        self.assertEqual(restored["document"]["revision"], 7)
+        self.assertEqual(upgraded.list()["items"][0]["code"], "CMP-0001")
 
     def test_persistence_atomic_conflict_and_draft_discovery(self):
         with TestClient(create_app(dist_dir=None)) as client:
@@ -514,7 +593,8 @@ console.log(JSON.stringify({document:result,checks:validateComponent(result),exp
             self.assertEqual(patched.status_code, 200, patched.text)
             definition = patched.json()["document"]["definition"]
             self.assertEqual(definition["projectCode"], "RACK-2026-001")
-            self.assertEqual(definition["code"], "")
+            self.assertRegex(definition["code"], r"^CMP-\d{4,}$")
+            self.assertEqual(definition["code"], draft["document"]["definition"]["code"])
             self.assertEqual(definition["owner"], "张工")
             self.assertEqual(definition["componentConnectionType"], "卡扣连接")
             self.assertIsNone(definition["evidenceFiles"][0]["dataUrl"])

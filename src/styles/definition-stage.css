@@ -1,5 +1,26 @@
-.definition-member-list{list-style:none;margin:7px 0 0;padding:0}.definition-member-list li{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 8px;padding:8px 7px;border-top:1px solid #edf0f2;font-size:11px;color:#52616c;cursor:pointer;transition:background .12s,border-color .12s,box-shadow .12s}.definition-member-list li:hover,.definition-member-list li.hovered{background:#f7fafb}.definition-member-list li.selected{box-shadow:inset 3px 0 #c89532;background:#fff8e9}.definition-member-list li.compatible-candidate{border:1px dashed #c89532;background:#fffaf0}.definition-member-list li.selected.compatible-candidate{box-shadow:inset 3px 0 #c89532}.definition-member-list li:focus-visible{outline:2px solid #c89532;outline-offset:1px}.definition-member-list li>b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.definition-member-list li>span{color:#9a6c15}.definition-member-list li>small{grid-column:1/-1;color:#84909a;line-height:1.5;overflow-wrap:anywhere}.definition-interface-summary{display:flex;flex-direction:column;gap:4px;margin-top:9px;padding-top:8px;border-top:1px solid #e1e6e9}.definition-interface-summary>b{font-size:11px;color:#52616c}.definition-interface-summary>small{color:#84909a;line-height:1.5;overflow-wrap:anywhere}.draft-link-entry{display:flex;align-items:flex-end;gap:7px;margin-top:10px}.draft-link-entry label{flex:1;min-width:0;margin:0}.draft-link-entry input{min-width:0}.draft-link-entry button{flex:none}
-.definition-member-interface-size{font-size:10px}
-.definition-interface-item{display:flex;flex-direction:column;gap:2px;padding:5px 0;border-top:1px solid #edf0f2}
-.definition-interface-item>b{font-size:10px;color:#52616c}
-.definition-interface-item>small{color:#84909a;line-height:1.5;overflow-wrap:anywhere}
+
+.layout.layout-definition{grid-template-columns:minmax(0,1fr);overflow:hidden}
+.definition-workspace{min-width:0;overflow:auto;padding:30px 36px;background:#f5f7f9}
+.definition-heading{max-width:1100px;margin:0 auto 22px}
+.definition-heading h1{margin:0 0 8px;font-size:23px;color:#263541}
+.definition-heading p{margin:0;color:#71808a;font-size:13px;line-height:1.7}
+.definition-workspace>.inspector-section{max-width:1100px;margin:auto;padding:26px 30px;background:#fff;border:1px solid #dce3e7;border-radius:8px}
+.definition-toolbar{display:flex;align-items:flex-end;gap:12px;max-width:1100px;margin:0 auto 16px}
+.definition-toolbar label{display:block;flex:1;max-width:520px;margin:0;color:#65737d;font-size:13px}
+.definition-toolbar select{display:block;width:100%;height:38px;margin-top:5px;padding:8px;border:1px solid #d4dce1;border-radius:4px;background:#fff;color:#263541;font:inherit}
+.definition-code-hint,.definition-code-error{display:block;margin-top:5px;color:#71808a;font-size:11px;line-height:1.5}
+.definition-code-error{color:#a34f3d}
+.definition-workspace input[aria-invalid="true"]{border-color:#c66b55}
+.active-component{display:flex;align-items:baseline;gap:10px;min-width:0;max-width:42%;margin:0 auto;color:#f6f8fa}
+.active-component small{flex:none;color:#aebbc6;font-size:11px}
+.active-component strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px}
+.active-component span{flex:none;color:#d8b871;font-size:11px}
+.definition-workspace .definition-grid{gap:0 24px}
+.definition-workspace .inspector-section label{font-size:13px;margin:12px 0}
+.definition-workspace .definition-subsection h4{font-size:13px;color:#44545e;margin:4px 0 12px}
+.definition-workspace .inspector-section textarea{min-height:96px}
+.definition-workspace .definition-connection{padding:14px 16px}
+.definition-next{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-top:24px;padding-top:20px;border-top:1px solid #e1e6e9}
+.definition-next span{font-size:12px;color:#71808a}
+@media(max-width:1000px){.definition-workspace{padding:24px}.layout.layout-definition{grid-template-columns:minmax(0,1fr)}.definition-workspace>.inspector-section{padding:22px}.active-component{max-width:36%}}
+@media(max-width:700px){.layout.layout-definition{display:block;overflow:auto}.definition-workspace{overflow:visible;padding:18px}.layout-definition>.inspector{display:block;border-left:0;border-top:1px solid #dce3e7;overflow:visible}.definition-workspace .definition-grid{grid-template-columns:minmax(0,1fr)}.definition-next{align-items:flex-start;flex-direction:column}.definition-workspace>.inspector-section{padding:18px}}

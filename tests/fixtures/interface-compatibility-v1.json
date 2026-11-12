@@ -31,7 +31,7 @@
       "reasonCodes": []
     },
     {
-      "name": "pin-hole-role-conflict",
+      "name": "pin-pin-diameter-conflict",
       "a": {
         "id": "pin-a", "name": "pin-a", "type": "axis", "tags": [], "referenceFrame": { "axis": "z" },
         "mating": {
@@ -50,7 +50,7 @@
       },
       "relation": "同轴",
       "status": "incompatible",
-      "reasonCodes": ["ROLE_COMPLEMENTARY"]
+      "reasonCodes": ["DIAMETER_FIT"]
     },
     {
       "name": "relation-not-allowed",

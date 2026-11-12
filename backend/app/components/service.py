@@ -18,6 +18,8 @@ DEFAULT_CONNECTABLE_TYPE_IDS = {
     "plane.contact.v1": ["plane.contact.v1"], "shaft.v1": ["bore.v1"], "bore.v1": ["shaft.v1"],
 }
 
+COMPONENT_CODE_PATTERN = re.compile(r"^[A-Z][A-Z0-9_-]{2,39}$")
+
 
 class ComponentError(Exception):
     def __init__(self, status: int, code: str, current: dict | None = None):
@@ -157,11 +159,16 @@ def interfaces_compatible(a, b):
 def apply_action(document: ComponentDocument, action: TypedAction) -> ComponentDocument:
     action = ComponentAction.validate_python(action)
     data = document.model_dump(by_alias=True)
-    if action.type == "reset":
+    if action.type == "model.restore":
+        data.update(action.model.model_dump(by_alias=True))
+    elif action.type == "reset":
         data = create_component_document().model_dump(by_alias=True)
         data["revision"] = document.revision
     elif action.type == "definition.patch":
-        data["definition"].update(action.patch.model_dump(exclude_unset=True))
+        patch = action.patch.model_dump(exclude_unset=True)
+        if isinstance(patch.get("code"), str):
+            patch["code"] = patch["code"].upper()
+        data["definition"].update(patch)
     elif action.type == "member.add":
         if any(member.id == action.member.id for member in document.assembly.members):
             raise ComponentError(422, "DUPLICATE_ID")
@@ -250,6 +257,10 @@ def apply_action(document: ComponentDocument, action: TypedAction) -> ComponentD
         if any(item.id == mate.id or (item.from_ == mate.from_ and item.to == mate.to) for item in document.assembly.mates):
             raise ComponentError(422, "DUPLICATE_CONNECTION")
         data["assembly"]["mates"].append(mate.model_dump(by_alias=True))
+    elif action.type == "mate.remove":
+        if not any(item["id"] == action.id for item in data["assembly"]["mates"]):
+            return document
+        data["assembly"]["mates"] = [item for item in data["assembly"]["mates"] if item["id"] != action.id]
     elif action.type == "slot.add":
         slot = action.slot
         name = slot.name.strip()
@@ -526,7 +537,7 @@ def apply_action(document: ComponentDocument, action: TypedAction) -> ComponentD
     return ComponentDocument.model_validate(data)
 
 
-def validate_component(document: ComponentDocument) -> list[dict]:
+def validate_component(document: ComponentDocument, *, code_unique: bool = True) -> list[dict]:
     members, mates = document.assembly.members, document.assembly.mates
     member_ids = {member.id for member in members}
     parameter_ids = {parameter.id for parameter in document.parameters}
@@ -591,6 +602,8 @@ def validate_component(document: ComponentDocument) -> list[dict]:
 
     return [
         check("definition", "组件名称", bool(document.definition.name.strip()), "请填写组件名称"),
+        check("code.format", "组件编码格式", bool(COMPONENT_CODE_PATTERN.fullmatch(document.definition.code)), "编码须以大写字母开头，仅包含大写字母、数字、下划线或短横线，长度 3–40 位"),
+        check("code.unique", "组件编码唯一", code_unique, "该编码已被其他组件草稿使用"),
         check("members", "装配成员", bool(members) and all(member.id.strip() for member in members) and len(member_ids) == len(members), "请加入零部件，成员标识需唯一"),
         check("references", "固定版本引用", bool(members) and all(member.template.publicationId.strip() and member.template.templateId.strip() and 0 < member.template.version <= 9007199254740991 and re.fullmatch(r"[a-fA-F0-9]{64}", member.template.sha256) for member in members), "成员需引用有效发布版本及模板包校验值"),
         check("mates", "内部连接数据", len({mate.id for mate in mates}) == len(mates) and all(mate_valid(mate) for mate in mates), "连接两端必须有明确兼容契约、允许所选关系并遵守接口容量；历史未评估连接需复核"),

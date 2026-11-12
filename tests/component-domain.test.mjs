@@ -364,6 +364,7 @@ test('添加连接及继承接口使用结构化引用并拒绝不存在的来�
   const mate = { id: 'mate', from: source('member.a'), to: source('member.b'), relation: '贴合', offset: 0 };
   draft = componentReducer(draft, { type: 'mate.add', mate });
   assert.equal(draft.assembly.mates[0].from.interfaceId, 'face.left');
+  assert.equal(componentReducer(draft, { type: 'mate.add', mate: { ...mate, id: 'duplicate-endpoint', from: source('member.b'), to: source('member.a') } }), draft);
   assert.equal(componentReducer(draft, { type: 'mate.add', mate: { ...mate, id: 'invalid', to: source('missing') } }), draft);
   const port = { id: 'port', name: '外部接口', source: source('member.a'), tags: [] };
   draft = componentReducer(draft, { type: 'port.add', port });
@@ -374,6 +375,10 @@ test('添加连接及继承接口使用结构化引用并拒绝不存在的来�
   const staleSnapshot = { ...draft, ports: [{ ...draft.ports[0], interface: { ...sourceInterface, name: '旧名称' } }] };
   assert.equal(validateComponent(staleSnapshot).find(check => check.id === 'ports').status, 'fail');
   assert.equal(componentReducer(draft, { type: 'port.add', port: { ...port, id: 'again' } }), draft);
+  const disconnected = componentReducer(draft, { type: 'mate.remove', id: mate.id });
+  assert.equal(disconnected.assembly.mates.length, 0);
+  assert.equal(disconnected.assembly.members[0].interfaces[0].id, sourceInterface.id);
+  assert.equal(disconnected.ports.length, 1);
 });
 
 test('对外接口可按成员逐项开放、取消和改名', () => {
@@ -489,6 +494,16 @@ test('导出保留旧连接和接口字段，并附带可无歧义读取的结�
   assert.equal(result.stages.ports[0].sourceMemberId, 'a');
   assert.equal(result.stages.ports[0].sourceInterfaceId, 'face.left');
   assert.equal(result.stages.assembly.members[0].bindings.length, 2400);
+});
+
+test('组件编码匹配零部件平台的大写字母数字格式', () => {
+  const draft = createComponentDocument();
+  draft.definition.code = 'CMP-001_A';
+  assert.equal(validateComponent(draft).find(check => check.id === 'code.format').status, 'pass');
+  draft.definition.code = 'bad code';
+  assert.equal(validateComponent(draft).find(check => check.id === 'code.format').status, 'fail');
+  draft.definition.code = 'AB';
+  assert.equal(validateComponent(draft).find(check => check.id === 'code.format').status, 'fail');
 });
 
 test('定义阶段的项目元数据、两级连接说明、约束和证据引用会保存并导出', () => {

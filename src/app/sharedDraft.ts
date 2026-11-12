@@ -12,7 +12,7 @@ export type DraftChange = {
 };
 export type DraftEnvelope = { draftId: string; document: ComponentDocument; checks: ValidationCheck[];
   changes?: DraftChange[]; changesTruncated?: boolean; reconciled?: boolean };
-export type DraftSummary = { draftId: string; name: string; revision: number; updatedAt: string };
+export type DraftSummary = { draftId: string; name: string; code: string; revision: number; updatedAt: string };
 export type DraftApi = {
   list: () => Promise<{ items: DraftSummary[] }>;
   create: () => Promise<DraftEnvelope>;
@@ -43,6 +43,11 @@ const errorMessage = (error: unknown): string => errorCode(error) === "REVISION_
   : errorCode(error) === "DUPLICATE_SLOT_INTERFACE" ? "该接口已被其他槽位占用。"
   : errorCode(error) === "INVALID_INTERFACE_TYPE" ? "接口类型无效，请重新选择或输入类型名称。"
   : errorCode(error) === "INTERFACE_TYPE_LIMIT" ? "自定义接口类型已达到数量上限。"
+  : errorCode(error) === "INCOMPATIBLE_INTERFACE" ? "两个接口不兼容，请检查接口类型、几何形状、尺寸和连接方式。"
+  : errorCode(error) === "INTERFACE_REQUIRES_REVIEW" ? "接口缺少完整兼容契约，暂不能连接。请先补充接口类型、尺寸或连接方式。"
+  : errorCode(error) === "INTERFACE_CAPACITY" || errorCode(error) === "ENDPOINT_ALREADY_CONSUMED" ? "该接口已达到可连接次数上限。"
+  : errorCode(error) === "DUPLICATE_CONNECTION" ? "该连接已存在。"
+  : errorCode(error) === "INVALID_REFERENCE" ? "所选接口已变化，请重新选择。"
   : errorCode(error) === "DRAFT_NOT_FOUND" ? "该草稿已不存在，请选择其他草稿。" : "草稿操作失败。未保存输入已保留，请检查连接后重试。";
 
 // These errors mean the server understood and rejected the requested edit.
@@ -50,6 +55,7 @@ const errorMessage = (error: unknown): string => errorCode(error) === "REVISION_
 // front of the queue; transport failures and revision conflicts still keep
 // the pending input for an explicit retry/reload.
 const rejectedEditCodes = new Set([
+  "INCOMPATIBLE_INTERFACE", "INTERFACE_REQUIRES_REVIEW", "ENDPOINT_ALREADY_CONSUMED", "DUPLICATE_CONNECTION", "INVALID_REFERENCE",
   "DUPLICATE_ID", "DUPLICATE_PORT", "INTERFACE_SNAPSHOT_MISMATCH",
   "INVALID_PORT_NAME", "INVALID_SLOT_NAME", "INVALID_SLOT_REFERENCE",
   "INCOMPATIBLE_SLOT_INTERFACE", "DUPLICATE_SLOT_INTERFACE", "INVALID_INTERFACE_TYPE", "INTERFACE_TYPE_LIMIT",
@@ -231,7 +237,7 @@ export class SharedDraftController {
 
   dispatch(action: ComponentAction): boolean {
     if (!this.confirmed || !["ready", "saving"].includes(this.state.status) || this.disposed) return false;
-    if (componentReducer(this.state.document, action) === this.state.document) return true;
+    if (componentReducer(this.state.document, action) === this.state.document) return action.type !== "mate.add";
     this.pending.push(structuredClone(action));
     this.editGeneration++;
     this.project({ status: "saving", error: null, notice: "" });
