@@ -25,6 +25,39 @@ function server() {
   return { api, documents };
 }
 
+test('未插入的连接不能报告成功，且不影响后续保存', async () => {
+  const { api } = server();
+  const workspace = new SharedDraftController(api);
+  await workspace.start();
+  assert.equal(workspace.dispatch({ type: 'mate.add', mate: {
+    id: 'invalid-mate', from: { memberId: 'missing-a', interfaceId: 'face' },
+    to: { memberId: 'missing-b', interfaceId: 'face' }, relation: '贴合', offset: 0,
+  } }), false);
+  assert.equal(workspace.getSnapshot().document.assembly.mates.length, 0);
+  assert.equal(workspace.dispatch({ type: 'definition.patch', patch: { name: '仍可保存' } }), true);
+  await workspace.flush();
+  assert.equal(workspace.getSnapshot().document.definition.name, '仍可保存');
+  workspace.dispose();
+});
+
+test('服务端拒绝连接后移除失败操作，后续编辑仍能保存', async () => {
+  const { api } = server();
+  const apply = api.apply;
+  let reject = true;
+  api.apply = async (...args) => {
+    if (reject) { reject = false; throw Object.assign(new Error('occupied'), { code: 'ENDPOINT_ALREADY_CONSUMED' }); }
+    return apply(...args);
+  };
+  const workspace = new SharedDraftController(api);
+  await workspace.start();
+  workspace.dispatch({ type: 'definition.patch', patch: { name: '被拒绝的操作' } });
+  workspace.dispatch({ type: 'definition.patch', patch: { name: '后续操作保存成功' } });
+  await workspace.flush();
+  assert.equal(workspace.getSnapshot().status, 'ready');
+  assert.equal(workspace.getSnapshot().document.definition.name, '后续操作保存成功');
+  workspace.dispose();
+});
+
 test('快速输入立即显示，按服务端修订串行保存，不丢失后续输入', async () => {
   const { api, documents } = server();
   const gate = deferred();
