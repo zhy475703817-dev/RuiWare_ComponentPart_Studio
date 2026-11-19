@@ -102,6 +102,29 @@ test('复制分组重映射内部连接与引用，保留复制后目标草稿�
   assert.equal(partial.model.assembly.mates.length, 2);
 });
 
+test('多选按偏移复制保留原件和姿态，可用一次模型恢复撤销', () => {
+  const draft = document();
+  draft.assembly.members[0].position = [10, 20, 30];
+  draft.assembly.members[0].rotation = [.1, .2, .3];
+  draft.assembly.members[1].position = [-40, 50, 60];
+  draft.assembly.members[1].rotation = [-.3, .4, .5];
+  const before = captureModel(draft);
+  const offset = [25, -75, 100];
+  const { model, memberIds } = cloneSelectionModel(draft, ['a', 'b', 'a', 'missing'], offset, factory());
+  assert.equal(memberIds.length, 2);
+  assert.deepEqual(model.assembly.members.slice(0, 3), before.assembly.members);
+  model.assembly.members.slice(3).forEach((copy, index) => {
+    const original = before.assembly.members[index];
+    assert.deepEqual(copy.position, original.position.map((value, axis) => value + offset[axis]));
+    assert.deepEqual(copy.rotation, original.rotation);
+    assert.notEqual(copy.id, original.id);
+  });
+  assert.deepEqual(captureModel(draft), before);
+  const updated = componentReducer(draft, { type: 'model.restore', model });
+  assert.equal(updated.assembly.members.length, 5);
+  assert.deepEqual(captureModel(componentReducer(updated, { type: 'model.restore', model: before })), before);
+});
+
 test('已发布组件逐层展开为可编辑零件，保持世界矩阵与外部连接', async () => {
   const draft = document();
   const nested = member('nested'); nested.template.templateKind = 'component'; nested.position = [100, 200, 300]; nested.rotation = [.2, .3, .4];

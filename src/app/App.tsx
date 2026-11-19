@@ -160,6 +160,7 @@ export function App() {
       onPasteAt={workspace.pasteAt}
       onRemoveSelection={workspace.removeSelection}
       onTransformMembers={workspace.transformMembers}
+      onDuplicateMembers={workspace.duplicateMembers}
       selectedInterface={selectedInterface}
       selectedInterfaceResolved={sameInterfaceSelection(interfacePreview?.selection || null, selectedInterface) && interfacePreview?.status === "ready" ? interfacePreview.resolvedInterfaces : undefined}
       panelSelectionToken={panelSelectionToken}

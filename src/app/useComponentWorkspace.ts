@@ -221,6 +221,15 @@ export function useComponentWorkspace() {
     setMessage("已复制所选零部件或组件。");
   }
 
+  function duplicateMembers(ids: string[], offset: Vector3) {
+    const current = controller.current?.getSnapshot().document;
+    if (!current || !editable || !offset.every(Number.isFinite) || offset.every(value => value === 0)) return;
+    const result = cloneSelectionModel(current, ids, offset, () => crypto.randomUUID());
+    if (!result.memberIds.length || !commitModel(result.model)) return;
+    selectMembers(result.memberIds);
+    setMessage(`已平移复制 ${result.memberIds.length} 个成员。`);
+  }
+
   function copySelection() {
     const current = controller.current?.getSnapshot().document;
     if (!current || !selectedMemberIds.length) return;
@@ -620,7 +629,7 @@ export function useComponentWorkspace() {
   return { document, dispatch, stage, setStage, selectedMemberId, selectedMemberIds, setSelectedMemberId, selectMembers, previewTemplate, setPreviewTemplate,
     selectionResetToken, message: syncMessage, setMessage, checks, newDraft, removeMember, addMate, connectInterfaces, removeConnection, setInterfaceExposure, renamePort, setInterfaceType, addSlot, patchSlot, removeSlot, exportDraft,
     shared, editable, selectDraft, publishDraft, publishing, adding, addPublishedTemplate, libraryRefreshToken,
-    copyMember, copySelection, startPaste, cancelPaste, pasteAt, pasteMembers, pasteAnchor,
+    copyMember, duplicateMembers, copySelection, startPaste, cancelPaste, pasteAt, pasteMembers, pasteAnchor,
     removeSelection: () => removeMembers(selectedMemberIds), toggleGroup, enterComponent,
     moveMember, transformMember, transformMembers, setPlanarMovement, groundMember, undoModel, undoCount, undoing,
     downloadLocalDraft, dismissAgentChanges: () => controller.current?.dismissAgentChanges(),

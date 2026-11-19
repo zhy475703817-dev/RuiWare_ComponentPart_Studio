@@ -9,12 +9,13 @@ import type { ComponentMember, Vector3 as Position } from "../domain/component";
 import { boundsInSelection, projectBoxBounds, selectionPivot, selectionRectangle, transformSelection } from "./selectionGeometry";
 import type { MemberTransform, SelectionMode, SelectionRectangle } from "./selectionGeometry";
 
-type SelectionGroup = { id: string; memberIds: string[]; parentId?: string };
+type SelectionGroup = { id: string; name?: string; memberIds: string[]; parentId?: string };
 export type ViewportEditing = {
   selectedMemberIds: string[];
   groups?: SelectionGroup[];
   onSelectMembers: (ids: string[], mode: SelectionMode) => void;
   onTransformMembers: (transforms: MemberTransform[]) => void;
+  onDuplicateMembers?: (ids: string[], offset: Position) => void;
   onEnterComponent?: (id: string, childPath: string[]) => void;
   pasteMembers?: ComponentMember[] | null;
   pasteAnchor?: Position;
@@ -27,7 +28,7 @@ type Props = ViewportEditing & {
   onRectangle: (rectangle: SelectionRectangle | null) => void;
   onDragging: (dragging: boolean) => void;
   onTransformPreview: (id: string, transform: MemberTransform, mode: "translate" | "rotate") => void;
-  ghost: (offset: Position) => ReactNode;
+  ghost: (offset: Position, members?: ComponentMember[]) => ReactNode;
 };
 
 function roots(scene: Object3D): Object3D[] {
@@ -81,9 +82,11 @@ export function ViewportInteraction(props: Props) {
     });
   }, []);
   const [pastePoint, setPastePoint] = useState<Position | null>(null);
+  const [duplicatePreview, setDuplicatePreview] = useState<{ members: ComponentMember[]; offset: Position } | null>(null);
+  const altPointerDown = useRef(false);
   const lastPointer = useRef<{ x: number; y: number } | null>(null);
   const gesture = useRef<{ x: number; y: number; mode: SelectionMode; dragging: boolean } | null>(null);
-  const dragSnapshot = useRef<{ members: ComponentMember[]; pivot: Position } | null>(null);
+  const dragSnapshot = useRef<{ members: ComponentMember[]; pivot: Position; duplicate: boolean } | null>(null);
   const dragging = useRef(false);
   const placementAt = useCallback((x: number, y: number): Position | null => {
     const rect = gl.domElement.getBoundingClientRect();
@@ -98,6 +101,7 @@ export function ViewportInteraction(props: Props) {
     const snapshot = dragSnapshot.current;
     dragging.current = false;
     dragSnapshot.current = null;
+    setDuplicatePreview(null);
     if (snapshot) {
       const objects = roots(scene);
       for (const original of snapshot.members) {
@@ -159,6 +163,7 @@ export function ViewportInteraction(props: Props) {
       lastPointer.current = { x: event.clientX, y: event.clientY };
       canvas.closest<HTMLElement>(".viewport")?.focus({ preventScroll: true });
       if (event.button !== 0 || dragging.current) return;
+      altPointerDown.current = event.altKey;
       clickEligible = false;
       beforeClick = [...latest.current.selectedMemberIds];
       gesture.current = { x: event.clientX, y: event.clientY, mode: event.ctrlKey || event.metaKey ? "remove" : event.shiftKey ? "add" : "replace", dragging: false };
@@ -230,6 +235,7 @@ export function ViewportInteraction(props: Props) {
       else latest.current.onSelectMembers([hit.id], "replace");
     };
     const cancel = () => {
+      altPointerDown.current = false;
       gesture.current = null; clickEligible = false; doubleClickTarget = null;
       latest.current.onRectangle(null); cancelTransform();
     };
@@ -274,6 +280,10 @@ export function ViewportInteraction(props: Props) {
     if (!snapshot) return [];
     if (props.planarMove) pivot.position.z = snapshot.pivot[2];
     const transforms = transformSelection(snapshot.members, snapshot.pivot, pivot.position.toArray() as Position, [pivot.rotation.x, pivot.rotation.y, pivot.rotation.z]);
+    if (snapshot.duplicate) {
+      setDuplicatePreview({ members: snapshot.members, offset: pivot.position.toArray().map((value, axis) => value - snapshot.pivot[axis]) as Position });
+      return transforms;
+    }
     const objects = roots(scene);
     for (const transform of transforms) for (const object of objects) {
       if (object.userData.viewportMemberId !== transform.id || object.userData.viewportPatternInstance) continue;
@@ -289,18 +299,28 @@ export function ViewportInteraction(props: Props) {
     {controlsVisible && <TransformControls ref={captureControls} key={controlsEpoch} object={pivot} mode={props.mode} space="world" size={.9} showX showY showZ={!props.planarMove || props.mode === "rotate"}
       onMouseDown={() => {
         dragging.current = true; gesture.current = null; props.onRectangle(null);
-        dragSnapshot.current = { members: structuredClone(selected), pivot: pivot.position.toArray() as Position };
+        const duplicate = props.mode === "translate" && altPointerDown.current && Boolean(props.onDuplicateMembers);
+        altPointerDown.current = false;
+        dragSnapshot.current = { members: structuredClone(selected), pivot: pivot.position.toArray() as Position, duplicate };
         props.onDragging(true);
       }}
       onObjectChange={previewTransform}
       onMouseUp={() => {
         if (!dragging.current || !dragSnapshot.current) return;
+        const snapshot = dragSnapshot.current;
         const transforms = previewTransform();
-        if (transforms.length) props.onTransformMembers(transforms);
         dragSnapshot.current = null; dragging.current = false;
+        setDuplicatePreview(null);
+        if (snapshot.duplicate) {
+          const offset = pivot.position.toArray().map((value, axis) => value - snapshot.pivot[axis]) as Position;
+          pivot.position.set(...snapshot.pivot);
+          if (offset.every(Number.isFinite) && offset.some(value => Math.abs(value) > 1e-8)) props.onDuplicateMembers?.(snapshot.members.map(member => member.id), offset);
+        } else if (transforms.length) props.onTransformMembers(transforms);
         pivot.rotation.set(0, 0, 0);
+        pivot.updateMatrixWorld(true);
         props.onDragging(false);
       }}/>}
+    {duplicatePreview && props.ghost(duplicatePreview.offset, duplicatePreview.members)}
     {props.pasteMembers && pastePoint && props.ghost(pastePoint.map((coordinate, index) => coordinate - anchor[index]) as Position)}
   </>;
 }
