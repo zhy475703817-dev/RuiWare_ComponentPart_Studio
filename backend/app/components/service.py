@@ -158,6 +158,10 @@ def interfaces_compatible(a, b):
 
 def apply_action(document: ComponentDocument, action: TypedAction) -> ComponentDocument:
     action = ComponentAction.validate_python(action)
+    if document.geometryDesign and (action.type in ("pattern.add", "binding.set") or action.type == "parameter.value" and (
+        action.id.startswith("geometryEnvelope") or any(b.parameterId == action.id for b in document.bindings)
+        or any(action.id in (p.countParameterId, p.spacingParameterId) for p in document.patterns))):
+        raise ComponentError(422, "GEOMETRY_RESIZE_REQUIRED")
     data = document.model_dump(by_alias=True)
     if action.type == "model.restore":
         data.update(action.model.model_dump(by_alias=True))
@@ -169,6 +173,10 @@ def apply_action(document: ComponentDocument, action: TypedAction) -> ComponentD
         if isinstance(patch.get("code"), str):
             patch["code"] = patch["code"].upper()
         data["definition"].update(patch)
+    elif action.type == "member.add" and document.geometryDesign:
+        if any(member.id == action.member.id for member in document.assembly.members):
+            raise ComponentError(422, "DUPLICATE_ID")
+        data["assembly"]["members"].append(action.member.model_dump(by_alias=True))
     elif action.type == "member.add":
         if any(member.id == action.member.id for member in document.assembly.members):
             raise ComponentError(422, "DUPLICATE_ID")
@@ -531,6 +539,8 @@ def apply_action(document: ComponentDocument, action: TypedAction) -> ComponentD
                         minimum = max(item["min"], definition["minimum"]) if definition.get("minimum") is not None else item["min"]
                         maximum = min(item["max"], definition["maximum"]) if definition.get("maximum") is not None else item["max"]
                         member["parameterValues"][binding["memberParameterId"]] = min(maximum, max(minimum, item[field]))
+    if data.get("geometryDesign") and action.type not in ("definition.patch", "rule.expression", "rule.add", "rule.remove"):
+        data["geometryDesign"]["verified"] = False
     if data == document.model_dump(by_alias=True):
         return document
     data["revision"] = document.revision + 1
@@ -625,7 +635,7 @@ def validate_component(document: ComponentDocument, *, code_unique: bool = True)
         check("patterns", "组件构成规则", all(pattern_valid(pattern) for pattern in document.patterns)
               and len({identifier for pattern in document.patterns for identifier in pattern.memberIds}) == sum(len(pattern.memberIds) for pattern in document.patterns), "重复构成规则引用无效成员、参数或重叠成员"),
         check("slots", "槽位引用", len({slot.id for slot in document.slots}) == len(document.slots) and all(slot_valid(slot) for slot in document.slots), "槽位缺少有效基准接口、占用接口不兼容，或必填槽位尚未分配"),
-        {"id": "assembly.solve", "label": "装配求解", "status": "pending", "message": "尚未接入装配求解，连接数据不会自动改变成员位置"},
+        {"id": "assembly.solve", "label": "几何联动检查", "status": "pass" if document.geometryDesign and document.geometryDesign.verified else "pending", "message": "实际外形及已配置几何约束通过" if document.geometryDesign and document.geometryDesign.verified else "请在参数阶段试算并应用几何联动；当前未验证"},
         {"id": "rules.execution", "label": "工程规则执行", "status": "pending", "message": "当前仅保存规则说明，尚未接入规则执行"},
     ]
 
@@ -635,11 +645,12 @@ def serialize_component(document: ComponentDocument) -> dict:
     members = []
     for member in data["assembly"]["members"]:
         template = member["template"]
-        bindings = {**member["parameterValues"], **{binding.memberParameterId: binding.parameterId for binding in document.bindings if binding.memberId == member["id"]}}
+        bindings = {**member["parameterValues"], **({} if document.geometryDesign else {binding.memberParameterId: binding.parameterId for binding in document.bindings if binding.memberId == member["id"]})}
         members.append({
             "memberId": member["id"], "partTemplateVersion": template["publicationId"], "partTemplateRef": template,
             **{key: member.get(key, []) if key in ("parameterDefinitions", "resolvedInterfaces") else member[key] for key in ("name", "code", "role", "position", "rotation", "parameterValues", "parameterDefinitions", "resolvedInterfaces", "interfaces")}, "bindings": bindings,
             **({"planarMovement": True} if member.get("planarMovement") else {}),
+            **({"instanceDocument": member["instanceDocument"]} if member.get("instanceDocument") else {}),
         })
     mates = [{
         "id": mate.id, "from": f"{mate.from_.memberId}.{mate.from_.interfaceId}", "to": f"{mate.to.memberId}.{mate.to.interfaceId}",
@@ -657,6 +668,7 @@ def serialize_component(document: ComponentDocument) -> dict:
     return {
         **{key: data[key] for key in ("schemaVersion", "templateKind", "revision", "unitSystem", "coordinateSystem")},
         "name": document.definition.name,
+        **({"geometryDesign": data["geometryDesign"]} if data.get("geometryDesign") else {}),
         "stages": {
             "definition": data["definition"], "assembly": {"members": members, "mates": mates}, "ports": ports,
             "interfaceTypes": data.get("interfaceTypes", []),

@@ -7,7 +7,7 @@ export type ResolvedComponentMember = ComponentMember & {
   patternId?: string;
 };
 
-type CompositionDocument = Pick<ComponentDocument, "assembly" | "parameters" | "bindings" | "patterns">;
+type CompositionDocument = Pick<ComponentDocument, "assembly" | "parameters" | "bindings" | "patterns"> & Pick<Partial<ComponentDocument>, "geometryDesign">;
 
 function resolveParameters(document: CompositionDocument, overrides: Record<string, unknown>): ComponentParameter[] {
   return document.parameters.map(parameter => {
@@ -26,6 +26,7 @@ function resolveParameters(document: CompositionDocument, overrides: Record<stri
 
 /** Resolve parameter bindings and generic repeated member groups for a component preview. */
 export function resolveComponentComposition(document: CompositionDocument, overrides: Record<string, unknown> = {}): ResolvedComponentMember[] {
+  if (document.geometryDesign) return document.assembly.members.map(member => ({ ...structuredClone(member), sourceMemberId: member.id, patternInstance: false }));
   const parameters = resolveParameters(document, overrides);
   const members = document.assembly.members.map(member => ({ ...structuredClone(member), parameterValues: { ...member.parameterValues } }));
 

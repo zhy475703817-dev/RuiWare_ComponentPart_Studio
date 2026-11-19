@@ -1,0 +1,9 @@
+.geometry-resize {border:1px solid #d5e2ec;border-radius:8px;background:#f7fbfe;padding:12px;margin-bottom:18px;}
+.geometry-resize h4 {margin:0 0 8px;}
+.geometry-resize label {display:block;margin:7px 0;}
+.geometry-resize input[type=number],.geometry-resize select {width:100%;min-width:0;}
+.geometry-resize small {display:block;overflow-wrap:anywhere;color:#63788c;}
+.geometry-resize details {margin:10px 0;padding:8px;background:white;border-radius:5px;}
+.geometry-resize summary {cursor:pointer;}
+.geometry-resize p {overflow-wrap:anywhere;}
+.resize-actions {display:flex;flex-wrap:wrap;gap:8px;margin-top:12px;}

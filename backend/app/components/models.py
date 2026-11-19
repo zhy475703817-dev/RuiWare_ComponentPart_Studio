@@ -119,6 +119,14 @@ class MemberParameterDefinition(ComponentModel):
     minimum: Number | None
     maximum: Number | None
     default: ParameterValue
+    allowedValues: list[ParameterValue] = Field(default_factory=list)
+
+    @model_serializer(mode="wrap")
+    def preserve_legacy_allowed(self, handler):
+        data = handler(self)
+        if "allowedValues" not in self.model_fields_set:
+            data.pop("allowedValues", None)
+        return data
 
 
 class ComponentMember(ComponentModel):
@@ -134,11 +142,12 @@ class ComponentMember(ComponentModel):
     parameterDefinitions: list[MemberParameterDefinition] = Field(default_factory=list)
     resolvedInterfaces: list[dict[str, object]] = Field(default_factory=list)
     interfaces: list[PartInterface]
+    instanceDocument: "ComponentDocument | None" = None
 
     @model_serializer(mode="wrap")
     def preserve_legacy_members(self, handler):
         data = handler(self)
-        for field in ("parameterDefinitions", "resolvedInterfaces", "planarMovement"):
+        for field in ("parameterDefinitions", "resolvedInterfaces", "planarMovement", "instanceDocument"):
             if field not in self.model_fields_set:
                 data.pop(field, None)
         return data
@@ -294,8 +303,42 @@ class Assembly(ComponentModel):
     mates: list[Mate]
 
 
+class GeometryEndpoint(ComponentModel):
+    path: list[str] = Field(min_length=1, max_length=16)
+    interfaceId: str
+
+
+class GeometryRelation(ComponentModel):
+    id: str
+    a: GeometryEndpoint
+    b: GeometryEndpoint
+    mode: Literal["coincident", "preserve-offset", "plane", "axis"] = "preserve-offset"
+    origin: Literal["existing", "inferred", "user"] = "user"
+    offset: Vector3 = [0, 0, 0]
+    normalDot: Number | None = Field(default=None, ge=-1, le=1)
+
+
+class GeometryLock(ComponentModel):
+    path: list[str] = Field(min_length=1, max_length=16)
+    parameterId: str | None = None
+
+
+class GeometryDesign(ComponentModel):
+    version: Literal[1] = 1
+    axes: Literal["xyz"] = "xyz"
+    anchor: Literal["bottom-center"] = "bottom-center"
+    locks: list[GeometryLock] = Field(default_factory=list, max_length=1000)
+    relations: list[GeometryRelation] = Field(default_factory=list, max_length=2000)
+    dimensions: Vector3
+    solverVersion: str = "geometry-resize-1"
+    inputHash: str = ""
+    verified: bool = False
+    interfaceSnapshots: list[dict[str, object]] = Field(default_factory=list, max_length=30000)
+    verification: dict[str, object] = Field(default_factory=dict)
+
+
 class ComponentDocument(ComponentModel):
-    schemaVersion: Literal["component-1.0"]
+    schemaVersion: Literal["component-1.0", "component-1.1"]
     templateKind: Literal["component"]
     revision: Revision
     unitSystem: Literal["mm-kg-s"]
@@ -309,6 +352,14 @@ class ComponentDocument(ComponentModel):
     bindings: list[ParameterBinding]
     patterns: list[ComponentPattern] = Field(default_factory=list)
     rules: list[ComponentRule]
+    geometryDesign: GeometryDesign | None = None
+
+    @model_serializer(mode="wrap")
+    def preserve_legacy_geometry(self, handler):
+        data = handler(self)
+        if "geometryDesign" not in self.model_fields_set:
+            data.pop("geometryDesign", None)
+        return data
 
     @model_validator(mode="after")
     def validate_interface_types(self):

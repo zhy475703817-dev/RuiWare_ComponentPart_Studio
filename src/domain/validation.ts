@@ -67,7 +67,7 @@ export function validateComponent(document: ComponentDocument, codeUnique = true
         && spacing.min >= 0 && spacing.min <= spacing.value && spacing.value <= spacing.max;
     }) && new Set(document.patterns.flatMap(pattern => pattern.memberIds)).size === document.patterns.reduce((total, pattern) => total + pattern.memberIds.length, 0), "重复构成规则引用无效成员、参数或重叠成员"),
     check("slots", "槽位引用", slotsValid, "槽位缺少有效基准接口、占用接口不兼容，或必填槽位尚未分配"),
-    { id: "assembly.solve", label: "装配求解", status: "pass", message: "接口按几何中点对齐，连接组保持联动移动" },
+    { id: "assembly.solve", label: "几何联动检查", status: document.geometryDesign?.verified ? "pass" : "pending", message: document.geometryDesign?.verified ? "实际外形及已配置几何约束通过" : "请在参数阶段试算并应用几何联动；当前未验证" },
     { id: "rules.execution", label: "工程规则执行", status: "pending", message: "当前仅保存规则说明，尚未接入规则执行" },
   ];
 }

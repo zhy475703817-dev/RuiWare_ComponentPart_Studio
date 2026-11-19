@@ -93,6 +93,7 @@ function ModelStatus({ name, preview }: { name: string; preview: ReturnType<type
 }
 
 function DraggableGroup({ member, selected, compatible = false, onSelect, onHover, onTransformPreview, onTransformCommit, onDragStateChange, onPointerSelect, onPointerHover, onPointerHoverEnd, transformMode, planarMove, movable = true, children }: { member: ComponentMember; selected: boolean; compatible?: boolean; onSelect: () => void; onHover?: (hovered: boolean) => void; onTransformPreview: (snapshot: TransformSnapshot) => void; onTransformCommit: (snapshot: TransformSnapshot) => void; onDragStateChange?: (dragging: boolean) => void; onPointerSelect?: (point: ScreenPoint) => void; onPointerHover?: (point: ScreenPoint) => void; onPointerHoverEnd?: () => void; transformMode: TransformMode; planarMove: boolean; movable?: boolean; children: (hovered: boolean) => ReactNode }) {
+  const geometryReadOnly = useContext(GeometryPreviewReadOnly);
   const groupRef = useRef<Group | null>(null); const [groupObject, setGroupObject] = useState<Group | null>(null); const positionRef = useRef<Vector3>(member.position); const rotationRef = useRef<Vector3>(member.rotation); const [localPosition, setLocalPosition] = useState<Vector3>(member.position); const [hovered, setHovered] = useState(false);
   const captureGroup = useCallback((group: Group | null) => { groupRef.current = group; setGroupObject(group); }, []);
   useEffect(() => { positionRef.current = member.position; rotationRef.current = member.rotation; setLocalPosition(member.position); }, [member.position, member.rotation]);
@@ -114,7 +115,7 @@ function DraggableGroup({ member, selected, compatible = false, onSelect, onHove
       {compatible && !selected && <CompatibleOutline />}
       {children(hovered)}
     </group>
-    {movable && selected && groupObject && <TransformControls object={groupObject} mode={transformMode} space="world" showX showY showZ={!planarMove || transformMode === "rotate"} size={0.9}
+    {movable && !geometryReadOnly && selected && groupObject && <TransformControls object={groupObject} mode={transformMode} space="world" showX showY showZ={!planarMove || transformMode === "rotate"} size={0.9}
       onMouseDown={() => onDragStateChange?.(true)}
       onObjectChange={() => { const snapshot = readTransform(); if (snapshot) onTransformPreview(snapshot); }}
       onMouseUp={() => { const snapshot = readTransform(); if (snapshot) { onTransformPreview(snapshot); onTransformCommit(snapshot); } onDragStateChange?.(false); }} />}
@@ -155,11 +156,12 @@ function NestedComponentVisual({ member, selected = false, onSelect, onPointerSe
   const [document, setDocument] = useState<import("../domain/component").ComponentDocument | null>(null);
   useEffect(() => {
     let active = true;
+    if (member.instanceDocument) { setDocument(member.instanceDocument); return; }
     void fetchPublishedComponent(member.template.publicationId).then(publication => {
       if (active && publication.templateId === member.template.templateId && publication.version === member.template.version && publication.sha256.toLowerCase() === member.template.sha256.toLowerCase()) setDocument(publication.document);
     }).catch(() => { if (active) setDocument(null); });
     return () => { active = false; };
-  }, [member.template.publicationId, member.template.templateId, member.template.version, member.template.sha256]);
+  }, [member.template.publicationId, member.template.templateId, member.template.version, member.template.sha256, member.instanceDocument]);
   const childMembers = useMemo(() => document ? resolveComponentComposition(document, member.parameterValues) : [], [document, JSON.stringify(member.parameterValues)]);
   if (!document) return null;
   return <group position={member.position} rotation={member.rotation}>
@@ -227,8 +229,10 @@ function PreviewScene({ members, parameters, bindings, patterns, selectedMemberI
   })}<ViewportCameraControls enabled={cameraEnabled} radius={radius} hasContent={members.length > 0 || Boolean(geometry)} resetToken={cameraResetToken} storageKey={cameraStorageKey}/></>;
 }
 
-type Props = { undoCount?: number; onUndoModel?: () => void; undoDisabled?: boolean; members: ComponentMember[]; parameters?: ComponentParameter[]; bindings?: ParameterBinding[]; patterns?: ComponentPattern[]; mateCount: number; previewTemplate: PublishedTemplate | null; onShowAssembly?: () => void; selectedMemberId?: string | null; selectedInterface?: InterfaceSelection | null; selectedInterfaceResolved?: ResolvedPartInterface[]; panelSelectionToken?: number; compatibleMemberIds?: ReadonlySet<string>; onSelectMember?: (id: string | null) => void; onHoverMember?: (id: string | null) => void; onTransformMember?: (id: string, position: Vector3, rotation: Vector3) => void; onSetPlanarMovement?: (id: string, enabled: boolean) => void; onGroundMember?: (id: string) => void; onCopyMember?: (id: string) => void; onRemoveMember?: (id: string) => void; onDropTemplate?: () => void; cameraStorageKey?: string };
-export function ComponentViewport({ undoCount = 0, onUndoModel, undoDisabled = false, members, parameters = [], bindings = [], patterns = [], mateCount, previewTemplate, onShowAssembly, selectedMemberId = null, selectedInterface = null, selectedInterfaceResolved, panelSelectionToken = 0, compatibleMemberIds, onSelectMember = () => undefined, onHoverMember, onTransformMember = () => undefined, onSetPlanarMovement, onGroundMember, onCopyMember = () => undefined, onRemoveMember = () => undefined, onDropTemplate = () => undefined, cameraStorageKey = DEFAULT_CAMERA_STORAGE_KEY }: Props) {
+const GeometryPreviewReadOnly = createContext(false);
+
+type Props = { readOnly?: boolean; undoCount?: number; onUndoModel?: () => void; undoDisabled?: boolean; members: ComponentMember[]; parameters?: ComponentParameter[]; bindings?: ParameterBinding[]; patterns?: ComponentPattern[]; mateCount: number; previewTemplate: PublishedTemplate | null; onShowAssembly?: () => void; selectedMemberId?: string | null; selectedInterface?: InterfaceSelection | null; selectedInterfaceResolved?: ResolvedPartInterface[]; panelSelectionToken?: number; compatibleMemberIds?: ReadonlySet<string>; onSelectMember?: (id: string | null) => void; onHoverMember?: (id: string | null) => void; onTransformMember?: (id: string, position: Vector3, rotation: Vector3) => void; onSetPlanarMovement?: (id: string, enabled: boolean) => void; onGroundMember?: (id: string) => void; onCopyMember?: (id: string) => void; onRemoveMember?: (id: string) => void; onDropTemplate?: () => void; cameraStorageKey?: string };
+export function ComponentViewport({ readOnly = false, undoCount = 0, onUndoModel, undoDisabled = false, members, parameters = [], bindings = [], patterns = [], mateCount, previewTemplate, onShowAssembly, selectedMemberId = null, selectedInterface = null, selectedInterfaceResolved, panelSelectionToken = 0, compatibleMemberIds, onSelectMember = () => undefined, onHoverMember, onTransformMember = () => undefined, onSetPlanarMovement, onGroundMember, onCopyMember = () => undefined, onRemoveMember = () => undefined, onDropTemplate = () => undefined, cameraStorageKey = DEFAULT_CAMERA_STORAGE_KEY }: Props) {
   const isPreview = previewTemplate !== null;
   const preview = useTemplatePreview(previewTemplate?.templateKind === "component" ? null : previewTemplate);
   const loaded = preview.result;
@@ -332,45 +336,45 @@ export function ComponentViewport({ undoCount = 0, onUndoModel, undoDisabled = f
   const tooltipMember = tooltip ? members.find(member => member.id === tooltip.memberId) : undefined;
   return <section className="viewport" aria-label="组件三维视图" tabIndex={0} onPointerLeave={handleViewportPointerLeave}
     onDragOver={event => { if (event.dataTransfer.types.includes("text/plain")) event.preventDefault(); }}
-    onDrop={event => { if (event.dataTransfer.types.includes("text/plain")) { event.preventDefault(); onDropTemplate(); } }}
+    onDrop={event => { if (event.dataTransfer.types.includes("text/plain")) { event.preventDefault(); if (!readOnly) onDropTemplate(); } }}
     onKeyDown={event => {
-      if (isPreview || !selectedMemberId || (event.target instanceof HTMLElement && event.target.closest("input,textarea,select,button"))) return;
+      if (readOnly || isPreview || !selectedMemberId || (event.target instanceof HTMLElement && event.target.closest("input,textarea,select,button"))) return;
       if (event.key === "Delete" || event.key === "Backspace") { event.preventDefault(); onRemoveMember(selectedMemberId); }
       else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "d") { event.preventDefault(); onCopyMember(selectedMemberId); }
     }}>
-    <div className="viewport-toolbar"><button className="tool" type="button" disabled={undoDisabled || undoCount === 0 || isPreview} onClick={onUndoModel} title="仅撤回模型操作，最多保留十步" aria-label="撤回上一步模型操作"><RotateCcw size={14}/>撤回（{undoCount}/10）</button>
+    <div className="viewport-toolbar"><button className="tool" type="button" disabled={readOnly || undoDisabled || undoCount === 0 || isPreview} onClick={onUndoModel} title="仅撤回模型操作，最多保留十步" aria-label="撤回上一步模型操作"><RotateCcw size={14}/>撤回（{undoCount}/10）</button>
       <button className={`tool ${!isPreview ? "active" : ""}`} type="button" onClick={onShowAssembly}><Boxes size={15}/>当前组件</button>
       {isPreview && <span className="tool active"><Eye size={15}/>模板预览</span>}
       <button className="tool" type="button" onClick={() => setCameraResetToken(token => token + 1)} title="面向世界坐标原点并恢复默认观察距离"><LocateFixed size={14}/>视角复位</button>
       <span className="viewport-help" title="左键拖动旋转视角 · 中键拖动平移视角 · 滚轮缩放">{isPreview ? "预览不会修改当前组件" : "中键拖动平移视角 · 滚轮缩放"}</span>
-      {!isPreview && selectedMember && <>
+      {!readOnly && !isPreview && selectedMember && <>
         <button className={`tool ${transformMode === "translate" ? "active" : ""}`} type="button" aria-label="移动模式" onClick={() => setTransformMode("translate")} title="移动模式"><Move3d size={14}/></button>
         <button className={`tool ${transformMode === "rotate" ? "active" : ""}`} type="button" aria-label="旋转模式" onClick={() => setTransformMode("rotate")} title="旋转模式"><Rotate3d size={14}/></button>
         <label className="viewport-planar-toggle"><input type="checkbox" checked={planarMove} onChange={event => { setPlanarMove(event.target.checked); onSetPlanarMovement?.(selectedMember.id, event.target.checked); }}/>仅 XY 平面</label>
         <button className="tool" type="button" onClick={() => onGroundMember?.(selectedMember.id)} title="将当前最低点归零">贴地</button>
         <button className="tool" type="button" onClick={() => { setTransformDraft(null); setTransformReadout(null); onTransformMember(selectedMember.id, selectedMember.position, [0, 0, 0]); }} title="将构件旋转角归零，保持当前位置"><RotateCcw size={14}/>角度复位</button>
       </>}
-      {!isPreview && selectedMemberId && <>
+      {!readOnly && !isPreview && selectedMemberId && <>
         <button className="tool" type="button" title="复制成员 (Ctrl/Cmd+D)" aria-label="复制选中成员" onClick={() => onCopyMember(selectedMemberId)}><Copy size={14}/></button>
         <button className="tool" type="button" title="删除成员 (Delete)" aria-label="删除选中成员" onClick={() => onRemoveMember(selectedMemberId)}><Trash2 size={14}/></button>
       </>}
       <span className="view-status">{members.length} 个成员 · {patterns.length ? `${patterns.length} 条构成规则` : `${mateCount} 个连接`}</span>
     </div>
-    {!isPreview && selectedMember && <div className="viewport-transform-panel" aria-label="选中物体变换">
+    {!readOnly && !isPreview && selectedMember && <div className="viewport-transform-panel" aria-label="选中物体变换">
       <strong>{selectedMember.name}</strong><span className="transform-origin-note">世界坐标 · mm / °</span>
       {(["position", "rotation"] as const).map(field => <div className="viewport-transform-row" key={field}>
         <span>{field === "position" ? "位置" : "旋转"}</span>{["X", "Y", "Z"].map((axis, index) => { const draft = transformDraft?.memberId === selectedMember.id && transformDraft.field === field && transformDraft.index === index ? transformDraft.value : null; return <label key={axis}>{axis}<input type="number" step="any" disabled={field === "position" && planarMove && index === 2} value={draft ?? Number((selectedMember[field][index] * (field === "rotation" ? 180 / Math.PI : 1)).toFixed(6))} onFocus={event => setTransformDraft({ memberId: selectedMember.id, field, index, value: event.currentTarget.value })} onBlur={commitTransformInput} onKeyDown={event => { if (event.key === "Enter") event.currentTarget.blur(); else if (event.key === "Escape") { cancelTransformCommit.current = true; setTransformDraft(null); event.currentTarget.blur(); } }} onChange={event => setTransformDraft({ memberId: selectedMember.id, field, index, value: event.target.value })}/><small>{field === "position" ? "mm" : "°"}</small></label>; })}</div>)}
     </div>}
     {(isPreview || !selectedMember) && <div className="viewport-transform-placeholder">{isPreview ? "模板预览 · 选择当前组件后可编辑构件" : "选择零部件或组件，精确设置位置和旋转角度"}<span>世界坐标 · mm / °</span></div>}
     <div className="viewport-scene" ref={sceneRef}>
-      <ModelStatusRegistry.Provider value={registerModelStatus}><Canvas camera={{ position: [7, 5, 7], up: [0, 0, 1], fov: 42 }} onPointerMissed={clearSelection}>
+      <GeometryPreviewReadOnly.Provider value={readOnly}><ModelStatusRegistry.Provider value={registerModelStatus}><Canvas camera={{ position: [7, 5, 7], up: [0, 0, 1], fov: 42 }} onPointerMissed={clearSelection}>
         <color attach="background" args={["#f5f7f9"]}/><ambientLight intensity={1.8}/><directionalLight position={[4, 6, 5]} intensity={2}/>
         <PreviewScene members={isPreview ? [] : members} parameters={parameters} bindings={bindings} patterns={isPreview ? [] : patterns}
           selectedMemberId={isPreview ? null : selectedMemberId} selectedInterface={selectedInterface} selectedInterfaceResolved={selectedInterfaceResolved}
           panelSelectionToken={panelSelectionToken} compatibleMemberIds={compatibleMemberIds} onSelectMember={onSelectMember} onHoverMember={hoverHandler}
           onPointerSelect={handlePointerSelect} onPointerHover={handlePointerHover} onPointerHoverEnd={handlePointerHoverEnd}
           onScreenSelection={handleScreenSelection} onTransformMember={onTransformMember} onTransformPreview={handleTransformPreview} onDragStateChange={dragging => { if (!dragging) setTransformReadout(null); }} transformMode={transformMode} planarMove={planarMove} geometry={loaded?.geometry || null} cameraResetToken={cameraResetToken} cameraStorageKey={cameraStorageKey}/>
-      </Canvas></ModelStatusRegistry.Provider>
+      </Canvas></ModelStatusRegistry.Provider></GeometryPreviewReadOnly.Provider>
       {modelStatuses.length > 0 && <div className="member-status-layer">{modelStatuses.map(status => <div key={status.id} className="member-model-status" role={status.error ? "alert" : "status"}>
         <b>{status.name}</b><span>{status.error ? "模型暂时无法显示，请重试" : status.updating ? "正在更新模型…" : "正在加载模型…"}</span>
         {status.error && <button type="button" className="ghost" onClick={status.retry}>重试</button>}

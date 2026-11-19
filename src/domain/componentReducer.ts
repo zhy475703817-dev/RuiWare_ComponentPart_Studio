@@ -35,7 +35,10 @@ export type ComponentAction =
   | { type: "rule.expression"; id: string; expression: string };
 
 export function componentReducer(document: ComponentDocument, action: ComponentAction): ComponentDocument {
-  const next = (patch: Partial<ComponentDocument>): ComponentDocument => ({ ...document, ...patch, revision: document.revision + 1 });
+  if (document.geometryDesign && (action.type === "pattern.add" || action.type === "binding.set" || action.type === "parameter.value" && (
+    action.id.startsWith("geometryEnvelope") || document.bindings.some(b => b.parameterId === action.id)
+    || document.patterns.some(p => p.countParameterId === action.id || p.spacingParameterId === action.id)))) return document;
+  const next = (patch: Partial<ComponentDocument>): ComponentDocument => ({ ...document, ...patch, ...(document.geometryDesign && !["definition.patch", "rule.expression", "rule.add", "rule.remove"].includes(action.type) ? { geometryDesign: { ...document.geometryDesign, verified: false } } : {}), revision: document.revision + 1 });
   switch (action.type) {
     case "model.restore": return next(structuredClone(action.model));
     case "reset": return createComponentDocument();
@@ -44,6 +47,7 @@ export function componentReducer(document: ComponentDocument, action: ComponentA
       return next({ definition: { ...document.definition, ...action.patch } });
     case "member.add":
       if (document.assembly.members.some(member => member.id === action.member.id)) return document;
+      if (document.geometryDesign) return next({ assembly: { ...document.assembly, members: [...document.assembly.members, structuredClone(action.member)] }, geometryDesign: { ...document.geometryDesign, verified: false } });
       {
         const member = structuredClone(action.member);
         const dimensionAliases: Record<string, string[]> = {
