@@ -41,12 +41,12 @@ export function App() {
     {workspace.shared.draftId && <button className="ghost" onClick={workspace.reloadDraft}>{workspace.shared.dirty ? "放弃未保存内容并重新读取" : "重新读取"}</button>}
   </section>;
   const clearInterfacePreview = () => { interfacePreviewAbort.current?.abort(); interfacePreviewAbort.current = null; setSelectedInterface(null); setInterfacePreview(undefined); };
-  const selectPanelMember = (id: string) => { workspace.setSelectedMemberId(id); clearInterfacePreview(); setPanelSelectionToken(token => token + 1); };
+  const selectPanelMember = (id: string, mode: "replace" | "add" | "remove" = "replace") => { workspace.setSelectedMemberId(id, mode); clearInterfacePreview(); setPanelSelectionToken(token => token + 1); };
   const selectInterface = (selection: InterfaceSelection) => {
     interfacePreviewAbort.current?.abort();
     interfacePreviewAbort.current = null;
     setSelectedInterface(selection);
-    workspace.setSelectedMemberId(selection.memberId);
+    workspace.selectMembers([selection.memberId]);
     setPanelSelectionToken(token => token + 1);
     const member = members.find(item => item.id === selection.memberId);
     const item = member?.interfaces.find(interfaceItem => interfaceItem.id === selection.interfaceId);
@@ -81,6 +81,7 @@ export function App() {
     });
   };
   const selectViewportMember = (id: string | null) => { workspace.setSelectedMemberId(id); clearInterfacePreview(); setPanelSelectionToken(token => token + 1); };
+  const selectViewportMembers = (ids: string[], mode: "replace" | "add" | "remove") => { workspace.selectMembers(ids, mode); clearInterfacePreview(); setPanelSelectionToken(token => token + 1); };
 
   useEffect(() => {
     if (selectedInterface && !hasInterfaceSelection(members, selectedInterface)) clearInterfacePreview();
@@ -128,14 +129,15 @@ export function App() {
       <PublishedTemplateLibrary onPreview={workspace.setPreviewTemplate} onAdd={workspace.addPublishedTemplate} onDragTemplate={setDragTemplate} memberPublicationIds={members.map(member => member.template.publicationId)} selectionResetToken={workspace.selectionResetToken} refreshToken={workspace.libraryRefreshToken} addDisabled={!workspace.editable}/>
       <div className="panel-title member-title"><span>组件成员</span><small>{members.length}</small></div>
       {members.length === 0 && <p className="hint">暂无成员，点击发布库模板旁的加号或从发布详情加入组件。</p>}
-      {members.map(member => <div className={`member-row ${workspace.selectedMemberId === member.id ? "selected" : ""} ${hoveredMemberId === member.id ? "hovered" : ""} ${compatibleIds.has(member.id) ? "compatible-candidate" : ""}`} key={member.id} onMouseEnter={() => setHoveredMemberId(member.id)} onMouseLeave={() => setHoveredMemberId(null)} title={member.name}>
-        <button className="member-select" onClick={() => selectPanelMember(member.id)}><span>{member.role}<small>{member.code} · V{member.template.version}</small></span></button>
+      {members.map(member => <div className={`member-row ${workspace.selectedMemberIds.includes(member.id) ? "selected" : ""} ${hoveredMemberId === member.id ? "hovered" : ""} ${compatibleIds.has(member.id) ? "compatible-candidate" : ""}`} key={member.id} onMouseEnter={() => setHoveredMemberId(member.id)} onMouseLeave={() => setHoveredMemberId(null)} title={member.name}>
+        <button className="member-select" onClick={event => selectPanelMember(member.id, event.ctrlKey || event.metaKey ? "remove" : event.shiftKey ? "add" : "replace")}><span>{member.role}<small>{member.code} · V{member.template.version}</small></span></button>
         <button className="member-remove" onClick={() => workspace.copyMember(member.id)} aria-label={`复制成员 ${member.role}`} title="复制成员"><Copy size={14}/></button>
         <button className="member-remove" onClick={() => workspace.removeMember(member.id)} aria-label={`删除成员 ${member.role}`}><Trash2 size={14}/></button>
       </div>)}
     </>}
     viewport={<ComponentViewport
       members={members}
+      groups={document.assembly.groups ?? []}
        parameters={document.parameters}
        bindings={document.bindings}
        patterns={document.patterns}
@@ -146,6 +148,18 @@ export function App() {
       previewTemplate={workspace.previewTemplate}
       onShowAssembly={() => workspace.setPreviewTemplate(null)}
       selectedMemberId={workspace.selectedMemberId}
+      selectedMemberIds={workspace.selectedMemberIds}
+      onSelectMembers={selectViewportMembers}
+      onToggleGroup={workspace.toggleGroup}
+      onEnterComponent={workspace.enterComponent}
+      onCopySelection={workspace.copySelection}
+      onStartPaste={workspace.startPaste}
+      onCancelPaste={workspace.cancelPaste}
+      pasteMembers={workspace.pasteMembers}
+      pasteAnchor={workspace.pasteAnchor}
+      onPasteAt={workspace.pasteAt}
+      onRemoveSelection={workspace.removeSelection}
+      onTransformMembers={workspace.transformMembers}
       selectedInterface={selectedInterface}
       selectedInterfaceResolved={sameInterfaceSelection(interfacePreview?.selection || null, selectedInterface) && interfacePreview?.status === "ready" ? interfacePreview.resolvedInterfaces : undefined}
       panelSelectionToken={panelSelectionToken}
@@ -153,7 +167,7 @@ export function App() {
       onHoverMember={setHoveredMemberId}
       compatibleMemberIds={compatibleIds}
       onTransformMember={workspace.transformMember}
-      onSetPlanarMovement={(id, enabled) => dispatch({ type: "member.patch", id, patch: { planarMovement: enabled } })}
+      onSetPlanarMovement={workspace.setPlanarMovement}
       onGroundMember={workspace.groundMember}
       onCopyMember={workspace.copyMember}
       onRemoveMember={workspace.removeMember}

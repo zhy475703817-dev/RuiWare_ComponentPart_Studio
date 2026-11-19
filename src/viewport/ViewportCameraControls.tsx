@@ -122,7 +122,7 @@ export function ViewportCameraControls({ enabled, radius, hasContent, resetToken
 
   return <OrbitControls ref={controls} enabled={enabled} makeDefault
     minDistance={.01} maxDistance={1e12} screenSpacePanning
-    mouseButtons={{ LEFT: MOUSE.ROTATE, MIDDLE: MOUSE.PAN, RIGHT: MOUSE.PAN }}
+    mouseButtons={{ LEFT: undefined, MIDDLE: MOUSE.ROTATE, RIGHT: MOUSE.PAN }}
     onStart={() => { waitingForContent.current = false; }}
     onChange={scheduleSave} onEnd={saveView}/>;
 }

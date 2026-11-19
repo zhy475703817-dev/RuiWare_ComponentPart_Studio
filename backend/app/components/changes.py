@@ -10,7 +10,7 @@ LABELS = {
     "connectionForms": "连接形式", "internal": "零部件内部连接",
     "interComponent": "组件之间连接", "mode": "输入方式", "value": "连接方式", "details": "补充说明",
     "evidence": "证据与参考", "addedAt": "添加时间",
-    "assembly": "装配", "members": "成员", "mates": "内部连接", "role": "角色", "position": "位置",
+    "assembly": "装配", "members": "成员", "mates": "内部连接", "groups": "组件分组", "parentId": "所属组件", "memberIds": "组件成员", "role": "角色", "position": "位置",
     "rotation": "旋转", "planarMovement": "仅在 XY 平面移动", "parameterValues": "参数覆盖", "parameters": "组件参数", "value": "数值",
     "rules": "规则", "expression": "表达式", "ports": "对外接口", "slots": "槽位", "bindings": "参数绑定",
     "source": "来源", "from": "起点", "to": "终点", "relation": "连接关系", "offset": "偏移",

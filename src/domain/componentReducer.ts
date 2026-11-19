@@ -99,8 +99,10 @@ export function componentReducer(document: ComponentDocument, action: ComponentA
       if (!document.assembly.members.some(member => member.id === action.id)) return document;
       return next({
         assembly: {
+          ...document.assembly,
           members: document.assembly.members.filter(member => member.id !== action.id),
           mates: document.assembly.mates.filter(mate => mate.from.memberId !== action.id && mate.to.memberId !== action.id),
+          ...(document.assembly.groups ? { groups: document.assembly.groups.map(group => ({ ...group, memberIds: group.memberIds.filter(id => id !== action.id) })).filter(group => group.memberIds.length).map((group, _, groups) => group.parentId && !groups.some(parent => parent.id === group.parentId) ? { ...group, parentId: undefined } : group) } : {}),
         },
         ports: document.ports.filter(port => port.source.memberId !== action.id),
         bindings: document.bindings.filter(binding => binding.memberId !== action.id),

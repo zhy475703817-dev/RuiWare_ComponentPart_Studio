@@ -90,6 +90,9 @@ export type ComponentMember = {
   interfaces: PartInterface[];
 };
 
+/** Selection groups share world-space member poses; nesting never changes geometry. */
+export type ComponentGroup = { id: string; name: string; memberIds: string[]; parentId?: string };
+
 export type InterfaceSource = { memberId: string; interfaceId: string };
 export type InterfaceSelection = InterfaceSource;
 export type Mate = { id: string; from: InterfaceSource; to: InterfaceSource; relation: "贴合" | "同轴" | "重合"; offset: number };
@@ -138,7 +141,7 @@ export type ComponentDocument = {
   unitSystem: "mm-kg-s";
   coordinateSystem: "right-handed-z-up";
   definition: ComponentDefinition;
-  assembly: { members: ComponentMember[]; mates: Mate[] };
+  assembly: { members: ComponentMember[]; mates: Mate[]; groups?: ComponentGroup[] };
   ports: ComponentPort[];
   interfaceTypes: ComponentInterfaceType[];
   slots: ComponentSlot[];

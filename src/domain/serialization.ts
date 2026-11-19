@@ -10,6 +10,7 @@ export function serializeComponent(document: ComponentDocument): string {
     stages: {
       definition: { ...definition },
       assembly: {
+        ...(assembly.groups?.length ? { groups: assembly.groups } : {}),
         members: assembly.members.map(member => ({
           memberId: member.id, partTemplateVersion: member.template.publicationId,
           partTemplateRef: { publicationId: member.template.publicationId, templateId: member.template.templateId, version: member.template.version, sha256: member.template.sha256 },
