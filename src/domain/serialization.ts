@@ -6,19 +6,21 @@ export function serializeComponent(document: ComponentDocument): string {
   return JSON.stringify({
     schemaVersion: document.schemaVersion, templateKind: document.templateKind,
     revision: document.revision, name: definition.name,
+    ...(document.geometryDesign ? { geometryDesign: document.geometryDesign } : {}),
     unitSystem: document.unitSystem, coordinateSystem: document.coordinateSystem,
     stages: {
       definition: { ...definition },
       assembly: {
         members: assembly.members.map(member => ({
           memberId: member.id, partTemplateVersion: member.template.publicationId,
-          partTemplateRef: { publicationId: member.template.publicationId, templateId: member.template.templateId, version: member.template.version, sha256: member.template.sha256 },
+          partTemplateRef: { ...member.template },
           name: member.name, code: member.code, role: member.role,
           position: member.position, rotation: member.rotation, parameterValues: member.parameterValues,
           ...(member.planarMovement ? { planarMovement: true } : {}),
+          ...(member.instanceDocument ? { instanceDocument: member.instanceDocument } : {}),
           parameterDefinitions: member.parameterDefinitions || [],
           resolvedInterfaces: member.resolvedInterfaces || [],
-          bindings: { ...member.parameterValues, ...Object.fromEntries(bindings.filter(binding => binding.memberId === member.id).map(binding => [binding.memberParameterId, binding.parameterId])) },
+          bindings: { ...member.parameterValues, ...(document.geometryDesign ? {} : Object.fromEntries(bindings.filter(binding => binding.memberId === member.id).map(binding => [binding.memberParameterId, binding.parameterId]))) },
           interfaces: member.interfaces,
         })),
         mates: assembly.mates.map(mate => ({

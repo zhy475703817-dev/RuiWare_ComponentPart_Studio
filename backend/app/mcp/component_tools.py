@@ -4,6 +4,7 @@ from mcp.types import CallToolResult, ToolAnnotations
 from pydantic import Field
 
 from ..components.models import ComponentAction, ComponentDocument, DefinitionPatch, MemberPatch
+from ..components.resize_jobs import ResizeRequest, ResizeApplyRequest, ResizeJobs
 
 
 Revision = Annotated[int, Field(strict=True, ge=1)]
@@ -22,7 +23,40 @@ def register(mcp, app, invoke):
         """检查本组件服务和已实现能力；不表示上游发布库可用。"""
         return await invoke(lambda: {"status": "ok", "service": "component-template-api", "sharedDrafts": True,
                                     "libraryConfigured": bool(app.state.settings.api_key.strip()),
-                                    "pending": ["assembly.solve", "rules.execution", "geometry.rebuild", "publication"]})
+                                    "geometryResize": True, "geometryPreviewRequiresApply": True,
+                                    "pending": ["rules.execution"]})
+
+    @mcp.tool(annotations=write, structured_output=False)
+    async def component_resize_preview(draftId: str, request: ResizeRequest) -> CallToolResult:
+        """与参数页面共用的真实CAD几何试算；返回任务编号，不修改草稿。多解时需提交选择。"""
+        from types import SimpleNamespace
+        async def start():
+            return app.state.resize_jobs.start(SimpleNamespace(app=app), draftId, request)
+        return await invoke(start)
+
+    @mcp.tool(annotations=readonly, structured_output=False)
+    async def component_resize_status(draftId: str, jobId: str) -> CallToolResult:
+        """读取几何任务状态、预览变更、校验值及需要用户选择的候选。"""
+        return await invoke(lambda: ResizeJobs.public(app.state.resize_jobs.get(draftId, jobId)))
+
+    @mcp.tool(annotations=write, structured_output=False)
+    async def component_resize_cancel(draftId: str, jobId: str) -> CallToolResult:
+        """取消几何试算，保留原组件。"""
+        def cancel():
+            job = app.state.resize_jobs.get(draftId, jobId)
+            if job['status'] != 'applied': job.update(cancelled=True, status='cancelled', message='试算已取消')
+            return ResizeJobs.public(job)
+        return await invoke(cancel)
+
+    @mcp.tool(annotations=write, structured_output=False)
+    async def component_resize_apply(draftId: str, request: ResizeApplyRequest) -> CallToolResult:
+        """明确确认预览后，按revision、jobId、checksum原子应用几何结果。"""
+        return await invoke(app.state.resize_jobs.apply, draftId, request)
+
+    @mcp.tool(annotations=write, structured_output=False)
+    async def component_resize_undo(draftId: str, request: ResizeApplyRequest) -> CallToolResult:
+        """恢复上次应用前的完整组件；草稿后来被修改时拒绝覆盖。"""
+        return await invoke(app.state.resize_jobs.undo, draftId, request)
 
     @mcp.tool(annotations=write, structured_output=False)
     async def component_create_draft(name: str = "", document: ComponentDocument | None = None) -> CallToolResult:
@@ -93,7 +127,7 @@ def register(mcp, app, invoke):
 
     @mcp.tool(annotations=readonly, structured_output=False)
     async def component_export_draft(draftId: str) -> CallToolResult:
-        """导出兼容 component-1.0 的草稿 JSON，包含验证结果；导出不会正式发布。"""
+        """导出草稿JSON；新几何模式使用component-1.1并保留各层实例，旧草稿仍为1.0。"""
         def export():
             return app.state.drafts.export(draftId)
         return await invoke(export)

@@ -34,6 +34,7 @@ export function initialSharedState(): SharedDraftState {
 const errorCode = (error: unknown): string => (error as { code?: string })?.code || "";
 const errorMessage = (error: unknown): string => errorCode(error) === "REVISION_CONFLICT"
   ? "其他网页也修改了草稿，或变更历史不完整。本页输入已保留，请下载本地副本并核对最新版本。"
+  : errorCode(error) === "GEOMETRY_RESIZE_REQUIRED" ? "该尺寸由几何联动管理，请在参数阶段预览并应用目标尺寸。"
   : errorCode(error) === "EDIT_TARGET_REMOVED" ? "Agent 已删除正在编辑的对象或其引用，无法直接合并。本页输入已保留，请下载本地副本后核对差异。"
   : errorCode(error) === "EDIT_STRUCTURE_CONFLICT" ? "Agent 修改了相关结构，无法直接合并。本页输入已保留，请下载本地副本后核对差异。"
   : errorCode(error) === "INVALID_PORT_NAME" ? "对外接口名称不能为空。"
@@ -55,6 +56,7 @@ const errorMessage = (error: unknown): string => errorCode(error) === "REVISION_
 // front of the queue; transport failures and revision conflicts still keep
 // the pending input for an explicit retry/reload.
 const rejectedEditCodes = new Set([
+  "GEOMETRY_RESIZE_REQUIRED",
   "INCOMPATIBLE_INTERFACE", "INTERFACE_REQUIRES_REVIEW", "ENDPOINT_ALREADY_CONSUMED", "DUPLICATE_CONNECTION", "INVALID_REFERENCE",
   "DUPLICATE_ID", "DUPLICATE_PORT", "INTERFACE_SNAPSHOT_MISMATCH",
   "INVALID_PORT_NAME", "INVALID_SLOT_NAME", "INVALID_SLOT_REFERENCE",
@@ -68,6 +70,7 @@ const legacyDimensionSpecs = [
 ] as const;
 
 function normalizeDraftDocument(document: ComponentDocument): ComponentDocument {
+  if (document.geometryDesign) return document;
   const interfaceTypes = Array.isArray(document.interfaceTypes) ? document.interfaceTypes : [];
   const members = Array.isArray(document.assembly?.members) ? document.assembly.members : [];
   const patterns = Array.isArray(document.patterns) ? document.patterns : [];
@@ -79,7 +82,7 @@ function normalizeDraftDocument(document: ComponentDocument): ComponentDocument 
   const sourceParameters = Array.isArray(document.parameters) ? document.parameters : [];
   const inferred = inferEnvelopeDimensions(sourceParameters, members, patterns);
   const parameters = [...sourceParameters];
-  const dimensionParameters = legacyDimensionSpecs.map(spec => {
+  legacyDimensionSpecs.map(spec => {
     const existing = parameters.find(parameter => spec.aliases.some(alias => parameter.id?.toLowerCase().includes(alias.toLowerCase()) || parameter.label?.toLowerCase().includes(alias.toLowerCase())));
     const inferredValue = inferred[spec.axis];
     const value = typeof existing?.value === "number" && Number.isFinite(existing.value) ? existing.value : Math.min(spec.max, Math.max(spec.min, inferredValue ?? spec.fallback));
@@ -93,16 +96,6 @@ function normalizeDraftDocument(document: ComponentDocument): ComponentDocument 
     return parameter;
   });
   const bindings = Array.isArray(document.bindings) ? [...document.bindings] : [];
-  for (const member of members) {
-    for (const spec of legacyDimensionSpecs) {
-      const definition = member.parameterDefinitions?.find(item => spec.aliases.some(alias => item.id?.toLowerCase().includes(alias.toLowerCase()) || item.label?.toLowerCase().includes(alias.toLowerCase())) && item.unit === "mm" && ["number", "integer"].includes(item.valueType));
-      const parameter = dimensionParameters.find(item => item.id === spec.id || spec.aliases.some(alias => item.id?.toLowerCase() === alias.toLowerCase() || item.label?.toLowerCase() === alias.toLowerCase()));
-      const lowerBound = Math.max(parameter?.min ?? Number.POSITIVE_INFINITY, definition?.minimum ?? Number.POSITIVE_INFINITY);
-      const upperBound = Math.min(parameter?.max ?? Number.NEGATIVE_INFINITY, definition?.maximum ?? Number.NEGATIVE_INFINITY);
-      if (!definition || !parameter || lowerBound > upperBound || bindings.some(binding => binding.parameterId === parameter.id && binding.memberId === member.id && binding.memberParameterId === definition.id)) continue;
-      bindings.push({ id: `${member.id}:${parameter.id}:${definition.id}`, parameterId: parameter.id, memberId: member.id, memberParameterId: definition.id });
-    }
-  }
   return { ...document, parameters, bindings, slots, interfaceTypes };
 }
 
@@ -169,7 +162,7 @@ export class SharedDraftController {
     for (const action of this.pending) {
       const next = componentReducer(projection, action);
       const missingTarget = ((action.type === "member.patch" || action.type === "member.remove") && !projection.assembly.members.some(item => item.id === action.id))
-        || (action.type === "interface.type.set" && !projection.assembly.members.some(member => member.id === action.memberId && member.interfaces.some(item => item.id === action.interfaceId)))
+        || ((action.type === "interface.type.set" || action.type === "interface.connectable.set") && !projection.assembly.members.some(member => member.id === action.memberId && member.interfaces.some(item => item.id === action.interfaceId)))
         || ((action.type === "port.remove" || action.type === "port.rename") && !projection.ports.some(item => item.id === action.id))
         || ((action.type === "slot.patch" || action.type === "slot.remove") && !projection.slots.some(item => item.id === action.id))
         || (action.type === "parameter.value" && !projection.parameters.some(item => item.id === action.id))

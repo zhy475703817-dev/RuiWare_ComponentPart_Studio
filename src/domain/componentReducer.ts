@@ -1,7 +1,7 @@
 import { createComponentDocument, getInterface, hasInterface, samePartInterface } from "./component.ts";
 import { inferEnvelopeDimensions } from "./parameterMetrics.ts";
 import { assessInterfaceCompatibility } from "./interfaceCompatibility.ts";
-import { PRESET_INTERFACE_TYPES } from "./interfaceTypes.ts";
+import { defaultConnectableTypeIds, PRESET_INTERFACE_TYPES } from "./interfaceTypes.ts";
 import type { ComponentDefinition, ComponentDocument, ComponentMember, ComponentPattern, ComponentPort, ComponentSlot, InterfaceSource, Mate, ParameterBinding } from "./component.ts";
 
 const PRESET_CONNECTION_TYPE_IDS = new Set<string>(PRESET_INTERFACE_TYPES.map(item => item.id));
@@ -21,7 +21,8 @@ export type ComponentAction =
   | { type: "port.add"; port: ComponentPort }
   | { type: "port.remove"; id: string }
   | { type: "port.rename"; id: string; name: string }
-  | { type: "interface.type.set"; memberId: string; interfaceId: string; connectionTypeId: string | null; customTypeLabel?: string }
+  | { type: "interface.type.set"; memberId: string; interfaceId: string; connectionTypeId: string | null; customTypeLabel?: string; connectableTypeIds?: string[] }
+  | { type: "interface.connectable.set"; memberId: string; interfaceId: string; connectableTypeIds: string[] }
   | { type: "interface.types.merge"; types: Array<{ id: string; label: string }> }
   | { type: "parameter.value"; id: string; value: number | null }
   | { type: "parameter.add"; parameter: import("./component.ts").ComponentParameter }
@@ -34,7 +35,10 @@ export type ComponentAction =
   | { type: "rule.expression"; id: string; expression: string };
 
 export function componentReducer(document: ComponentDocument, action: ComponentAction): ComponentDocument {
-  const next = (patch: Partial<ComponentDocument>): ComponentDocument => ({ ...document, ...patch, revision: document.revision + 1 });
+  if (document.geometryDesign && (action.type === "pattern.add" || action.type === "binding.set" || action.type === "parameter.value" && (
+    action.id.startsWith("geometryEnvelope") || document.bindings.some(b => b.parameterId === action.id)
+    || document.patterns.some(p => p.countParameterId === action.id || p.spacingParameterId === action.id)))) return document;
+  const next = (patch: Partial<ComponentDocument>): ComponentDocument => ({ ...document, ...patch, ...(document.geometryDesign && !["definition.patch", "rule.expression", "rule.add", "rule.remove"].includes(action.type) ? { geometryDesign: { ...document.geometryDesign, verified: false } } : {}), revision: document.revision + 1 });
   switch (action.type) {
     case "model.restore": return next(structuredClone(action.model));
     case "reset": return createComponentDocument();
@@ -43,6 +47,7 @@ export function componentReducer(document: ComponentDocument, action: ComponentA
       return next({ definition: { ...document.definition, ...action.patch } });
     case "member.add":
       if (document.assembly.members.some(member => member.id === action.member.id)) return document;
+      if (document.geometryDesign) return next({ assembly: { ...document.assembly, members: [...document.assembly.members, structuredClone(action.member)] }, geometryDesign: { ...document.geometryDesign, verified: false } });
       {
         const member = structuredClone(action.member);
         const dimensionAliases: Record<string, string[]> = {
@@ -203,12 +208,29 @@ export function componentReducer(document: ComponentDocument, action: ComponentA
           interfaceTypes = [...interfaceTypes, { id: connectionTypeId, label }];
         }
       } else if (connectionTypeId && !interfaceTypes.some(item => item.id === connectionTypeId) && !PRESET_CONNECTION_TYPE_IDS.has(connectionTypeId)) return document;
-      if (target.connectionTypeId === connectionTypeId && interfaceTypes === document.interfaceTypes) return document;
-      const interfaces = member.interfaces.map(item => item.id === target.id ? { ...item, connectionTypeId } : item);
+      const rawConnectableTypeIds = action.connectableTypeIds ?? defaultConnectableTypeIds(connectionTypeId);
+      const connectableTypeIds = [...new Set(rawConnectableTypeIds.map(item => item.trim()).filter(item => item &&
+        (PRESET_CONNECTION_TYPE_IDS.has(item) || interfaceTypes.some(type => type.id === item))))];
+      if (rawConnectableTypeIds.length > 50 || connectableTypeIds.length !== rawConnectableTypeIds.length) return document;
+      if (target.connectionTypeId === connectionTypeId && JSON.stringify(target.connectableTypeIds || []) === JSON.stringify(connectableTypeIds) && interfaceTypes === document.interfaceTypes) return document;
+      const interfaces = member.interfaces.map(item => item.id === target.id ? { ...item, connectionTypeId, connectableTypeIds } : item);
       const ports = document.ports.map(port => port.source.memberId === member.id && port.source.interfaceId === target.id
-        ? { ...port, interface: port.interface ? { ...port.interface, connectionTypeId } : { ...target, connectionTypeId } }
+        ? { ...port, interface: port.interface ? { ...port.interface, connectionTypeId, connectableTypeIds } : { ...target, connectionTypeId, connectableTypeIds } }
         : port);
       return next({ assembly: { ...document.assembly, members: document.assembly.members.map(item => item.id === member.id ? { ...item, interfaces } : item) }, ports, interfaceTypes });
+    }
+    case "interface.connectable.set": {
+      const member = document.assembly.members.find(item => item.id === action.memberId);
+      const target = member?.interfaces.find(item => item.id === action.interfaceId);
+      if (!member || !target || action.connectableTypeIds.length > 50) return document;
+      const connectableTypeIds = action.connectableTypeIds.map(item => item.trim()).filter((item, index, items) =>
+        Boolean(item) && items.indexOf(item) === index && (PRESET_CONNECTION_TYPE_IDS.has(item) || (document.interfaceTypes ?? []).some(type => type.id === item)));
+      if (connectableTypeIds.length !== action.connectableTypeIds.length || JSON.stringify(target.connectableTypeIds || []) === JSON.stringify(connectableTypeIds)) return document;
+      const interfaces = member.interfaces.map(item => item.id === target.id ? { ...item, connectableTypeIds } : item);
+      const ports = document.ports.map(port => port.source.memberId === member.id && port.source.interfaceId === target.id
+        ? { ...port, interface: port.interface ? { ...port.interface, connectableTypeIds } : { ...target, connectableTypeIds } }
+        : port);
+      return next({ assembly: { ...document.assembly, members: document.assembly.members.map(item => item.id === member.id ? { ...item, interfaces } : item) }, ports });
     }
     case "interface.types.merge": {
       const additions = action.types.map(item => ({ id: item.id.trim().replace(/\s+/g, " "), label: item.label.trim().replace(/\s+/g, " ") }));

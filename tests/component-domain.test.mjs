@@ -88,7 +88,13 @@ test('接口可分类为预置或自定义类型，开放接口快照同步且�
   draft = componentReducer(draft, { type: 'port.add', port: { id: 'port-a', name: 'A接口', source: source('a'), tags: [] } });
   draft = componentReducer(draft, { type: 'interface.type.set', memberId: 'a', interfaceId: 'face.left', connectionTypeId: 'bolt.male.v1' });
   assert.equal(draft.assembly.members[0].interfaces[0].connectionTypeId, 'bolt.male.v1');
+  assert.deepEqual(draft.assembly.members[0].interfaces[0].connectableTypeIds, ['bolt.female.v1']);
   assert.equal(draft.ports[0].interface.connectionTypeId, 'bolt.male.v1');
+  assert.deepEqual(draft.ports[0].interface.connectableTypeIds, ['bolt.female.v1']);
+  draft = componentReducer(draft, { type: 'interface.connectable.set', memberId: 'a', interfaceId: 'face.left', connectableTypeIds: ['bolt.female.v1', 'pin.v1'] });
+  assert.deepEqual(draft.assembly.members[0].interfaces[0].connectableTypeIds, ['bolt.female.v1', 'pin.v1']);
+  assert.deepEqual(draft.ports[0].interface.connectableTypeIds, ['bolt.female.v1', 'pin.v1']);
+  assert.equal(interfacesCompatible(draft.assembly.members[0].interfaces[0], draft.assembly.members[1].interfaces[0]).status, 'compatible');
   draft = componentReducer(draft, { type: 'interface.type.set', memberId: 'a', interfaceId: 'face.left', connectionTypeId: 'custom:专用支架接口', customTypeLabel: '专用支架接口' });
   draft = componentReducer(draft, { type: 'interface.type.set', memberId: 'b', interfaceId: 'face.left', connectionTypeId: 'bolt.female.v1' });
   assert.equal(draft.interfaceTypes[0].label, '专用支架接口');
@@ -105,6 +111,7 @@ test('接口可分类为预置或自定义类型，开放接口快照同步且�
   assert.equal(cleared.assembly.members[0].interfaces[0].connectionTypeId, null);
   assert.equal(cleared.interfaceTypes.length, 1);
   assert.equal(cleared.ports[0].interface.connectionTypeId, null);
+  assert.deepEqual(cleared.assembly.members[0].interfaces[0].connectableTypeIds, []);
   assert.equal(componentReducer(cleared, { type: 'interface.type.set', memberId: 'missing', interfaceId: 'face.left', connectionTypeId: 'bolt.male.v1' }), cleared);
   assert.equal(componentReducer(cleared, { type: 'interface.type.set', memberId: 'a', interfaceId: 'face.left', connectionTypeId: 'custom:未知' }), cleared);
 });

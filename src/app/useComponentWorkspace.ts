@@ -13,7 +13,6 @@ import { componentPublicationMember, fetchPublishedComponent, publishComponentDr
 import { exportEvidenceFiles } from "../domain/evidenceStore";
 import { assessInterfaceCompatibility } from "../domain/interfaceCompatibility";
 import { alignInterfaceFaces } from "../domain/faceAlignment";
-import { solveConnectedFaces } from "../domain/connectionSolver";
 import { loadConnectionGeometry } from "../library/connectionGeometry";
 import { connectionStateKey } from "../domain/connectionState";
 
@@ -69,7 +68,7 @@ export function useComponentWorkspace() {
 
   useEffect(() => {
     const workspace = controller.current;
-    if (!workspace || shared.status !== "ready" || syncedGeometry.current === geometryKey) return;
+    if (!workspace || stage === "parameters" || document.geometryDesign || shared.status !== "ready" || syncedGeometry.current === geometryKey) return;
     const abort = new AbortController();
     const initial = workspace.getSnapshot();
     void (async () => {
@@ -80,7 +79,7 @@ export function useComponentWorkspace() {
         const current = workspace.getSnapshot();
         if (abort.signal.aborted || connectionStateKey(current.draftId, current.document) !== connectionStateKey(initial.draftId, initial.document)) return;
         const refreshed = document.assembly.members.map(member => loaded.find(item => item.member.id === member.id)?.member ?? member);
-        const solved = solveConnectedFaces(refreshed, document.assembly.mates, new Map(loaded.map(item => [item.member.id, item.bounds])));
+        const solved = refreshed; // Loading a draft must never reposition its geometry.
         syncedGeometry.current = geometryKey;
         for (const member of solved) {
           const old = document.assembly.members.find(item => item.id === member.id)!;
@@ -90,20 +89,20 @@ export function useComponentWorkspace() {
           }
         }
         setGeometryStatus(null);
-        setMessage("参数、接口位置和三维连接面已同步，正在保存更新。");
+        setMessage("已读取当前零件的接口几何信息。");
       } catch (error) {
         if (!abort.signal.aborted) setGeometryStatus({ key: geometryKey, error: error instanceof Error ? error.message : "接口位置更新失败" });
       }
     })();
     return () => abort.abort();
-  }, [assemblyStateKey, shared.status, geometryKey]);
+  }, [assemblyStateKey, shared.status, geometryKey, stage]);
 
   useEffect(() => {
     const workspace = new SharedDraftController(httpDraftApi);
     controller.current = workspace;
     const unsubscribe = workspace.subscribe(() => setShared(workspace.getSnapshot()));
     let preferredId: string | null = null;
-    try { preferredId = localStorage.getItem("component-draft-id"); } catch { /* Storage may be disabled. */ }
+    try { preferredId = new URLSearchParams(window.location.search).get("draft") || localStorage.getItem("component-draft-id"); } catch { /* Storage may be disabled. */ }
     void workspace.start(preferredId);
     const timer = window.setInterval(() => { if (!window.document.hidden) void workspace.poll(); }, 2000);
     const refresh = () => { void workspace.poll(); };
@@ -321,8 +320,12 @@ export function useComponentWorkspace() {
     dispatch({ type: "port.rename", id, name });
   }
 
-  function setInterfaceType(memberId: string, interfaceId: string, connectionTypeId: string | null, customTypeLabel?: string) {
-    dispatch({ type: "interface.type.set", memberId, interfaceId, connectionTypeId, ...(customTypeLabel === undefined ? {} : { customTypeLabel }) });
+  function setInterfaceType(memberId: string, interfaceId: string, connectionTypeId: string | null, customTypeLabel?: string, connectableTypeIds?: string[]) {
+    dispatch({ type: "interface.type.set", memberId, interfaceId, connectionTypeId, ...(customTypeLabel === undefined ? {} : { customTypeLabel }), ...(connectableTypeIds === undefined ? {} : { connectableTypeIds }) });
+  }
+
+  function setInterfaceConnectableTypes(memberId: string, interfaceId: string, connectableTypeIds: string[]) {
+    dispatch({ type: "interface.connectable.set", memberId, interfaceId, connectableTypeIds });
   }
 
   function addSlot() {
@@ -441,7 +444,7 @@ export function useComponentWorkspace() {
   const geometryMessage = geometryStatus?.key === geometryKey ? geometryStatus.error ? `接口位置更新失败：${geometryStatus.error}` : "正在按当前参数更新接口位置和连接面…" : "";
   const syncMessage = shared.error || geometryMessage || (shared.status === "loading" ? "正在读取组件草稿…" : shared.status === "saving" ? "正在保存组件草稿…" : shared.notice || message);
   return { document, dispatch, stage, setStage, selectedMemberId, setSelectedMemberId, previewTemplate, setPreviewTemplate,
-    selectionResetToken, message: syncMessage, setMessage, checks, newDraft, removeMember, addMate, connectInterfaces, removeConnection, setInterfaceExposure, renamePort, setInterfaceType, addSlot, patchSlot, removeSlot, exportDraft,
+    selectionResetToken, message: syncMessage, setMessage, checks, newDraft, removeMember, addMate, connectInterfaces, removeConnection, setInterfaceExposure, renamePort, setInterfaceType, setInterfaceConnectableTypes, addSlot, patchSlot, removeSlot, exportDraft,
     shared, editable, selectDraft, publishDraft, publishing, adding, addPublishedTemplate, libraryRefreshToken,
     copyMember, moveMember, transformMember, groundMember, undoModel, undoCount, undoing,
     downloadLocalDraft, dismissAgentChanges: () => controller.current?.dismissAgentChanges(),

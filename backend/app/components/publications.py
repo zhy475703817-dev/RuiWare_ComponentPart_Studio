@@ -101,7 +101,7 @@ class ComponentPublications:
                 manifest = json.loads(archive.read("manifest.json"))
                 document = ComponentDocument.model_validate_json(archive.read("component.json")).model_dump(by_alias=True)
                 checks = json.loads(archive.read("checks.json"))
-                if manifest.get("schemaVersion") != "component-package-1.0" or manifest.get("templateKind") != "component":
+                if manifest.get("schemaVersion") not in ("component-package-1.0", "component-package-1.1") or manifest.get("templateKind") != "component":
                     raise ValueError("unsupported package")
                 if any(manifest.get(key) != metadata[key] for key in ("publicationId", "templateId", "version")):
                     raise ValueError("package identity mismatch")
@@ -119,6 +119,8 @@ class ComponentPublications:
             dependency = self.detail(reference["publicationId"])
             if any(dependency[key] != reference[key] for key in ("templateId", "version")) or dependency["sha256"].lower() != reference["sha256"].lower():
                 raise ComponentError(422, "COMPONENT_REFERENCE_INVALID")
+            if member.get("instanceDocument"):
+                self._dependencies(member["instanceDocument"])
 
     def _upload(self, snapshot: dict) -> dict:
         self._require_storage()

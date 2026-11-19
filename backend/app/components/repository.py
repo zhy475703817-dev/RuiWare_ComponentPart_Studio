@@ -45,6 +45,10 @@ class DraftRepository:
                 checks TEXT NOT NULL, package BLOB NOT NULL,
                 UNIQUE(draft_id, revision), UNIQUE(draft_id, version)
             )""")
+            connection.execute("""CREATE TABLE IF NOT EXISTS component_resize_history (
+                draft_id TEXT PRIMARY KEY, job_id TEXT NOT NULL, checksum TEXT NOT NULL,
+                applied_revision INTEGER NOT NULL, before_document TEXT NOT NULL
+            )""")
             self._backfill_missing_codes(connection)
 
     def _connect(self):
@@ -142,7 +146,7 @@ class DraftRepository:
             # immutable retry snapshot. Network operations never hold the SQLite write lock.
             publication_id = f"component-{uuid4()}"
             version = connection.execute("SELECT COALESCE(MAX(version), 0) + 1 FROM component_publications WHERE draft_id = ?", (draft_id,)).fetchone()[0]
-            manifest = {"schemaVersion": "component-package-1.0", "templateKind": "component", "publicationId": publication_id,
+            manifest = {"schemaVersion": "component-package-1.1" if document.geometryDesign else "component-package-1.0", "templateKind": "component", "publicationId": publication_id,
                         "templateId": draft_id, "version": version, "createdAt": self._now(), "sourceRevision": document.revision}
             data = document.model_dump(by_alias=True)
             output = BytesIO()
@@ -202,6 +206,32 @@ class DraftRepository:
             result = self._envelope(connection, draft_id, updated, expected_revision)
             result["reconciled"] = reconciled
             return result
+
+    def replace_geometry(self, draft_id: str, expected_revision: int, candidate: dict, *, history: dict | None = None) -> dict:
+        """Apply only server-computed results, with strict compare-and-swap."""
+        with closing(self._connect()) as connection, connection:
+            connection.execute("BEGIN IMMEDIATE")
+            original = self._read(connection, draft_id)
+            if original.revision != expected_revision:
+                raise ComponentError(409, "REVISION_CONFLICT")
+            updated = ComponentDocument.model_validate({**candidate, "revision": expected_revision + 1})
+            self._require_evidence_content(connection, draft_id, updated)
+            now = self._now()
+            connection.execute("UPDATE component_drafts SET name=?, revision=?, document=?, updated_at=? WHERE id=?", (
+                updated.definition.name, updated.revision, updated.model_dump_json(by_alias=True), now, draft_id))
+            changes = document_changes(original.model_dump(by_alias=True), updated.model_dump(by_alias=True))
+            connection.execute("INSERT INTO component_draft_changes VALUES (?, ?, ?, ?, ?)", (draft_id, updated.revision, "user", now, json.dumps(changes, ensure_ascii=False)))
+            if history:
+                connection.execute("INSERT OR REPLACE INTO component_resize_history VALUES (?, ?, ?, ?, ?)",
+                    (draft_id, history["jobId"], history["checksum"], updated.revision, original.model_dump_json(by_alias=True)))
+            return self._envelope(connection, draft_id, updated, expected_revision)
+
+    def resize_history(self, draft_id):
+        with closing(self._connect()) as connection:
+            row = connection.execute("SELECT * FROM component_resize_history WHERE draft_id=?", (draft_id,)).fetchone()
+            if row is None: return None
+            return {"jobId": row["job_id"], "draftId": draft_id, "status": "applied", "appliedRevision": row["applied_revision"],
+                "expectedRevision": row["applied_revision"]-1, "before": json.loads(row["before_document"]), "result": {"checksum": row["checksum"]}}
 
     def save_evidence(self, draft_id: str, evidence_id: str, file_name: str, media_type: str, content: bytes) -> dict:
         if not re.fullmatch(r"[0-9a-f-]{36}", evidence_id) or len(file_name) > 255 or not file_name.strip():

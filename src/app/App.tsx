@@ -13,6 +13,9 @@ import { ValidationStage } from "../stages/ValidationStage";
 import { PublishStage } from "../stages/PublishStage";
 import { WorkspaceLayout } from "./WorkspaceLayout";
 import { useComponentWorkspace } from "./useComponentWorkspace";
+import { useGeometryResize } from "./useGeometryResize";
+import { GeometryResizePanel } from "../stages/GeometryResizePanel";
+import "../styles/geometry-resize.css";
 import { AgentChanges } from "./AgentChanges";
 import { STAGES } from "./stages";
 import { compatibleMemberIds } from "../domain/interfaceCompatibility";
@@ -32,6 +35,11 @@ export function App() {
   const workspace = useComponentWorkspace();
   const { document, dispatch, stage, checks } = workspace;
   const { members, mates } = document.assembly;
+  const resize = useGeometryResize(workspace.shared.draftId, document, workspace.editable && !workspace.shared.dirty, workspace.reloadDraft);
+  const visibleDocument = stage === "parameters" && resize.preview ? resize.preview : document;
+  const geometryPreview = stage === "parameters" && Boolean(resize.preview);
+  const resizeBusy = geometryPreview || resize.applying;
+  const changedMemberIds = new Set(resize.job?.result?.changes?.map(change => change.path[0]) || []);
   const compatibleIds = compatibleMemberIds(members, workspace.selectedMemberId);
   const componentCodeUnique = !workspace.shared.items.some(item => item.draftId !== workspace.shared.draftId
     && item.code?.toUpperCase() === document.definition.code.toUpperCase());
@@ -100,8 +108,8 @@ export function App() {
           if (patch.position || patch.rotation) workspace.transformMember(member.id, patch.position || member.position, patch.rotation || member.rotation);
           else dispatch({ type: "member.patch", id: member.id, patch });
         }}/>
-      case "interfaces": return <InterfacesStage members={members} ports={document.ports} slots={document.slots} mates={mates} interfaceTypes={document.interfaceTypes ?? []} selectedInterface={selectedInterface} interfacePreview={interfacePreview} editable={workspace.editable} onSelectInterface={selectInterface} onConnect={workspace.connectInterfaces} onRemoveConnection={workspace.removeConnection} onSetInterfaceExposure={workspace.setInterfaceExposure} onSetInterfaceType={workspace.setInterfaceType} onRenamePort={workspace.renamePort} onAddSlot={workspace.addSlot} onPatchSlot={workspace.patchSlot} onRemoveSlot={workspace.removeSlot}/>;
-      case "parameters": return <ParametersStage parameters={document.parameters} bindings={document.bindings} patterns={document.patterns} rules={document.rules} members={members} definitionName={document.definition.name} definitionCode={document.definition.code} onChange={(id, value) => dispatch({ type: "parameter.value", id, value })} onBindingChange={(id, binding) => dispatch({ type: "binding.set", id, binding })} onAddParameter={parameter => dispatch({ type: "parameter.add", parameter })} onRemoveParameter={id => dispatch({ type: "parameter.remove", id })} onAddPattern={pattern => dispatch({ type: "pattern.add", pattern })} onRemovePattern={id => dispatch({ type: "pattern.remove", id })} onAddRule={rule => dispatch({ type: "rule.add", rule })} onRemoveRule={id => dispatch({ type: "rule.remove", id })}/>;
+      case "interfaces": return <InterfacesStage members={members} ports={document.ports} slots={document.slots} mates={mates} interfaceTypes={document.interfaceTypes ?? []} selectedInterface={selectedInterface} interfacePreview={interfacePreview} editable={workspace.editable} onSelectInterface={selectInterface} onConnect={workspace.connectInterfaces} onRemoveConnection={workspace.removeConnection} onSetInterfaceExposure={workspace.setInterfaceExposure} onSetInterfaceType={workspace.setInterfaceType} onSetInterfaceConnectableTypes={workspace.setInterfaceConnectableTypes} onRenamePort={workspace.renamePort} onAddSlot={workspace.addSlot} onPatchSlot={workspace.patchSlot} onRemoveSlot={workspace.removeSlot}/>;
+      case "parameters": return <ParametersStage geometryReadOnly={Boolean(document.geometryDesign) || resizeBusy} geometryPanel={<GeometryResizePanel resize={resize}/>} parameters={document.parameters} bindings={document.bindings} patterns={document.patterns} rules={document.rules} members={members} definitionName={document.definition.name} definitionCode={document.definition.code} onChange={(id, value) => dispatch({ type: "parameter.value", id, value })} onBindingChange={(id, binding) => dispatch({ type: "binding.set", id, binding })} onAddParameter={parameter => dispatch({ type: "parameter.add", parameter })} onRemoveParameter={id => dispatch({ type: "parameter.remove", id })} onAddPattern={pattern => dispatch({ type: "pattern.add", pattern })} onRemovePattern={id => dispatch({ type: "pattern.remove", id })} onAddRule={rule => dispatch({ type: "rule.add", rule })} onRemoveRule={id => dispatch({ type: "rule.remove", id })}/>;
       case "rules": return <RulesStage rules={document.rules} onChange={(id, expression) => dispatch({ type: "rule.expression", id, expression })}/>;
       case "validation": return <ValidationStage checks={checks} revision={document.revision} onValidate={() => workspace.setMessage(checks.some(check => check.status === "fail") ? "基础数据检查未通过，请处理失败项" : "基础数据检查通过；装配求解和工程规则执行仍待接入")}/>;
       case "publish": return <PublishStage checks={checks} revision={document.revision} onExport={workspace.exportDraft} onPublish={workspace.publishDraft} publishing={workspace.publishing}/>;
@@ -112,38 +120,38 @@ export function App() {
     definitionContent={<>
       <header className="definition-heading"><h1>组件定义</h1><p>完善组件基本信息、设计说明与初步要求。</p></header>
       <div className="definition-toolbar">
-        <label>选择组件<select value={workspace.shared.draftId || ""} disabled={!workspace.editable} onChange={event => { void workspace.selectDraft(event.target.value); }}>
+        <label>选择组件<select value={workspace.shared.draftId || ""} disabled={!workspace.editable || resize.applying} onChange={event => { void workspace.selectDraft(event.target.value); }}>
           {!workspace.shared.draftId && <option value="">正在读取组件…</option>}
           {workspace.shared.items.map(item => <option key={item.draftId} value={item.draftId}>{item.name || "未命名组件"} · {item.code || "未编码"}</option>)}
         </select></label>
-        <button type="button" className="ghost" disabled={!workspace.editable} onClick={() => { void workspace.newDraft(); }}><Plus size={15}/>新增组件</button>
+        <button type="button" className="ghost" disabled={!workspace.editable || resize.applying} onClick={() => { void workspace.newDraft(); }}><Plus size={15}/>新增组件</button>
       </div>
       {draftRecovery}
       <section className="inspector-section" aria-label="组件定义信息">
-        <fieldset className="stage-fields" disabled={!workspace.editable}>{renderStage()}</fieldset>
-        <div className="definition-next"><span>填写内容自动保存，可随时返回完善。</span><button type="button" className="primary" disabled={!workspace.editable} onClick={() => workspace.setStage("assembly")}>进入装配阶段</button></div>
+        <fieldset className="stage-fields" disabled={!workspace.editable || resize.applying}>{renderStage()}</fieldset>
+        <div className="definition-next"><span>填写内容自动保存，可随时返回完善。</span><button type="button" className="primary" disabled={!workspace.editable || resize.applying} onClick={() => workspace.setStage("assembly")}>进入装配阶段</button></div>
       </section>
     </>}
     library={<>
-      <PublishedTemplateLibrary onPreview={workspace.setPreviewTemplate} onAdd={workspace.addPublishedTemplate} onDragTemplate={setDragTemplate} memberPublicationIds={members.map(member => member.template.publicationId)} selectionResetToken={workspace.selectionResetToken} refreshToken={workspace.libraryRefreshToken} addDisabled={!workspace.editable}/>
+      <PublishedTemplateLibrary onPreview={workspace.setPreviewTemplate} onAdd={workspace.addPublishedTemplate} onDragTemplate={setDragTemplate} memberPublicationIds={members.map(member => member.template.publicationId)} selectionResetToken={workspace.selectionResetToken} refreshToken={workspace.libraryRefreshToken} addDisabled={!workspace.editable || resizeBusy}/>
       <div className="panel-title member-title"><span>组件成员</span><small>{members.length}</small></div>
       {members.length === 0 && <p className="hint">暂无成员，点击发布库模板旁的加号或从发布详情加入组件。</p>}
       {members.map(member => <div className={`member-row ${workspace.selectedMemberId === member.id ? "selected" : ""} ${hoveredMemberId === member.id ? "hovered" : ""} ${compatibleIds.has(member.id) ? "compatible-candidate" : ""}`} key={member.id} onMouseEnter={() => setHoveredMemberId(member.id)} onMouseLeave={() => setHoveredMemberId(null)} title={member.name}>
         <button className="member-select" onClick={() => selectPanelMember(member.id)}><span>{member.role}<small>{member.code} · V{member.template.version}</small></span></button>
-        <button className="member-remove" onClick={() => workspace.copyMember(member.id)} aria-label={`复制成员 ${member.role}`} title="复制成员"><Copy size={14}/></button>
-        <button className="member-remove" onClick={() => workspace.removeMember(member.id)} aria-label={`删除成员 ${member.role}`}><Trash2 size={14}/></button>
+        <button className="member-remove" disabled={resizeBusy} onClick={() => workspace.copyMember(member.id)} aria-label={`复制成员 ${member.role}`} title="复制成员"><Copy size={14}/></button>
+        <button className="member-remove" disabled={resizeBusy} onClick={() => workspace.removeMember(member.id)} aria-label={`删除成员 ${member.role}`}><Trash2 size={14}/></button>
       </div>)}
     </>}
-    viewport={<ComponentViewport
-      members={members}
-       parameters={document.parameters}
-       bindings={document.bindings}
-       patterns={document.patterns}
+    viewport={<ComponentViewport readOnly={resizeBusy}
+      members={visibleDocument.assembly.members}
+       parameters={visibleDocument.parameters}
+       bindings={visibleDocument.geometryDesign ? [] : visibleDocument.bindings}
+       patterns={visibleDocument.geometryDesign ? [] : visibleDocument.patterns}
       mateCount={mates.length}
       undoCount={workspace.undoCount}
       onUndoModel={workspace.undoModel}
       undoDisabled={!workspace.editable || workspace.undoing}
-      previewTemplate={workspace.previewTemplate}
+      previewTemplate={geometryPreview ? null : workspace.previewTemplate}
       onShowAssembly={() => workspace.setPreviewTemplate(null)}
       selectedMemberId={workspace.selectedMemberId}
       selectedInterface={selectedInterface}
@@ -151,23 +159,23 @@ export function App() {
       panelSelectionToken={panelSelectionToken}
       onSelectMember={selectViewportMember}
       onHoverMember={setHoveredMemberId}
-      compatibleMemberIds={compatibleIds}
-      onTransformMember={workspace.transformMember}
+      compatibleMemberIds={geometryPreview ? changedMemberIds : compatibleIds}
+      onTransformMember={resize.preview && stage === "parameters" ? () => {} : workspace.transformMember}
       onSetPlanarMovement={(id, enabled) => dispatch({ type: "member.patch", id, patch: { planarMovement: enabled } })}
       onGroundMember={workspace.groundMember}
       onCopyMember={workspace.copyMember}
       onRemoveMember={workspace.removeMember}
       onDropTemplate={() => {
-        if (dragTemplate) void workspace.addPublishedTemplate(dragTemplate);
+        if (!resizeBusy && dragTemplate) void workspace.addPublishedTemplate(dragTemplate);
         setDragTemplate(null);
       }}
     />}
-    actionsDisabled={!workspace.editable}
+    actionsDisabled={!workspace.editable || resizeBusy}
     inspector={<>
       {stage !== "definition" && draftRecovery}
       {stage === "definition" ? null : <>
         <AgentChanges shared={workspace.shared} onDismiss={workspace.dismissAgentChanges}/>
-        <section className="inspector-section" aria-label="当前阶段面板"><h3>当前阶段 · {STAGES.find(item => item.id === stage)?.label}</h3><fieldset className="stage-fields" disabled={!workspace.editable}>{renderStage()}</fieldset>{stage !== "validation" && stage !== "publish" && <div className="next-hint" role="status">{workspace.message}</div>}</section>
+        <section className="inspector-section" aria-label="当前阶段面板"><h3>当前阶段 · {STAGES.find(item => item.id === stage)?.label}</h3><fieldset className="stage-fields" disabled={!workspace.editable || resize.applying}>{renderStage()}</fieldset>{stage !== "validation" && stage !== "publish" && <div className="next-hint" role="status">{workspace.message}</div>}</section>
         <section className="inspector-section"><h3>数据摘要</h3><div className="stats"><div><b>{members.length}</b><span>成员</span></div><div><b>{mates.length}</b><span>内部连接</span></div><div><b>{document.ports.length}</b><span>组件接口</span></div></div></section>
       </>}
     </>}

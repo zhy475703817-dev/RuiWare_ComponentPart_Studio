@@ -15,6 +15,8 @@ export type PartInterface = {
   type: "plane" | "axis" | "point";
   tags: string[];
   connectionTypeId?: string | null;
+  /** Interface type IDs this interface explicitly declares as connectable. */
+  connectableTypeIds?: string[];
   declarationMode?: "staticGeometry" | "featureDerived";
   interfaceType?: string;
   locatingType?: string;
@@ -61,6 +63,7 @@ export type MemberParameterDefinition = {
   minimum: number | null;
   maximum: number | null;
   default: number | string | boolean;
+  allowedValues?: ParameterValue[];
 };
 
 export type ResolvedPartInterface = {
@@ -88,6 +91,7 @@ export type ComponentMember = {
   parameterDefinitions?: MemberParameterDefinition[];
   resolvedInterfaces?: ResolvedPartInterface[];
   interfaces: PartInterface[];
+  instanceDocument?: ComponentDocument | null;
 };
 
 export type InterfaceSource = { memberId: string; interfaceId: string };
@@ -131,8 +135,13 @@ export type ComponentDefinition = {
   evidence: EvidenceAttachment[];
 };
 
+export type GeometryEndpoint = { path: string[]; interfaceId: string };
+export type GeometryRelation = { id: string; a: GeometryEndpoint; b: GeometryEndpoint; mode: "coincident" | "preserve-offset" | "plane" | "axis"; origin: "existing" | "inferred" | "user"; offset: Vector3; normalDot?: number | null };
+export type GeometryLock = { path: string[]; parameterId?: string | null };
+export type GeometryDesign = { version: 1; axes: "xyz"; anchor: "bottom-center"; locks: GeometryLock[]; relations: GeometryRelation[]; dimensions: Vector3; solverVersion: string; inputHash: string; verified: boolean; interfaceSnapshots?: Array<Record<string, unknown>>; verification?: Record<string, unknown> };
+
 export type ComponentDocument = {
-  schemaVersion: "component-1.0";
+  schemaVersion: "component-1.0" | "component-1.1";
   templateKind: "component";
   revision: number;
   unitSystem: "mm-kg-s";
@@ -146,6 +155,7 @@ export type ComponentDocument = {
   bindings: ParameterBinding[];
   patterns: ComponentPattern[];
   rules: ComponentRule[];
+  geometryDesign?: GeometryDesign | null;
 };
 
 export function createComponentDocument(): ComponentDocument {

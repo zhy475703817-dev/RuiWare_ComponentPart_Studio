@@ -21,7 +21,7 @@ export async function memberBounds(member: ComponentMember, ancestors = new Set<
         publication.sha256.toLowerCase() !== member.template.sha256.toLowerCase()) throw new Error("发布版本已变化，请刷新列表后重试。");
     bounds = new Box3();
     const next = new Set([...ancestors, id]);
-    for (const child of resolveComponentComposition(publication.document, member.parameterValues)) {
+    for (const child of resolveComponentComposition(member.instanceDocument || publication.document, member.parameterValues)) {
       bounds.union(await memberBounds(child, next));
     }
   } else {
@@ -48,7 +48,7 @@ async function memberMinimumZ(member: ComponentMember, parentMatrix: Matrix4, an
     if (publication.templateId !== member.template.templateId || publication.version !== member.template.version ||
         publication.sha256.toLowerCase() !== member.template.sha256.toLowerCase()) throw new Error("发布版本已变化，请刷新列表后重试。");
     const next = new Set([...ancestors, id]);
-    for (const child of resolveComponentComposition(publication.document, member.parameterValues)) {
+    for (const child of resolveComponentComposition(member.instanceDocument || publication.document, member.parameterValues)) {
       minimumZ = Math.min(minimumZ, await memberMinimumZ(child, worldMatrix, next));
     }
   } else {
