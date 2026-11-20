@@ -60,6 +60,7 @@ class MatingContract(ComponentModel):
             raise ValueError("Duplicate allowed mating relation")
         return self
 
+
     @model_serializer(mode="wrap")
     def preserve_optional_metadata(self, handler):
         data = handler(self)
@@ -67,6 +68,19 @@ class MatingContract(ComponentModel):
             if field not in self.model_fields_set:
                 data.pop(field, None)
         return data
+
+
+class HardwareItem(ComponentModel):
+    category: str | None = Field(default=None, max_length=80)
+    name: str = Field(min_length=1, max_length=80)
+    specification: str = Field(max_length=120)
+    quantity: Annotated[int, Field(strict=True, ge=1, le=10000)]
+
+
+class InterfaceHardware(ComponentModel):
+    mode: Literal["auto", "manual", "none"]
+    items: list[HardwareItem] = Field(default_factory=list, max_length=50)
+
 
 
 class PartInterface(ComponentModel):
@@ -89,6 +103,7 @@ class PartInterface(ComponentModel):
     connectionMethod: str | None = None
     referenceFrame: dict[str, object] | None = None
     mating: MatingContract | None = None
+    hardware: InterfaceHardware | None = None
     region: dict[str, object] | None = None
 
     @model_validator(mode="after")
@@ -105,7 +120,7 @@ class PartInterface(ComponentModel):
     @model_serializer(mode="wrap")
     def preserve_optional_metadata(self, handler):
         data = handler(self)
-        for field in ("declarationMode", "interfaceType", "locatingType", "role", "geometryRefs", "parameterRefs", "description", "required", "connectionGender", "interfaceSize", "connectionMethod", "connectionTypeId", "connectableTypeIds", "referenceFrame", "mating", "region"):
+        for field in ("declarationMode", "interfaceType", "locatingType", "role", "geometryRefs", "parameterRefs", "description", "required", "connectionGender", "interfaceSize", "connectionMethod", "connectionTypeId", "connectableTypeIds", "referenceFrame", "mating", "hardware", "region"):
             if field not in self.model_fields_set:
                 data.pop(field, None)
         return data
@@ -143,11 +158,13 @@ class ComponentMember(ComponentModel):
     resolvedInterfaces: list[dict[str, object]] = Field(default_factory=list)
     interfaces: list[PartInterface]
     instanceDocument: "ComponentDocument | None" = None
+    generatedBy: str | None = None
+    generatedIndex: int | None = None
 
     @model_serializer(mode="wrap")
     def preserve_legacy_members(self, handler):
         data = handler(self)
-        for field in ("parameterDefinitions", "resolvedInterfaces", "planarMovement", "instanceDocument"):
+        for field in ("parameterDefinitions", "resolvedInterfaces", "planarMovement", "instanceDocument", "generatedBy", "generatedIndex"):
             if field not in self.model_fields_set:
                 data.pop(field, None)
         return data
@@ -230,6 +247,45 @@ class ComponentPattern(ComponentModel):
     countParameterId: str
     spacingParameterId: str
     axis: Literal["x", "y", "z"]
+
+
+class BraceGenerationRule(ComponentModel):
+    """Generate fixed-size braces from a column hole grid during resize."""
+    id: str
+    label: str
+    enabled: bool = True
+    heightParameterId: str
+    pitchParameterId: str
+    bottomOffsetParameterId: str
+    topClearanceParameterId: str
+    leftColumnMemberId: str
+    rightColumnMemberId: str
+    horizontalMemberId: str
+    diagonalMemberId: str
+    horizontalLeftInterfaceId: str
+    horizontalRightInterfaceId: str
+    diagonalLeftInterfaceId: str
+    diagonalRightInterfaceId: str
+    # Geometry relations position real ports without claiming mating-contract
+    # compatibility. Keep existing rules' assembly-mate semantics by default.
+    connectionMode: Literal["geometry", "mates"] = "mates"
+    horizontalRelation: Literal["贴合", "同轴", "重合"] = "贴合"
+    diagonalRelation: Literal["贴合", "同轴", "重合"] = "贴合"
+    leftColumnInterfacePattern: str = "hole.{index}"
+    rightColumnInterfacePattern: str = "hole.{index}"
+    diagonalLeftColumnInterfacePattern: str | None = None
+    diagonalRightColumnInterfacePattern: str | None = None
+    columnInterfaceIndexStart: int = Field(default=0, ge=0, le=10000)
+    columnInterfaceIndexStep: int = Field(default=1, ge=1, le=1000)
+    # Horizontal braces normally use adjacent holes while diagonals can span
+    # several hole pitches. Keep that topology explicit instead of forcing
+    # every brace type through one index step.
+    diagonalColumnInterfaceIndexStep: int = Field(default=1, ge=1, le=1000)
+    diagonalColumnInterfaceIndexStart: int | None = Field(default=None, ge=0, le=10000)
+    diagonalPitchParameterId: str | None = None
+    diagonalAlternate: bool = True
+    remainderPolicy: Literal["reject", "top-clearance"] = "reject"
+    generatedMemberPrefix: str = "generated-brace"
 
 
 class ComponentRule(ComponentModel):
@@ -351,6 +407,7 @@ class ComponentDocument(ComponentModel):
     parameters: list[ComponentParameter]
     bindings: list[ParameterBinding]
     patterns: list[ComponentPattern] = Field(default_factory=list)
+    braceGenerationRules: list[BraceGenerationRule] = Field(default_factory=list, max_length=100)
     rules: list[ComponentRule]
     geometryDesign: GeometryDesign | None = None
 
@@ -498,6 +555,13 @@ class InterfaceConnectableSetAction(ComponentModel):
     connectableTypeIds: list[str] = Field(max_length=50)
 
 
+class InterfaceHardwareSetAction(ComponentModel):
+    type: Literal["interface.hardware.set"]
+    memberId: str = Field(min_length=1, max_length=120)
+    interfaceId: str = Field(min_length=1, max_length=120)
+    hardware: InterfaceHardware
+
+
 class InterfaceTypesMergeAction(ComponentModel):
     type: Literal["interface.types.merge"]
     types: list[ComponentInterfaceType] = Field(max_length=500)
@@ -541,6 +605,11 @@ class RuleExpressionAction(ComponentModel):
     expression: str
 
 
+class BraceRuleSetAction(ComponentModel):
+    type: Literal["brace.rule.set"]
+    rule: BraceGenerationRule
+
+
 class RuleAddAction(ComponentModel):
     type: Literal["rule.add"]
     rule: ComponentRule
@@ -556,6 +625,7 @@ class ModelRestoreState(ComponentModel):
     ports: list[ComponentPort]
     bindings: list[ParameterBinding]
     patterns: list[ComponentPattern]
+    braceGenerationRules: list[BraceGenerationRule] = Field(default_factory=list, max_length=100)
     slots: list[ComponentSlot]
 
 
@@ -566,7 +636,7 @@ class ModelRestoreAction(ComponentModel):
 
 TypedAction = Annotated[
     ModelRestoreAction | ResetAction | DefinitionPatchAction | MemberAddAction | MemberPatchAction | MemberRemoveAction
-    | MateAddAction | MateRemoveAction | SlotAddAction | SlotPatchAction | SlotRemoveAction | PortAddAction | PortRemoveAction | PortRenameAction | InterfaceTypeSetAction | InterfaceConnectableSetAction | InterfaceTypesMergeAction | ParameterValueAction | ParameterAddAction | ParameterRemoveAction | BindingSetAction | PatternAddAction | PatternRemoveAction | RuleAddAction | RuleRemoveAction | RuleExpressionAction,
+    | MateAddAction | MateRemoveAction | SlotAddAction | SlotPatchAction | SlotRemoveAction | PortAddAction | PortRemoveAction | PortRenameAction | InterfaceTypeSetAction | InterfaceConnectableSetAction | InterfaceHardwareSetAction | InterfaceTypesMergeAction | ParameterValueAction | ParameterAddAction | ParameterRemoveAction | BindingSetAction | PatternAddAction | PatternRemoveAction | BraceRuleSetAction | RuleAddAction | RuleRemoveAction | RuleExpressionAction,
     Field(discriminator="type"),
 ]
 ComponentAction = TypeAdapter(TypedAction)

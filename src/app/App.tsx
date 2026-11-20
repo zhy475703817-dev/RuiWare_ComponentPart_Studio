@@ -8,12 +8,15 @@ import { DefinitionStage } from "../stages/DefinitionStage";
 import { AssemblyStage } from "../stages/AssemblyStage";
 import { InterfacesStage } from "../stages/InterfacesStage";
 import { ParametersStage } from "../stages/ParametersStage";
+import { HardwareSummary } from "../stages/HardwareSummary";
 import { RulesStage } from "../stages/RulesStage";
 import { ValidationStage } from "../stages/ValidationStage";
 import { PublishStage } from "../stages/PublishStage";
 import { WorkspaceLayout } from "./WorkspaceLayout";
 import { useComponentWorkspace } from "./useComponentWorkspace";
 import { useGeometryResize } from "./useGeometryResize";
+import { useQualification } from "./useQualification";
+import { QualificationPanel } from "../stages/QualificationPanel";
 import { GeometryResizePanel } from "../stages/GeometryResizePanel";
 import "../styles/geometry-resize.css";
 import { AgentChanges } from "./AgentChanges";
@@ -36,10 +39,14 @@ export function App() {
   const { document, dispatch, stage, checks } = workspace;
   const { members, mates } = document.assembly;
   const resize = useGeometryResize(workspace.shared.draftId, document, workspace.editable && !workspace.shared.dirty, workspace.reloadDraft);
+  const qualification = useQualification(workspace.shared.draftId, document.revision, workspace.editable && !workspace.shared.dirty && members.length > 0, workspace.reloadDraft);
   const visibleDocument = stage === "parameters" && resize.preview ? resize.preview : document;
   const geometryPreview = stage === "parameters" && Boolean(resize.preview);
   const resizeBusy = geometryPreview || resize.applying;
-  const changedMemberIds = new Set(resize.job?.result?.changes?.map(change => change.path[0]) || []);
+  const changedMemberIds = new Set([
+    ...resize.job?.result?.changes?.map(change => change.path[0]) || [],
+    ...resize.job?.result?.structureChanges?.added.map(change => change.path[0]) || [],
+  ]);
   const compatibleIds = compatibleMemberIds(members, workspace.selectedMemberId);
   const componentCodeUnique = !workspace.shared.items.some(item => item.draftId !== workspace.shared.draftId
     && item.code?.toUpperCase() === document.definition.code.toUpperCase());
@@ -108,11 +115,11 @@ export function App() {
           if (patch.position || patch.rotation) workspace.transformMember(member.id, patch.position || member.position, patch.rotation || member.rotation);
           else dispatch({ type: "member.patch", id: member.id, patch });
         }}/>
-      case "interfaces": return <InterfacesStage members={members} ports={document.ports} slots={document.slots} mates={mates} interfaceTypes={document.interfaceTypes ?? []} selectedInterface={selectedInterface} interfacePreview={interfacePreview} editable={workspace.editable} onSelectInterface={selectInterface} onConnect={workspace.connectInterfaces} onRemoveConnection={workspace.removeConnection} onSetInterfaceExposure={workspace.setInterfaceExposure} onSetInterfaceType={workspace.setInterfaceType} onSetInterfaceConnectableTypes={workspace.setInterfaceConnectableTypes} onRenamePort={workspace.renamePort} onAddSlot={workspace.addSlot} onPatchSlot={workspace.patchSlot} onRemoveSlot={workspace.removeSlot}/>;
-      case "parameters": return <ParametersStage geometryReadOnly={Boolean(document.geometryDesign) || resizeBusy} geometryPanel={<GeometryResizePanel resize={resize}/>} parameters={document.parameters} bindings={document.bindings} patterns={document.patterns} rules={document.rules} members={members} definitionName={document.definition.name} definitionCode={document.definition.code} onChange={(id, value) => dispatch({ type: "parameter.value", id, value })} onBindingChange={(id, binding) => dispatch({ type: "binding.set", id, binding })} onAddParameter={parameter => dispatch({ type: "parameter.add", parameter })} onRemoveParameter={id => dispatch({ type: "parameter.remove", id })} onAddPattern={pattern => dispatch({ type: "pattern.add", pattern })} onRemovePattern={id => dispatch({ type: "pattern.remove", id })} onAddRule={rule => dispatch({ type: "rule.add", rule })} onRemoveRule={id => dispatch({ type: "rule.remove", id })}/>;
+      case "interfaces": return <InterfacesStage geometryDesign={document.geometryDesign} members={members} ports={document.ports} slots={document.slots} mates={mates} interfaceTypes={document.interfaceTypes ?? []} selectedInterface={selectedInterface} interfacePreview={interfacePreview} editable={workspace.editable} onSelectInterface={selectInterface} onConnect={workspace.connectInterfaces} onRemoveConnection={workspace.removeConnection} onSetInterfaceExposure={workspace.setInterfaceExposure} onSetInterfaceType={workspace.setInterfaceType} onSetInterfaceConnectableTypes={workspace.setInterfaceConnectableTypes} onSetInterfaceHardware={(memberId, interfaceId, hardware) => dispatch({ type: "interface.hardware.set", memberId, interfaceId, hardware })} onRenamePort={workspace.renamePort} onAddSlot={workspace.addSlot} onPatchSlot={workspace.patchSlot} onRemoveSlot={workspace.removeSlot}/>;
+      case "parameters": return <ParametersStage hardwarePanel={<HardwareSummary inline members={document.assembly.members} mates={document.assembly.mates} geometryDesign={document.geometryDesign}/>} geometryReadOnly={Boolean(document.geometryDesign) || resizeBusy} geometryPanel={<GeometryResizePanel resize={resize} document={document} draftId={workspace.shared.draftId}/>} parameters={document.parameters} bindings={document.bindings} patterns={document.patterns} rules={document.rules} members={members} definitionName={document.definition.name} definitionCode={document.definition.code} onChange={(id, value) => dispatch({ type: "parameter.value", id, value })} onBindingChange={(id, binding) => dispatch({ type: "binding.set", id, binding })} onAddParameter={parameter => dispatch({ type: "parameter.add", parameter })} onRemoveParameter={id => dispatch({ type: "parameter.remove", id })} onAddPattern={pattern => dispatch({ type: "pattern.add", pattern })} onRemovePattern={id => dispatch({ type: "pattern.remove", id })} onAddRule={rule => dispatch({ type: "rule.add", rule })} onRemoveRule={id => dispatch({ type: "rule.remove", id })}/>;
       case "rules": return <RulesStage rules={document.rules} onChange={(id, expression) => dispatch({ type: "rule.expression", id, expression })}/>;
-      case "validation": return <ValidationStage checks={checks} revision={document.revision} onValidate={() => workspace.setMessage(checks.some(check => check.status === "fail") ? "基础数据检查未通过，请处理失败项" : "基础数据检查通过；装配求解和工程规则执行仍待接入")}/>;
-      case "publish": return <PublishStage checks={checks} revision={document.revision} onExport={workspace.exportDraft} onPublish={workspace.publishDraft} publishing={workspace.publishing}/>;
+      case "validation": return <ValidationStage checks={checks} revision={document.revision} onValidate={() => workspace.setMessage(checks.some(check => check.status === "fail") ? "基础数据检查未通过，请处理失败项" : "基础数据检查通过；尺寸联动结果见自动制作验收，工程规则执行仍待接入")}/>;
+      case "publish": return <PublishStage checks={checks} revision={document.revision} onExport={workspace.exportDraft} onPublish={workspace.publishDraft} publishing={workspace.publishing} deliveryReady={qualification.deliveryReady}/>;
     }
   }
 
@@ -175,7 +182,7 @@ export function App() {
       {stage !== "definition" && draftRecovery}
       {stage === "definition" ? null : <>
         <AgentChanges shared={workspace.shared} onDismiss={workspace.dismissAgentChanges}/>
-        <section className="inspector-section" aria-label="当前阶段面板"><h3>当前阶段 · {STAGES.find(item => item.id === stage)?.label}</h3><fieldset className="stage-fields" disabled={!workspace.editable || resize.applying}>{renderStage()}</fieldset>{stage !== "validation" && stage !== "publish" && <div className="next-hint" role="status">{workspace.message}</div>}</section>
+        <section className="inspector-section" aria-label="当前阶段面板"><h3>当前阶段 · {STAGES.find(item => item.id === stage)?.label}</h3><fieldset className="stage-fields" disabled={!workspace.editable || resize.applying}>{renderStage()}{["parameters", "validation", "publish"].includes(stage) && <QualificationPanel qualification={qualification}/>}</fieldset>{stage !== "validation" && stage !== "publish" && <div className="next-hint" role="status">{workspace.message}</div>}</section>
         <section className="inspector-section"><h3>数据摘要</h3><div className="stats"><div><b>{members.length}</b><span>成员</span></div><div><b>{mates.length}</b><span>内部连接</span></div><div><b>{document.ports.length}</b><span>组件接口</span></div></div></section>
       </>}
     </>}

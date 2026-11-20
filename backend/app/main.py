@@ -16,6 +16,7 @@ from .components.publications import ComponentPublications
 from .components.router import router as draft_router, publication_router
 from .components.service import ComponentError
 from .components.resize_jobs import ResizeJobs, router as resize_router
+from .components.qualification import QualificationJobs, router as qualification_router
 from .library import LibraryError, router
 from .library_cache import LibraryCache
 from .library_sync import LibrarySync, router as cached_library_router
@@ -50,6 +51,8 @@ def create_app(
         app.state.reconstruction_cache = ReconstructionCache()
         app.state.drafts = DraftRepository(draft_db or resolved_settings.draft_db)
         app.state.resize_jobs = ResizeJobs(app)
+        app.state.qualification_jobs = QualificationJobs(app)
+        app.state.drafts.on_change = app.state.qualification_jobs.notify
         app.state.cleanup_store = CleanupStore(resolved_settings.cleanup_dir or (draft_db or resolved_settings.draft_db).parent / "template-cleanup")
         app.state.cleanup_lock = RLock()
         app.state.published_storage = PublishedStorage(resolved_settings.minio)
@@ -61,9 +64,12 @@ def create_app(
             app.state.http = client
             async with mcp.session_manager.run():
                 app.state.reference_registry.start()
+                for draft_id in app.state.drafts.pending_qualifications():
+                    app.state.qualification_jobs.queue(draft_id)
                 try:
                     yield
                 finally:
+                    await app.state.qualification_jobs.close()
                     await app.state.resize_jobs.close()
                     await app.state.reference_registry.close()
                     await app.state.library_sync.close()
@@ -92,6 +98,7 @@ def create_app(
     app.include_router(reconstruction_router)
     app.include_router(draft_router)
     app.include_router(resize_router)
+    app.include_router(qualification_router)
     app.include_router(publication_router)
     app.router.routes.append(Route("/mcp", endpoint=MCPAccess(mcp_http, app), methods=["GET", "POST", "DELETE"]))
 

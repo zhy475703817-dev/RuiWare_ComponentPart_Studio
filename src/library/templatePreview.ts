@@ -3,6 +3,7 @@ import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
 import { parsePublishedTemplates } from "./publishedLibrary.ts";
 import type { PublishedTemplate } from "./publishedLibrary.ts";
 import type { PartInterface } from "../domain/component.ts";
+import { withReconstructionSlot } from "./reconstructionQueue.ts";
 
 export type PreviewDescription = {
   publication: PublishedTemplate;
@@ -185,6 +186,10 @@ async function responseError(response: Response): Promise<never> {
 }
 
 export async function loadReconstructionInfo(selected: PublishedTemplate, signal: AbortSignal, parameterValues: Record<string, unknown> = {}): Promise<ReconstructionInfo> {
+  return withReconstructionSlot(signal, () => readReconstructionInfo(selected, signal, parameterValues));
+}
+
+async function readReconstructionInfo(selected: PublishedTemplate, signal: AbortSignal, parameterValues: Record<string, unknown>): Promise<ReconstructionInfo> {
   const query = new URLSearchParams({ sha256: selected.sha256.toLowerCase() });
   if (Object.keys(parameterValues).length) query.set("parameters", JSON.stringify(parameterValues));
   const response = await fetch(`/api/published-templates/${encodeURIComponent(selected.publicationId)}/reconstruction?${query}`, { signal, cache: "no-store" });
@@ -300,6 +305,11 @@ export async function loadReconstructionInfo(selected: PublishedTemplate, signal
         ...(typeof item.mating.standardId === "string" ? { standardId: item.mating.standardId } : {}),
         ...(typeof item.mating.connectionMethod === "string" ? { connectionMethod: item.mating.connectionMethod } : {}), dimensions, allowedRelations };
     }
+    if (record(item.hardware) && (item.hardware.mode === "auto" || item.hardware.mode === "manual" || item.hardware.mode === "none")) {
+      const rawHardware = Array.isArray(item.hardware.items) ? item.hardware.items : [];
+      if (rawHardware.length > 50 || rawHardware.some(entry => !record(entry) || typeof entry.name !== "string" || !entry.name.trim() || entry.name.length > 80 || typeof entry.specification !== "string" || entry.specification.length > 120 || typeof entry.quantity !== "number" || !Number.isInteger(entry.quantity) || entry.quantity < 1 || entry.quantity > 10000)) throw new Error("零件接口五金配置无效。");
+      parsed.hardware = { mode: item.hardware.mode, items: rawHardware.map(entry => ({ ...(typeof (entry as Record<string, unknown>).category === "string" ? { category: (entry as Record<string, unknown>).category as string } : {}), name: (entry as Record<string, unknown>).name as string, specification: (entry as Record<string, unknown>).specification as string, quantity: (entry as Record<string, unknown>).quantity as number })) };
+    }
     if (item.referenceFrame !== undefined && item.referenceFrame !== null) {
       if (!record(item.referenceFrame) || !["x", "y", "z", "-x", "-y", "-z"].includes(String(item.referenceFrame.axis)) ||
         (item.referenceFrame.originRef !== undefined && item.referenceFrame.originRef !== null && typeof item.referenceFrame.originRef !== "string")) throw new Error("无法读取零件接口参考系。");
@@ -340,6 +350,10 @@ export function interfacesForReconstruction(info: ReconstructionInfo): PartInter
 }
 
 export async function loadTemplatePreview(selected: PublishedTemplate, parameters: Record<string, unknown>, signal: AbortSignal): Promise<LoadedPreview> {
+  return withReconstructionSlot(signal, () => readTemplatePreview(selected, parameters, signal));
+}
+
+async function readTemplatePreview(selected: PublishedTemplate, parameters: Record<string, unknown>, signal: AbortSignal): Promise<LoadedPreview> {
   signal.throwIfAborted();
   const response = await fetch(`/api/published-templates/${encodeURIComponent(selected.publicationId)}/reconstruction/model?sha256=${selected.sha256.toLowerCase()}`, {
     method: "POST", signal, cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ parameters }),

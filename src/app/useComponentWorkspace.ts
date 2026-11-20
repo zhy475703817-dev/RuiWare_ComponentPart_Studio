@@ -42,8 +42,8 @@ export function useComponentWorkspace() {
   function rememberModel() {
     const current = controller.current?.getSnapshot().document;
     if (!current) return;
-    const { assembly, ports, bindings, patterns, slots } = current;
-    modelHistory.current = [...modelHistory.current, structuredClone({ assembly, ports, bindings, patterns, slots })].slice(-10);
+    const { assembly, ports, bindings, patterns, slots, braceGenerationRules } = current;
+    modelHistory.current = [...modelHistory.current, structuredClone({ assembly, ports, bindings, patterns, slots, braceGenerationRules })].slice(-10);
     setUndoCount(modelHistory.current.length);
   }
   async function undoModel() {
