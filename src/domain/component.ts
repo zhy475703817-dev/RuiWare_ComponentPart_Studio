@@ -104,7 +104,7 @@ export type ComponentSlot = {
   memberId: string | null;
   interfaceId: string | null;
 };
-export type ComponentParameter = { id: string; label: string; value: number | null; unit: string; min: number; max: number };
+export type ComponentParameter = { id: string; label: string; value: number | null; default?: number | null; unit: string; min: number; max: number };
 export type ParameterBinding = { id: string; parameterId: string; memberId: string; memberParameterId: string };
 export type ComponentPattern = { id: string; label: string; memberIds: string[]; countParameterId: string; spacingParameterId: string; axis: "x" | "y" | "z" };
 export type ComponentRule = { id: string; kind?: "constraint" | "composition"; label?: string; expression: string };

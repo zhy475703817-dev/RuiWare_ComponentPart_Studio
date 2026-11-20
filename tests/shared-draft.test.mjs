@@ -58,6 +58,30 @@ test('服务端拒绝连接后移除失败操作，后续编辑仍能保存', as
   workspace.dispose();
 });
 
+test('解除尺寸绑定在保存、轮询及重新读取后保持解除，可独立编辑成员参数', async () => {
+  const { api } = server();
+  const workspace = new SharedDraftController(api);
+  await workspace.start();
+  workspace.dispatch({ type: 'member.add', member: {
+    id: 'a', name: '横梁', role: '横梁', code: 'TEST', template: { publicationId: 'version.1', templateId: 'template.1', version: 1, sha256: 'a'.repeat(64) }, position: [0, 0, 0], rotation: [0, 0, 0], interfaces: [],
+    parameterValues: { length: 2400 }, parameterDefinitions: [{ id: 'length', label: '长度', unit: 'mm', valueType: 'number', minimum: 100, maximum: 6000, default: 2400 }],
+  } });
+  await workspace.flush();
+  const binding = workspace.getSnapshot().document.bindings.find(item => item.memberId === 'a');
+  assert.ok(binding);
+  workspace.dispatch({ type: 'binding.set', id: binding.id, binding: null });
+  await workspace.flush();
+  await workspace.poll();
+  await workspace.reload();
+  assert.equal(workspace.getSnapshot().document.bindings.length, 0);
+  workspace.dispatch({ type: 'member.patch', id: 'a', patch: { parameterValues: { length: 3200 } } });
+  await workspace.flush();
+  await workspace.reload();
+  assert.equal(workspace.getSnapshot().document.assembly.members[0].parameterValues.length, 3200);
+  assert.equal(workspace.getSnapshot().document.parameters[0].value, 2400);
+  workspace.dispose();
+});
+
 test('快速输入立即显示，按服务端修订串行保存，不丢失后续输入', async () => {
   const { api, documents } = server();
   const gate = deferred();

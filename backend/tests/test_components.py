@@ -32,6 +32,73 @@ def source(identifier):
 
 
 class ComponentTests(unittest.TestCase):
+    def test_parameter_initial_value_persists_for_reset(self):
+        with TestClient(create_app(dist_dir=None)) as client:
+            draft = self.create(client)
+            response = self.action(client, draft, {'type': 'parameter.add', 'parameter': {'id': 'gap', 'label': '间隙', 'unit': 'mm', 'value': 42, 'min': 0, 'max': 100}})
+            self.assertEqual(response.status_code, 200, response.text)
+            response = self.action(client, response.json(), {'type': 'parameter.value', 'id': 'gap', 'value': 75})
+            self.assertEqual(response.status_code, 200, response.text)
+            saved = client.get('/api/component-drafts/' + draft['draftId']).json()
+            parameter = next(p for p in saved['document']['parameters'] if p['id'] == 'gap')
+            self.assertEqual((parameter['value'], parameter['default']), (75, 42))
+            response = self.action(client, saved, {'type': 'parameter.value', 'id': 'gap', 'value': parameter['default']})
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(next(p for p in response.json()['document']['parameters'] if p['id'] == 'gap')['value'], 42)
+            response = self.action(client, response.json(), {'type': 'parameter.value', 'id': 'componentLength', 'value': 5000})
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json()['document']['parameters'][0]['default'], 2400)
+
+    def test_first_binding_inherits_fixed_range_and_rejects_conflicting_member(self):
+        with TestClient(create_app(dist_dir=None)) as client:
+            draft = self.create(client)
+            data = draft['document']
+            data['assembly']['members'] = []
+            data['bindings'] = []
+            for identifier, width in [('a', 50), ('b', 70)]:
+                part = member(identifier)
+                part['parameterDefinitions'] = [{'id': 'sectionWidth', 'label': '截面宽度', 'unit': 'mm', 'valueType': 'number', 'minimum': width, 'maximum': width, 'default': width}]
+                data['assembly']['members'].append(part)
+            draft = self.create(client, document=data)
+            def bind(identifier):
+                return {'type': 'binding.set', 'id': 'width-' + identifier, 'binding': {'id': 'width-' + identifier, 'parameterId': 'componentWidth', 'memberId': identifier, 'memberParameterId': 'sectionWidth'}}
+            response = self.action(client, draft, bind('a'))
+            self.assertEqual(response.status_code, 200, response.text)
+            draft = response.json()
+            width = next(p for p in draft['document']['parameters'] if p['id'] == 'componentWidth')
+            self.assertEqual((width['min'], width['value']), (50, 50))
+            rejected = self.action(client, draft, bind('b'))
+            self.assertEqual(rejected.status_code, 422, rejected.text)
+            self.assertEqual(rejected.json()['error']['code'], 'INVALID_BINDING_RANGE')
+            response = self.action(client, draft, {'type': 'binding.set', 'id': 'width-a', 'binding': None})
+            self.assertEqual(response.status_code, 200, response.text)
+            response = self.action(client, response.json(), bind('a'))
+            self.assertEqual(response.status_code, 200, response.text)
+            saved = client.get('/api/component-drafts/' + draft['draftId']).json()
+            self.assertEqual(len(saved['document']['bindings']), 1)
+
+    def test_independent_member_parameter_edit_roundtrip(self):
+        with TestClient(create_app(dist_dir=None)) as client:
+            draft = self.create(client)
+            for identifier in ('a', 'b'):
+                part = member(identifier)
+                part['parameterDefinitions'] = [{'id': 'length', 'label': '长度', 'unit': 'mm', 'valueType': 'number', 'minimum': 100, 'maximum': 6000, 'default': 2400}]
+                response = self.action(client, draft, {'type': 'member.add', 'member': part})
+                self.assertEqual(response.status_code, 200, response.text)
+                draft = response.json()
+            for binding in list(draft['document']['bindings']):
+                if binding['memberId'] == 'a':
+                    response = self.action(client, draft, {'type': 'binding.set', 'id': binding['id'], 'binding': None})
+                    self.assertEqual(response.status_code, 200, response.text)
+                    draft = response.json()
+            response = self.action(client, draft, {'type': 'member.patch', 'id': 'a', 'patch': {'parameterValues': {'length': 3210}}})
+            self.assertEqual(response.status_code, 200, response.text)
+            saved = client.get('/api/component-drafts/' + draft['draftId']).json()
+            parts = {part['id']: part for part in saved['document']['assembly']['members']}
+            self.assertEqual(parts['a']['parameterValues']['length'], 3210)
+            self.assertEqual(parts['b']['parameterValues']['length'], 2400)
+            self.assertEqual(saved['document']['parameters'], draft['document']['parameters'])
+
     def test_model_restore_preserves_non_model_edits(self):
         with TestClient(create_app(dist_dir=None)) as client:
             draft = self.create(client)

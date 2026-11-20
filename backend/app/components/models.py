@@ -204,6 +204,14 @@ class ComponentParameter(ComponentModel):
     unit: str
     min: Number
     max: Number
+    default: Number | None = None
+
+    @model_serializer(mode="wrap")
+    def preserve_legacy_default(self, handler):
+        data = handler(self)
+        if "default" not in self.model_fields_set:
+            data.pop("default", None)
+        return data
 
 
 class ParameterBinding(ComponentModel):

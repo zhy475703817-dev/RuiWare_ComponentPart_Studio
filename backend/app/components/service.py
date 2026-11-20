@@ -412,26 +412,36 @@ def apply_action(document: ComponentDocument, action: TypedAction) -> ComponentD
                 if target_definition is None or target_definition.get("unit") != parameter.unit or target_definition.get("valueType") not in ("number", "integer"):
                     raise ComponentError(422, "INVALID_BINDING")
                 target_definitions.append(target_definition)
-            minimum = max([parameter.min, *(item["minimum"] for item in target_definitions if item.get("minimum") is not None)])
-            maximum = min([parameter.max, *(item["maximum"] for item in target_definitions if item.get("maximum") is not None)])
+            first_binding = not any(item.id != action.id and item.parameterId == parameter.id for item in document.bindings)
+            inherited_min = min(parameter.min, definition.minimum if definition.minimum is not None else parameter.min) if first_binding else parameter.min
+            inherited_max = max(parameter.max, definition.maximum if definition.maximum is not None else parameter.max) if first_binding else parameter.max
+            minimum = max([inherited_min, *(item["minimum"] for item in target_definitions if item.get("minimum") is not None)])
+            maximum = min([inherited_max, *(item["maximum"] for item in target_definitions if item.get("maximum") is not None)])
             integer_bound = any(item["valueType"] == "integer" for item in target_definitions)
             lower = math.ceil(minimum) if integer_bound else minimum
             upper = math.floor(maximum) if integer_bound else maximum
             if lower > upper:
                 raise ComponentError(422, "INVALID_BINDING_RANGE")
             parameter_data = next(item for item in data["parameters"] if item["id"] == parameter.id)
+            original_value = parameter_data["value"]
+            parameter_data["min"], parameter_data["max"] = inherited_min, inherited_max
             if parameter_data["value"] is not None:
                 current = math.floor(parameter_data["value"] + 0.5) if integer_bound else parameter_data["value"]
                 parameter_data["value"] = min(upper, max(lower, current))
                 for target_binding in targets:
                     target_member = next(entry for entry in data["assembly"]["members"] if entry["id"] == target_binding["memberId"])
                     target_member["parameterValues"][target_binding["memberParameterId"]] = parameter_data["value"]
+            if original_value != parameter_data["value"] and "default" not in parameter_data:
+                parameter_data["default"] = {"componentLength": 2400, "componentWidth": 600, "componentHeight": 1800}.get(parameter.id, original_value)
     elif action.type == "parameter.add":
         if any(item["id"] == action.parameter.id for item in data["parameters"]):
             raise ComponentError(422, "DUPLICATE_ID")
         if action.parameter.min > action.parameter.max or action.parameter.value is None or not action.parameter.min <= action.parameter.value <= action.parameter.max:
             raise ComponentError(422, "INVALID_PARAMETER_RANGE")
-        data["parameters"].append(action.parameter.model_dump())
+        added = action.parameter.model_dump()
+        if added.get("default") is None:
+            added["default"] = added["value"]
+        data["parameters"].append(added)
     elif action.type == "parameter.remove":
         if not any(item["id"] == action.id for item in data["parameters"]):
             raise ComponentError(404, "COMPONENT_ITEM_NOT_FOUND")
@@ -470,6 +480,8 @@ def apply_action(document: ComponentDocument, action: TypedAction) -> ComponentD
         item = next((item for item in data[collection] if item["id"] == action.id), None)
         if item is None:
             raise ComponentError(404, "COMPONENT_ITEM_NOT_FOUND")
+        if action.type == "parameter.value" and action.value != item["value"] and "default" not in item:
+            item["default"] = {"componentLength": 2400, "componentWidth": 600, "componentHeight": 1800}.get(item["id"], item["value"])
         if action.type == "parameter.value" and action.value is not None:
             definitions = []
             for binding in data["bindings"]:

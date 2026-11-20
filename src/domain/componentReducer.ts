@@ -2,6 +2,7 @@ import { createComponentDocument, getInterface, hasInterface, samePartInterface 
 import { inferEnvelopeDimensions } from "./parameterMetrics.ts";
 import { assessInterfaceCompatibility } from "./interfaceCompatibility.ts";
 import { PRESET_INTERFACE_TYPES } from "./interfaceTypes.ts";
+import { parameterDefault } from "./parameterDefaults.ts";
 import type { ComponentDefinition, ComponentDocument, ComponentMember, ComponentPattern, ComponentPort, ComponentSlot, InterfaceSource, Mate, ParameterBinding } from "./component.ts";
 
 const PRESET_CONNECTION_TYPE_IDS = new Set<string>(PRESET_INTERFACE_TYPES.map(item => item.id));
@@ -238,7 +239,7 @@ export function componentReducer(document: ComponentDocument, action: ComponentA
       const lowerBound = integerBound ? Math.ceil(minimum) : minimum;
       const upperBound = integerBound ? Math.floor(maximum) : maximum;
       const value = action.value === null ? null : Math.min(upperBound, Math.max(lowerBound, integerBound ? Math.round(action.value) : action.value));
-      const parameters = document.parameters.map(parameter => parameter.id === action.id ? { ...parameter, value } : parameter);
+      const parameters = document.parameters.map(parameter => parameter.id === action.id ? { ...parameter, default: parameterDefault(parameter), value } : parameter);
       const updatedMembers = document.assembly.members.map(member => {
         const values = { ...member.parameterValues };
         for (const binding of document.bindings.filter(item => item.parameterId === action.id && item.memberId === member.id)) {
@@ -257,7 +258,7 @@ export function componentReducer(document: ComponentDocument, action: ComponentA
       return next({ parameters, assembly: { ...document.assembly, members: updatedMembers } });
     case "parameter.add":
       if (!action.parameter.id.trim() || document.parameters.some(parameter => parameter.id === action.parameter.id) || !Number.isFinite(action.parameter.min) || !Number.isFinite(action.parameter.max) || !Number.isFinite(action.parameter.value ?? NaN) || action.parameter.min > action.parameter.max || action.parameter.value! < action.parameter.min || action.parameter.value! > action.parameter.max) return document;
-      return next({ parameters: [...document.parameters, structuredClone(action.parameter)] });
+      return next({ parameters: [...document.parameters, { ...structuredClone(action.parameter), default: action.parameter.default ?? action.parameter.value }] });
     case "parameter.remove":
       if (!document.parameters.some(parameter => parameter.id === action.id)) return document;
       return next({ parameters: document.parameters.filter(parameter => parameter.id !== action.id), bindings: document.bindings.filter(binding => binding.parameterId !== action.id), patterns: document.patterns.filter(pattern => pattern.countParameterId !== action.id && pattern.spacingParameterId !== action.id) });
@@ -300,14 +301,17 @@ export function componentReducer(document: ComponentDocument, action: ComponentA
         const targetDefinition = target?.parameterDefinitions?.find(item => item.id === binding.memberParameterId && item.unit === parameter.unit && ["number", "integer"].includes(item.valueType));
         return targetDefinition ? [targetDefinition] : [];
       });
-      const min = Math.max(parameter.min, ...definitions.map(item => item.minimum ?? -Infinity));
-      const max = Math.min(parameter.max, ...definitions.map(item => item.maximum ?? Infinity));
+      const firstBinding = !document.bindings.some(binding => binding.id !== action.id && binding.parameterId === parameter.id);
+      const inheritedMin = firstBinding ? Math.min(parameter.min, definition.minimum ?? parameter.min) : parameter.min;
+      const inheritedMax = firstBinding ? Math.max(parameter.max, definition.maximum ?? parameter.max) : parameter.max;
+      const min = Math.max(inheritedMin, ...definitions.map(item => item.minimum ?? -Infinity));
+      const max = Math.min(inheritedMax, ...definitions.map(item => item.maximum ?? Infinity));
       const integerBound = definitions.some(item => item.valueType === "integer");
       const lowerBound = integerBound ? Math.ceil(min) : min;
       const upperBound = integerBound ? Math.floor(max) : max;
       if (lowerBound > upperBound) return document;
       const value = parameter.value === null ? null : Math.min(upperBound, Math.max(lowerBound, integerBound ? Math.round(parameter.value) : parameter.value));
-      const parameters = document.parameters.map(item => item.id === parameter.id ? { ...item, value } : item);
+      const parameters = document.parameters.map(item => item.id === parameter.id ? { ...item, ...(value !== item.value ? { default: parameterDefault(item) } : {}), min: inheritedMin, max: inheritedMax, value } : item);
       const assembly = { ...document.assembly, members: document.assembly.members.map(item => {
         const targetBindings = bindings.filter(binding => binding.parameterId === parameter.id && binding.memberId === item.id);
         if (!targetBindings.length || value === null) return item;

@@ -20,6 +20,21 @@ const member = id => ({
 });
 const source = memberId => ({ memberId, interfaceId: 'face.left' });
 
+test('首次绑定固定尺寸可继承范围，冲突绑定拒绝，取消后可重新选择', () => {
+  const draft = createComponentDocument();
+  const definition = value => ({ id: 'sectionWidth', label: '截面宽度', unit: 'mm', valueType: 'number', minimum: value, maximum: value, default: value });
+  draft.assembly.members = ['a', 'b'].map((id, index) => ({ ...member(id), parameterDefinitions: [definition(index ? 70 : 50)] }));
+  const action = id => ({ type: 'binding.set', id: 'width-' + id, binding: { id: 'width-' + id, parameterId: 'componentWidth', memberId: id, memberParameterId: 'sectionWidth' } });
+  const bound = componentReducer(draft, action('a'));
+  assert.equal(bound.parameters.find(p => p.id === 'componentWidth').min, 50);
+  assert.equal(bound.parameters.find(p => p.id === 'componentWidth').value, 50);
+  assert.equal(bound.assembly.members[0].parameterValues.sectionWidth, 50);
+  assert.equal(componentReducer(bound, action('b')), bound);
+  const removed = componentReducer(bound, { type: 'binding.set', id: 'width-a', binding: null });
+  assert.equal(removed.bindings.length, 0);
+  assert.equal(componentReducer(removed, action('a')).bindings.length, 1);
+});
+
 test('平面移动按成员保存，旧成员和关闭选项的导出保持兼容', () => {
   let draft = componentReducer(createComponentDocument(), { type: 'member.add', member: member('part') });
   draft = componentReducer(draft, { type: 'member.add', member: { ...member('nested'), template: { ...template, templateKind: 'component' } } });

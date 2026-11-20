@@ -16,6 +16,8 @@ import { alignInterfaceFaces } from "../domain/faceAlignment";
 import { solveConnectedFaces } from "../domain/connectionSolver";
 import { loadConnectionGeometry } from "../library/connectionGeometry";
 import { connectionStateKey } from "../domain/connectionState";
+import { memberParameterPatch } from "../domain/memberParameterEdit";
+import type { ParameterValue } from "../domain/component";
 
 const initialMessage = "完善组件定义信息后，可进入装配阶段选择成员";
 
@@ -158,6 +160,18 @@ export function useComponentWorkspace() {
     if (!dispatch({ type: "member.remove", id })) return;
     if (selectedMemberId === id) setSelectedMemberId(null);
     setMessage("已删除成员，并清理关联的连接、接口及参数绑定");
+  }
+
+  function setMemberParameter(memberId: string, parameterId: string, value: ParameterValue) {
+    const workspace = controller.current;
+    if (!workspace || !editable) return;
+    const current = workspace.getSnapshot().document;
+    const member = current.assembly.members.find(item => item.id === memberId);
+    if (!member) return;
+    const patch = memberParameterPatch(member, current.bindings, parameterId, value);
+    if (!patch) { setMessage("参数未更新：请检查可调范围，或先解除组件参数绑定。"); return; }
+    if (member.parameterValues[parameterId] === value) return;
+    if (workspace.dispatch({ type: "member.patch", id: memberId, patch })) setMessage(`已更新 ${member.name} 的参数，正在同步模型和接口。`);
   }
 
   function copyMember(id: string) {
@@ -443,7 +457,7 @@ export function useComponentWorkspace() {
   return { document, dispatch, stage, setStage, selectedMemberId, setSelectedMemberId, previewTemplate, setPreviewTemplate,
     selectionResetToken, message: syncMessage, setMessage, checks, newDraft, removeMember, addMate, connectInterfaces, removeConnection, setInterfaceExposure, renamePort, setInterfaceType, addSlot, patchSlot, removeSlot, exportDraft,
     shared, editable, selectDraft, publishDraft, publishing, adding, addPublishedTemplate, libraryRefreshToken,
-    copyMember, moveMember, transformMember, groundMember, undoModel, undoCount, undoing,
+    copyMember, moveMember, transformMember, groundMember, undoModel, undoCount, undoing, setMemberParameter,
     downloadLocalDraft, dismissAgentChanges: () => controller.current?.dismissAgentChanges(),
     retrySave: () => { void controller.current?.retry().catch(() => {}); },
     reloadDraft: () => { void controller.current?.reload(); },
