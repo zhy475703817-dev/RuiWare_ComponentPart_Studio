@@ -3,8 +3,46 @@ import type { ComponentDocument } from "./component.ts";
 import { effectiveParameterBounds } from "./parameterMetrics.ts";
 import { isValidComponentCode } from "./componentCode.ts";
 import { assessInterfaceCompatibility } from "./interfaceCompatibility.ts";
+import { columnFrameMembers, hasBuiltInBraces } from "./bracePolicy.ts";
 
 export type ValidationCheck = { id: string; label: string; status: "pass" | "fail" | "pending"; message: string };
+
+function braceRulesValid(document: ComponentDocument): boolean {
+  const rules = document.braceGenerationRules || [];
+  const ruleIds = new Set(rules.map(rule => rule.id));
+  const columns = new Set(rules.flatMap(rule => [rule.leftColumnMemberId, rule.rightColumnMemberId]));
+  const prototypes = rules.flatMap(rule => [rule.horizontalMemberId, rule.diagonalMemberId]);
+  if (ruleIds.size !== rules.length || new Set(prototypes).size !== prototypes.length || prototypes.some(id => columns.has(id))) return false;
+  const validPattern = (pattern: string) => {
+    const tokens = [...pattern.matchAll(/\{index(?::0?(\d+)d)?\}/g)];
+    if (tokens.length !== 1) return false;
+    const width = tokens[0][1];
+    return (width === undefined || width.length <= 2 && Number(width) >= 1 && Number(width) <= 10)
+      && !/[{}]/.test(pattern.replace(tokens[0][0], ""));
+  };
+  return rules.every(rule => {
+    const ids = [rule.heightParameterId, rule.pitchParameterId, rule.bottomOffsetParameterId, rule.topClearanceParameterId];
+    if (!rule.id.trim() || !rule.label.trim() || new Set(ids).size !== 4) return false;
+    const values = [...ids, ...(rule.diagonalPitchParameterId ? [rule.diagonalPitchParameterId] : [])]
+      .map(id => document.parameters.find(parameter => parameter.id === id));
+    if (values.some(p => !p || p.unit !== "mm" || p.min < 0 || p.max < p.min || p.value === null || !Number.isFinite(p.value))) return false;
+    if (values[1]!.value! <= 0 || values[0]!.value! < values[2]!.value! + values[3]!.value!
+      || values.length > 4 && values[4]!.value! <= 0) return false;
+    const memberIds = [rule.leftColumnMemberId, rule.rightColumnMemberId, ...[rule.horizontalMemberId, rule.diagonalMemberId]];
+    if (new Set(memberIds).size !== 4 || memberIds.some(id => !document.assembly.members.some(member => member.id === id))) return false;
+    if ([rule.horizontalMemberId, rule.diagonalMemberId].some(id => {
+      const source = document.assembly.members.find(member => member.id === id)!;
+      return source.generatedBy != null && ruleIds.has(source.generatedBy);
+    })) return false;
+    if (![[rule.horizontalMemberId, rule.horizontalLeftInterfaceId], [rule.horizontalMemberId, rule.horizontalRightInterfaceId],
+      [rule.diagonalMemberId, rule.diagonalLeftInterfaceId], [rule.diagonalMemberId, rule.diagonalRightInterfaceId]]
+      .every(([memberId, interfaceId]) => hasInterface(document, { memberId, interfaceId }))) return false;
+    if (rule.horizontalLeftInterfaceId === rule.horizontalRightInterfaceId || rule.diagonalLeftInterfaceId === rule.diagonalRightInterfaceId) return false;
+    return [rule.leftColumnInterfacePattern ?? "hole.{index}", rule.rightColumnInterfacePattern ?? "hole.{index}",
+      rule.diagonalLeftColumnInterfacePattern, rule.diagonalRightColumnInterfacePattern]
+      .every(pattern => pattern === undefined || pattern === null || validPattern(pattern));
+  });
+}
 
 export function validateComponent(document: ComponentDocument, codeUnique = true): ValidationCheck[] {
   const { members, mates } = document.assembly;
@@ -66,6 +104,8 @@ export function validateComponent(document: ComponentDocument, codeUnique = true
         && spacing !== undefined && spacing.unit === "mm" && spacing.value !== null && spacing.value >= 0
         && spacing.min >= 0 && spacing.min <= spacing.value && spacing.value <= spacing.max;
     }) && new Set(document.patterns.flatMap(pattern => pattern.memberIds)).size === document.patterns.reduce((total, pattern) => total + pattern.memberIds.length, 0), "重复构成规则引用无效成员、参数或重叠成员"),
+    ...(columnFrameMembers(document) ? [check("brace.builtin", "柱片内置补齐", hasBuiltInBraces(document), "柱片模板须在制作时内置完整补齐规则、覆盖立柱和撑杆并绑定高度；完成增高、缩短验收后交付")] : []),
+    ...(document.braceGenerationRules?.length ? [check("brace.rules", "撑杆生成规则", braceRulesValid(document), "撑杆规则引用无效成员、参数、单位或撑杆接口，或多条规则重复使用同一撑杆原型")] : []),
     check("slots", "槽位引用", slotsValid, "槽位缺少有效基准接口、占用接口不兼容，或必填槽位尚未分配"),
     { id: "assembly.solve", label: "几何联动检查", status: document.geometryDesign?.verified ? "pass" : "pending", message: document.geometryDesign?.verified ? "实际外形及已配置几何约束通过" : "请在参数阶段试算并应用几何联动；当前未验证" },
     { id: "rules.execution", label: "工程规则执行", status: "pending", message: "当前仅保存规则说明，尚未接入规则执行" },

@@ -82,6 +82,35 @@ class MCPTests(unittest.TestCase):
         with TestClient(create_app(dist_dir=None), base_url="http://127.0.0.1:8020", client=("203.0.113.8", 12345)) as client:
             self.assertEqual(self.rpc(client, "tools/list").status_code, 403)
 
+    def test_ai_creation_policy_is_delivered_on_initialize_and_draft_operations(self):
+        from backend.tests.test_components import member
+
+        with self.client() as client:
+            initialized = self.rpc(client, "initialize", {
+                "protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "authoring-test", "version": "1.0"},
+            }).json()["result"]
+            self.assertIn("选型、装配和参数配置时提前解决", initialized["instructions"])
+            self.assertNotIn("几何重建和正式发布尚未接入", initialized["instructions"])
+            policy = self.call(client, "component_get_authoring_requirements", {})["structuredContent"]
+            self.assertEqual(len(policy["rules"]), 7)
+            self.assertIn('column-frame', {rule['stage'] for rule in policy['rules']})
+            document = client.post("/api/component-drafts", json={}).json()["document"]
+            document["assembly"]["members"] = [member("left"), member("beam")]
+            created = self.call(client, "component_create_draft", {"document": document})["structuredContent"]
+            self.assertEqual(created["authoring"]["policyVersion"], policy["version"])
+            missing = [issue["path"] for issue in created["authoring"]["issues"] if issue["code"] == "AUTHORING_RELATION_UNCONFIRMED"]
+            self.assertEqual(missing, [["left"], ["beam"]])
+            edited = self.call(client, "component_add_mate", {
+                "draftId": created["draftId"], "expectedRevision": created["document"]["revision"],
+                "fromMemberId": "left", "fromInterfaceId": "face.left", "toMemberId": "beam", "toInterfaceId": "face.left",
+            })["structuredContent"]
+            self.assertNotIn("AUTHORING_RELATION_UNCONFIRMED", {issue["code"] for issue in edited["authoring"]["issues"]})
+            fetched = self.call(client, "component_get_draft", {"draftId": created["draftId"]})["structuredContent"]
+            checked = self.call(client, "component_validate_draft", {"draftId": created["draftId"]})["structuredContent"]
+            self.assertEqual(fetched["authoring"], checked["authoring"])
+            self.assertFalse(checked["authoring"]["geometryVerified"])
+            self.assertNotIn("authoring", fetched["document"])
+
     def test_string_arguments_preserve_json_looking_literals(self):
         with self.client() as client:
             for literal in ["null", "[]", "{}", "true"]:

@@ -3,8 +3,10 @@ from typing import Annotated
 from mcp.types import CallToolResult, ToolAnnotations
 from pydantic import Field
 
-from ..components.models import ComponentAction, ComponentDocument, DefinitionPatch, MemberPatch
+from ..components.models import BraceGenerationRule, ComponentAction, ComponentDocument, DefinitionPatch, MemberPatch
 from ..components.resize_jobs import ResizeRequest, ResizeApplyRequest, ResizeJobs
+from .authoring import POLICY_VERSION, authoring_report, requirements
+from ..components.qualification_policy import QualificationConfig
 
 
 Revision = Annotated[int, Field(strict=True, ge=1)]
@@ -15,8 +17,42 @@ def register(mcp, app, invoke):
     readonly = ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False)
     write = ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False)
 
+    def with_authoring(draft):
+        history = app.state.drafts.resize_history(draft["draftId"])
+        qualification = app.state.drafts.qualification(draft["draftId"])
+        return {**draft, "authoring": {**authoring_report(draft, history), "deliveryReady": qualification["deliveryReady"],
+                                      "qualification": qualification}}
+
+    @mcp.tool(annotations=write, structured_output=False)
+    async def component_finish_authoring(draftId: str, expectedRevision: Revision, retry: bool = False) -> CallToolResult:
+        """制作完成入口：平台自动执行原尺寸修复、增大/缩小/组合/孔列边界试调和复验。返回任务状态；通过前不能交付或发布，试验尺寸不覆盖原尺寸。"""
+        async def start():
+            from ..components.service import ComponentError
+            if app.state.drafts.get(draftId)["document"]["revision"] != expectedRevision:
+                raise ComponentError(409, "REVISION_CONFLICT")
+            return app.state.qualification_jobs.queue(draftId, retry)
+        return await invoke(start)
+
+    @mcp.tool(annotations=readonly, structured_output=False)
+    async def component_authoring_status(draftId: str) -> CallToolResult:
+        """读取自动制作验收进度、失败原因、测试点和deliveryReady；只有服务端当前修订验收通过才可称制作完成。"""
+        async def read(): return app.state.qualification_jobs.status(draftId)
+        return await invoke(read)
+
+    @mcp.tool(annotations=write, structured_output=False)
+    async def component_configure_authoring(draftId: str, expectedRevision: Revision, config: QualificationConfig) -> CallToolResult:
+        """声明需要支持的调整方向、最小/最大尺寸及额外测试点，并自动重新验收。不得缩减用户要求的范围或删除失败测试来冒充通过。"""
+        return await invoke(lambda: app.state.drafts.configure_qualification(draftId, expectedRevision, config.model_dump()))
+
     async def edit(draft_id, revision, action):
-        return await invoke(app.state.drafts.update, draft_id, revision, ComponentAction.validate_python(action), actor="agent")
+        def update():
+            return with_authoring(app.state.drafts.update(draft_id, revision, ComponentAction.validate_python(action), actor="agent"))
+        return await invoke(update)
+
+    @mcp.tool(annotations=readonly, structured_output=False)
+    async def component_get_authoring_requirements() -> CallToolResult:
+        """AI每次制作组件前读取的默认要求：在选型、装配、参数配置时预防联动问题，修复后才交付。"""
+        return await invoke(requirements)
 
     @mcp.tool(annotations=readonly, structured_output=False)
     async def component_get_status() -> CallToolResult:
@@ -24,11 +60,12 @@ def register(mcp, app, invoke):
         return await invoke(lambda: {"status": "ok", "service": "component-template-api", "sharedDrafts": True,
                                     "libraryConfigured": bool(app.state.settings.api_key.strip()),
                                     "geometryResize": True, "geometryPreviewRequiresApply": True,
+                                    "authoringPolicyVersion": POLICY_VERSION, "authoringRequirementsTool": "component_get_authoring_requirements",
                                     "pending": ["rules.execution"]})
 
     @mcp.tool(annotations=write, structured_output=False)
     async def component_resize_preview(draftId: str, request: ResizeRequest) -> CallToolResult:
-        """与参数页面共用的真实CAD几何试算；返回任务编号，不修改草稿。多解时需提交选择。"""
+        """制作中尽早试算真实CAD。inspectOnly只读尺寸；false且省略dimensions检查原尺寸完整联动。返回jobId，轮询status；失败需在制作时修复。试调不会保存。"""
         from types import SimpleNamespace
         async def start():
             return app.state.resize_jobs.start(SimpleNamespace(app=app), draftId, request)
@@ -51,17 +88,17 @@ def register(mcp, app, invoke):
     @mcp.tool(annotations=write, structured_output=False)
     async def component_resize_apply(draftId: str, request: ResizeApplyRequest) -> CallToolResult:
         """明确确认预览后，按revision、jobId、checksum原子应用几何结果。"""
-        return await invoke(app.state.resize_jobs.apply, draftId, request)
+        return await invoke(lambda: with_authoring(app.state.resize_jobs.apply(draftId, request)))
 
     @mcp.tool(annotations=write, structured_output=False)
     async def component_resize_undo(draftId: str, request: ResizeApplyRequest) -> CallToolResult:
         """恢复上次应用前的完整组件；草稿后来被修改时拒绝覆盖。"""
-        return await invoke(app.state.resize_jobs.undo, draftId, request)
+        return await invoke(lambda: with_authoring(app.state.resize_jobs.undo(draftId, request)))
 
     @mcp.tool(annotations=write, structured_output=False)
     async def component_create_draft(name: str = "", document: ComponentDocument | None = None) -> CallToolResult:
-        """创建持久化草稿；name 省略或为空时使用默认名称/导入文档名称。可导入符合 ComponentDocument 的工程文档。"""
-        return await invoke(app.state.drafts.create, name=name or None, document=document)
+        """按默认AI制作要求创建草稿；先读取真实模板接口和参数，装配时同步建立关系。柱片模板必须在制作时保存内置撑杆补齐规则及高度绑定，不等使用时配置。返回authoring早期检查项，需在制作中修复。允许保存中间草稿，不表示完成验收。"""
+        return await invoke(lambda: with_authoring(app.state.drafts.create(name=name or None, document=document)))
 
     @mcp.tool(annotations=readonly, structured_output=False)
     async def component_list_drafts() -> CallToolResult:
@@ -70,8 +107,8 @@ def register(mcp, app, invoke):
 
     @mcp.tool(annotations=readonly, structured_output=False)
     async def component_get_draft(draftId: str) -> CallToolResult:
-        """读取共享草稿及当前检查；写操作前从结果取得 revision。"""
-        return await invoke(app.state.drafts.get, draftId)
+        """读取草稿、基础检查及authoring制作检查；取得revision，先解决可预防的接口、联动和参数问题。"""
+        return await invoke(lambda: with_authoring(app.state.drafts.get(draftId)))
 
     @mcp.tool(annotations=write, structured_output=False)
     async def component_update_definition(draftId: str, expectedRevision: Revision, patch: DefinitionPatch) -> CallToolResult:
@@ -91,7 +128,7 @@ def register(mcp, app, invoke):
 
     @mcp.tool(annotations=write, structured_output=False)
     async def component_update_member(draftId: str, expectedRevision: Revision, memberId: str, patch: MemberPatch) -> CallToolResult:
-        """用 patch 编辑已有成员的角色、位置(mm)、旋转(rad)或参数覆盖；记录数据，不重建模型。"""
+        """编辑成员角色、位置(mm)、旋转(rad)或参数；装配时同步维护真实连接和范围，处理返回的authoring检查，再用resize工具验证CAD。"""
         return await edit(draftId, expectedRevision, {"type": "member.patch", "id": memberId, "patch": patch.model_dump(exclude_unset=True)})
 
     @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, openWorldHint=False), structured_output=False)
@@ -103,11 +140,16 @@ def register(mcp, app, invoke):
     async def component_add_mate(draftId: str, expectedRevision: Revision, fromMemberId: str, fromInterfaceId: str,
                                  toMemberId: str, toInterfaceId: str,
                                  relation: Annotated[str, Field(pattern="^(贴合|同轴|重合)$")] = "贴合", offset: FiniteValue = 0) -> CallToolResult:
-        """记录已有成员接口间的连接关系；尚未进行装配求解，不自动改变成员位置。"""
+        """装配时同步记录真实接口的连接关系；不自动移动成员。不得随意配对来消除提示，需用resize试算验证。"""
         from uuid import uuid4
         return await edit(draftId, expectedRevision, {"type": "mate.add", "mate": {
             "id": str(uuid4()), "from": {"memberId": fromMemberId, "interfaceId": fromInterfaceId},
             "to": {"memberId": toMemberId, "interfaceId": toInterfaceId}, "relation": relation, "offset": offset}})
+
+    @mcp.tool(annotations=write, structured_output=False)
+    async def component_set_brace_generation_rule(draftId: str, expectedRevision: Revision, rule: BraceGenerationRule) -> CallToolResult:
+        """将柱片增高后按新孔位补齐横撑、斜撑的要求保存为可执行规则。先读取真实成员、参数和接口；横撑与斜撑作为固定规格原型，每根原型仅由一条规则使用，多规则可共用立柱。需要同规格原型时新增独立成员并引用同一发布模板，不能引用生成实例。孔列模式须含一个{index}或{index:03d}占位符，横撑与斜撑孔距均引用正数mm参数。仅要求孔位几何定位时设置connectionMode=geometry，不声明工程配合通过；connectionMode=mates要求来源契约兼容并遵守接口容量。目标高度按规则增删实例，孔位、范围或规则冲突时明确失败，不拉伸撑杆。"""
+        return await edit(draftId, expectedRevision, {"type": "brace.rule.set", "rule": rule.model_dump()})
 
     @mcp.tool(annotations=write, structured_output=False)
     async def component_inherit_interface(draftId: str, expectedRevision: Revision, memberId: str, interfaceId: str,
@@ -119,10 +161,10 @@ def register(mcp, app, invoke):
 
     @mcp.tool(annotations=readonly, structured_output=False)
     async def component_validate_draft(draftId: str) -> CallToolResult:
-        """验证当前持久化草稿；pass/fail/pending 区分基础数据检查与尚未实现的工程检查。"""
+        """制作过程中和交付前验证草稿；返回基础checks及authoring早期问题。pending不算通过，自填verified不算CAD证据；按要求试调并修复后交付。"""
         def validate():
-            draft = app.state.drafts.get(draftId)
-            return {"draftId": draftId, "revision": draft["document"]["revision"], "checks": draft["checks"]}
+            draft = with_authoring(app.state.drafts.get(draftId))
+            return {"draftId": draftId, "revision": draft["document"]["revision"], "checks": draft["checks"], "authoring": draft["authoring"]}
         return await invoke(validate)
 
     @mcp.tool(annotations=readonly, structured_output=False)

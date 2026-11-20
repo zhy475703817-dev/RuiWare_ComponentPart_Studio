@@ -22,6 +22,7 @@ def envelope(draft_id: str, document: ComponentDocument, *, code_unique: bool = 
 
 class DraftRepository:
     def __init__(self, path: str | Path):
+        self.on_change = lambda draft_id: None
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with closing(self._connect()) as connection, connection:
@@ -49,6 +50,11 @@ class DraftRepository:
                 draft_id TEXT PRIMARY KEY, job_id TEXT NOT NULL, checksum TEXT NOT NULL,
                 applied_revision INTEGER NOT NULL, before_document TEXT NOT NULL
             )""")
+            connection.execute("CREATE TABLE IF NOT EXISTS component_qualification_configs (draft_id TEXT PRIMARY KEY, config TEXT NOT NULL)")
+            connection.execute("CREATE TABLE IF NOT EXISTS component_qualifications (draft_id TEXT PRIMARY KEY, report TEXT NOT NULL)")
+            connection.execute("""CREATE TABLE IF NOT EXISTS component_resize_failures (
+                draft_id TEXT NOT NULL, revision INTEGER NOT NULL, design_hash TEXT NOT NULL,
+                target_hash TEXT NOT NULL, error TEXT NOT NULL, PRIMARY KEY(draft_id, revision, design_hash, target_hash))""")
             self._backfill_missing_codes(connection)
 
     def _connect(self):
@@ -77,6 +83,7 @@ class DraftRepository:
             connection.execute("INSERT INTO component_drafts VALUES (?, ?, ?, ?, ?)", (
                 draft_id, document.definition.name, document.revision, document.model_dump_json(by_alias=True), self._now(),
             ))
+            self.on_change(draft_id)
             return envelope(draft_id, document, code_unique=self._code_is_unique(connection, document.definition.code, draft_id))
 
     def list(self) -> dict:
@@ -129,6 +136,9 @@ class DraftRepository:
             document = self._read(connection, draft_id)
             if document.revision != expected_revision:
                 raise ComponentError(409, "REVISION_CONFLICT")
+            qualification = self._qualification(connection, draft_id, document)
+            if not qualification["deliveryReady"]:
+                raise ComponentError(409, "AUTHORING_QUALIFICATION_REQUIRED")
             existing = connection.execute("SELECT id FROM component_publications WHERE draft_id = ? AND revision = ?", (draft_id, expected_revision)).fetchone()
             if existing:
                 row = self._publication(connection, existing["id"])
@@ -151,7 +161,7 @@ class DraftRepository:
             data = document.model_dump(by_alias=True)
             output = BytesIO()
             with ZipFile(output, "w") as package:
-                for name, value in (("manifest.json", manifest), ("component.json", data), ("checks.json", checks)):
+                for name, value in (("manifest.json", manifest), ("component.json", data), ("checks.json", checks), ("qualification.json", qualification)):
                     info = ZipInfo(name)
                     info.compress_type = ZIP_DEFLATED
                     package.writestr(info, json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8"))
@@ -203,6 +213,7 @@ class DraftRepository:
                     draft_id, updated.revision, actor, now, json.dumps(items, ensure_ascii=False),
                 ))
                 self._remove_unreferenced_evidence(connection, draft_id, updated)
+                self.on_change(draft_id)
             result = self._envelope(connection, draft_id, updated, expected_revision)
             result["reconciled"] = reconciled
             return result
@@ -224,6 +235,7 @@ class DraftRepository:
             if history:
                 connection.execute("INSERT OR REPLACE INTO component_resize_history VALUES (?, ?, ?, ?, ?)",
                     (draft_id, history["jobId"], history["checksum"], updated.revision, original.model_dump_json(by_alias=True)))
+            self.on_change(draft_id)
             return self._envelope(connection, draft_id, updated, expected_revision)
 
     def resize_history(self, draft_id):
@@ -232,6 +244,111 @@ class DraftRepository:
             if row is None: return None
             return {"jobId": row["job_id"], "draftId": draft_id, "status": "applied", "appliedRevision": row["applied_revision"],
                 "expectedRevision": row["applied_revision"]-1, "before": json.loads(row["before_document"]), "result": {"checksum": row["checksum"]}}
+
+    @staticmethod
+    def _qualification_config(connection, draft_id):
+        from .qualification_policy import QualificationConfig
+        row = connection.execute("SELECT config FROM component_qualification_configs WHERE draft_id=?", (draft_id,)).fetchone()
+        return QualificationConfig.model_validate_json(row[0]).model_dump() if row else QualificationConfig().model_dump()
+
+    @classmethod
+    def _qualification(cls, connection, draft_id, document):
+        from .qualification_policy import digest, QUALIFICATION_VERSION
+        config = cls._qualification_config(connection, draft_id)
+        row = connection.execute("SELECT report FROM component_qualifications WHERE draft_id=?", (draft_id,)).fetchone()
+        report = json.loads(row[0]) if row else {"status": "pending", "message": "等待自动制作验收", "cases": []}
+        current = (report.get("revision") == document.revision and report.get("inputHash") == digest(document.model_dump(by_alias=True))
+                   and report.get("configHash") == digest(config) and report.get("policyVersion") == QUALIFICATION_VERSION)
+        if row and not current:
+            report = {"status": "stale", "message": "草稿或使用范围已变化，需重新验收", "cases": []}
+        return {**report, "draftId": draft_id, "revision": document.revision, "config": config,
+                "deliveryReady": current and report["status"] == "passed"}
+
+    def qualification(self, draft_id):
+        with closing(self._connect()) as connection:
+            return self._qualification(connection, draft_id, self._read(connection, draft_id))
+
+    def configure_qualification(self, draft_id, expected_revision, config):
+        from .qualification_policy import QualificationConfig
+        config = QualificationConfig.model_validate(config).model_dump()
+        with closing(self._connect()) as connection, connection:
+            connection.execute("BEGIN IMMEDIATE")
+            document = self._read(connection, draft_id)
+            if document.revision != expected_revision: raise ComponentError(409, "REVISION_CONFLICT")
+            connection.execute("INSERT OR REPLACE INTO component_qualification_configs VALUES (?, ?)", (draft_id, json.dumps(config)))
+            connection.execute("DELETE FROM component_qualifications WHERE draft_id=?", (draft_id,))
+            self.on_change(draft_id)
+        return self.qualification(draft_id)
+
+    def save_qualification(self, draft_id, report, candidate=None):
+        """Commit the verified nominal repair and its certificate in one CAS transaction."""
+        from .qualification_policy import digest
+        with closing(self._connect()) as connection, connection:
+            connection.execute("BEGIN IMMEDIATE")
+            document = self._read(connection, draft_id)
+            if (document.revision != report["revision"] or digest(document.model_dump(by_alias=True)) != report["inputHash"]
+                    or digest(self._qualification_config(connection, draft_id)) != report["configHash"]):
+                raise ComponentError(409, "REVISION_CONFLICT")
+            if candidate is not None:
+                if report["status"] != "passed" or not report.get("cases") or any(c["status"] != "passed" for c in report["cases"]):
+                    raise ComponentError(409, "AUTHORING_QUALIFICATION_REQUIRED")
+                updated = ComponentDocument.model_validate({**candidate, "revision": document.revision + 1})
+                if any(c["status"] == "fail" for c in validate_component(updated, code_unique=self._code_is_unique(connection, updated.definition.code, draft_id))):
+                    raise ComponentError(422, "COMPONENT_PUBLICATION_INVALID")
+                self._require_evidence_content(connection, draft_id, updated)
+                now = self._now()
+                connection.execute("UPDATE component_drafts SET name=?, revision=?, document=?, updated_at=? WHERE id=?",
+                                   (updated.definition.name, updated.revision, updated.model_dump_json(by_alias=True), now, draft_id))
+                changes = document_changes(document.model_dump(by_alias=True), updated.model_dump(by_alias=True))
+                connection.execute("INSERT INTO component_draft_changes VALUES (?, ?, ?, ?, ?)",
+                                   (draft_id, updated.revision, "agent", now, json.dumps(changes, ensure_ascii=False)))
+                previous = connection.execute("SELECT applied_revision, before_document FROM component_resize_history WHERE draft_id=?", (draft_id,)).fetchone()
+                # A background verification must not consume the user's undo of
+                # the immediately preceding resize.
+                before = previous["before_document"] if previous and previous["applied_revision"] == document.revision else document.model_dump_json(by_alias=True)
+                connection.execute("INSERT OR REPLACE INTO component_resize_history VALUES (?, ?, ?, ?, ?)",
+                                   (draft_id, report["jobId"], digest(candidate), updated.revision, before))
+                report = {**report, "sourceRevision": document.revision, "revision": updated.revision,
+                          "inputHash": digest(updated.model_dump(by_alias=True))}
+                # No new change notification: this exact revision has just passed.
+            connection.execute("INSERT OR REPLACE INTO component_qualifications VALUES (?, ?)", (draft_id, json.dumps(report, ensure_ascii=False)))
+        return self.qualification(draft_id)
+
+    def pending_qualifications(self):
+        with closing(self._connect()) as connection:
+            return [row[0] for row in connection.execute("SELECT draft_id, report FROM component_qualifications")
+                    if json.loads(row[1]).get("status") in ("queued", "running")]
+
+    def record_resize_failure(self, draft_id, revision, design_hash, dimensions, error):
+        from .qualification_policy import digest
+        if error.get("code") not in ("RESIZE_NO_SOLUTION", "RESIZE_INTERFACE_MISSING", "RESIZE_CONTACT_LOST"): return
+        with closing(self._connect()) as connection, connection:
+            connection.execute("DELETE FROM component_resize_failures WHERE draft_id=? AND revision<>?", (draft_id, revision))
+            connection.execute("INSERT OR REPLACE INTO component_resize_failures VALUES (?, ?, ?, ?, ?)",
+                               (draft_id, revision, design_hash, digest(dimensions), json.dumps(error, ensure_ascii=False)))
+            connection.execute("DELETE FROM component_resize_failures WHERE rowid IN (SELECT rowid FROM component_resize_failures WHERE draft_id=? ORDER BY rowid DESC LIMIT -1 OFFSET 32)", (draft_id,))
+
+    def check_resize_target(self, draft_id, document, dimensions, design=None, retry=False):
+        from .qualification_policy import digest, design_key
+        with closing(self._connect()) as connection:
+            config = self._qualification_config(connection, draft_id)
+            if config["minimumDimensions"] is not None:
+                for axis, (value, low, high) in enumerate(zip(dimensions, config["minimumDimensions"], config["maximumDimensions"])):
+                    if value < low-.1 or value > high+.1:
+                        return {"code": "RESIZE_OUTSIDE_CONTRACT", "message": f'{"XYZ"[axis]}={value:g} 超出声明的使用范围 {low:g}～{high:g} mm；请先修改使用范围并重新验收。', "details": []}
+            if not retry:
+                row = connection.execute("SELECT error FROM component_resize_failures WHERE draft_id=? AND revision=? AND design_hash=? AND target_hash=?",
+                                         (draft_id, document["revision"], design_key(document, design), digest(dimensions))).fetchone()
+                if row:
+                    error = json.loads(row[0])
+                    return {**error, "code": "RESIZE_KNOWN_FAILURE", "message": "相同尺寸和约束此前未通过试算："+error["message"]+"。可修改约束，或点击重新预览再次求解。"}
+        return None
+
+    def forget_resize_failure(self, draft_id, revision, design_hash, dimensions):
+        from .qualification_policy import digest
+        with closing(self._connect()) as connection, connection:
+            connection.execute("DELETE FROM component_resize_failures WHERE draft_id=? AND revision=? AND design_hash=? AND target_hash=?",
+                               (draft_id, revision, design_hash, digest(dimensions)))
 
     def save_evidence(self, draft_id: str, evidence_id: str, file_name: str, media_type: str, content: bytes) -> dict:
         if not re.fullmatch(r"[0-9a-f-]{36}", evidence_id) or len(file_name) > 255 or not file_name.strip():

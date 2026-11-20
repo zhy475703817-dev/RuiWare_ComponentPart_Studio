@@ -18,6 +18,8 @@ from backend.tests.storage_helpers import MemoryMinio, STORAGE_ENV
 
 class SharedPublicationTests(unittest.TestCase):
     def setUp(self):
+        from backend.tests.storage_helpers import qualified_storage_fixture
+        qualified_storage_fixture(self)
         self.tmp = TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.objects = MemoryMinio()

@@ -3,6 +3,7 @@ import re
 
 from .models import ComponentAction, ComponentDocument, InterfaceSource, TypedAction
 from .interface_compatibility import assess_interface_compatibility
+from .brace_policy import brace_rule_conflicts, valid_interface_pattern, built_in_brace_issues, column_frame_members
 
 PRESET_INTERFACE_TYPE_IDS = {
     "bolt.male.v1", "bolt.female.v1", "threaded.stud.v1", "threaded.hole.v1",
@@ -22,16 +23,21 @@ COMPONENT_CODE_PATTERN = re.compile(r"^[A-Z][A-Z0-9_-]{2,39}$")
 
 
 class ComponentError(Exception):
-    def __init__(self, status: int, code: str, current: dict | None = None):
+    def __init__(self, status: int, code: str, current: dict | None = None, *, message: str | None = None, details: list | None = None):
         super().__init__(code)
         self.status = status
         self.code = code
         self.current = current
+        self.message, self.details = message, details
 
     def as_dict(self) -> dict:
         error = {"code": self.code}
         if self.current is not None:
             error["current"] = self.current
+        if self.message is not None:
+            error['message'] = self.message
+        if self.details is not None:
+            error['details'] = self.details
         return {"error": error}
 
 
@@ -65,6 +71,54 @@ DIMENSION_ALIASES = {
     "width": ("componentWidth", "width", "overallWidth", "总宽", "宽度"),
     "height": ("componentHeight", "height", "overallHeight", "总高", "高度"),
 }
+
+
+def _brace_rule_error(document: ComponentDocument, rule) -> str | None:
+    """Return a stable validation code for a declarative brace rule."""
+    members = document.assembly.members
+    parameter_ids = {item.id for item in document.parameters}
+    parameters_by_id = {item.id: item for item in document.parameters}
+    members_by_id = {item.id: item for item in members}
+    if not rule.id.strip() or not rule.label.strip():
+        return "INVALID_BRACE_RULE"
+    references = (
+        rule.heightParameterId, rule.pitchParameterId, rule.bottomOffsetParameterId, rule.topClearanceParameterId,
+    )
+    if len(set(references)) != 4 or any(item not in parameter_ids for item in references):
+        return "INVALID_BRACE_RULE_PARAMETERS"
+    references = (*references, *([rule.diagonalPitchParameterId] if rule.diagonalPitchParameterId else []))
+    if any(item not in parameter_ids for item in references):
+        return "INVALID_BRACE_RULE_PARAMETERS"
+    if any(parameters_by_id[item].unit != "mm" for item in references):
+        return "INVALID_BRACE_RULE_UNIT"
+    if any(parameters_by_id[item].min < 0 or parameters_by_id[item].max < parameters_by_id[item].min for item in references):
+        return "INVALID_BRACE_RULE_RANGE"
+    values = [parameters_by_id[item].value for item in references]
+    if any(value is None or not math.isfinite(value) for value in values):
+        return "INVALID_BRACE_RULE_RANGE"
+    height, pitch, bottom, top = values[:4]
+    if pitch <= 0 or height < bottom + top or rule.diagonalPitchParameterId and parameters_by_id[rule.diagonalPitchParameterId].value <= 0:
+        return "INVALID_BRACE_RULE_RANGE"
+    for member_id in (rule.leftColumnMemberId, rule.rightColumnMemberId, rule.horizontalMemberId, rule.diagonalMemberId):
+        if member_id not in members_by_id:
+            return "INVALID_BRACE_RULE_MEMBER"
+    for member_id, interface_id in (
+        (rule.horizontalMemberId, rule.horizontalLeftInterfaceId), (rule.horizontalMemberId, rule.horizontalRightInterfaceId),
+        (rule.diagonalMemberId, rule.diagonalLeftInterfaceId), (rule.diagonalMemberId, rule.diagonalRightInterfaceId),
+    ):
+        if not any(item.id == interface_id for item in members_by_id[member_id].interfaces):
+            return "INVALID_BRACE_RULE_INTERFACE"
+    if rule.horizontalLeftInterfaceId == rule.horizontalRightInterfaceId or rule.diagonalLeftInterfaceId == rule.diagonalRightInterfaceId:
+        return "INVALID_BRACE_RULE_INTERFACE"
+    patterns = [rule.leftColumnInterfacePattern, rule.rightColumnInterfacePattern,
+                rule.diagonalLeftColumnInterfacePattern, rule.diagonalRightColumnInterfacePattern]
+    if any(not valid_interface_pattern(pattern) for pattern in patterns if pattern is not None):
+        return "INVALID_BRACE_RULE_PATTERN"
+    if rule.leftColumnMemberId == rule.rightColumnMemberId:
+        return "INVALID_BRACE_RULE_COLUMNS"
+    if len({rule.leftColumnMemberId, rule.rightColumnMemberId, rule.horizontalMemberId, rule.diagonalMemberId}) != 4:
+        return "INVALID_BRACE_RULE_MEMBER_ROLE"
+    return None
 
 
 def _numeric_member_value(member: dict, aliases: tuple[str, ...]) -> float | None:
@@ -408,6 +462,24 @@ def apply_action(document: ComponentDocument, action: TypedAction) -> ComponentD
         for port in data["ports"]:
             if port["source"]["memberId"] == action.memberId and port["source"]["interfaceId"] == action.interfaceId and port.get("interface") is not None:
                 port["interface"]["connectableTypeIds"] = connectable_type_ids
+    elif action.type == "interface.hardware.set":
+        member = next((item for item in data["assembly"]["members"] if item["id"] == action.memberId), None)
+        interface = next((item for item in (member["interfaces"] if member else []) if item["id"] == action.interfaceId), None)
+        if interface is None:
+            raise ComponentError(404, "COMPONENT_ITEM_NOT_FOUND")
+        hardware = action.hardware.model_dump(exclude_unset=True)
+        if hardware.get("mode") == "manual" and not hardware.get("items"):
+            raise ComponentError(422, "INVALID_INTERFACE_HARDWARE")
+        hardware["items"] = [{**item, "name": item["name"].strip(), "specification": item["specification"].strip()} for item in hardware.get("items", [])]
+        if any(not item["name"] for item in hardware["items"]):
+            raise ComponentError(422, "INVALID_INTERFACE_HARDWARE")
+        interface["hardware"] = hardware
+        for port in data["ports"]:
+            if port["source"]["memberId"] == action.memberId and port["source"]["interfaceId"] == action.interfaceId:
+                if port.get("interface") is None:
+                    port["interface"] = dict(interface)
+                else:
+                    port["interface"]["hardware"] = hardware
     elif action.type == "interface.types.merge":
         existing_types = {item["id"]: item for item in data["interfaceTypes"]}
         requested_types = {}
@@ -492,6 +564,22 @@ def apply_action(document: ComponentDocument, action: TypedAction) -> ComponentD
         if not any(item["id"] == action.id for item in data["patterns"]):
             raise ComponentError(404, "COMPONENT_ITEM_NOT_FOUND")
         data["patterns"] = [item for item in data["patterns"] if item["id"] != action.id]
+    elif action.type == "brace.rule.set":
+        rule = action.rule.model_dump()
+        if (error := _brace_rule_error(document, action.rule)) is not None:
+            messages = {
+                'INVALID_BRACE_RULE_PATTERN': '孔列模式必须含一个编号占位符，如 hole.{index:03d}；补零宽度限1到10。',
+                'INVALID_BRACE_RULE_UNIT': '高度、余量及横撑和斜撑孔距参数均须使用 mm 单位。',
+                'INVALID_BRACE_RULE_PARAMETERS': '请引用已定义的高度、孔距和余量参数；高度、横撑孔距、底部余量、顶部余量需分别使用独立参数。',
+                'INVALID_BRACE_RULE_RANGE': '请检查高度和余量范围，横撑与斜撑孔距必须为正数。',
+                'INVALID_BRACE_RULE_INTERFACE': '撑杆两端须引用存在且不同的真实接口。',
+            }
+            raise ComponentError(422, error, message=messages.get(error))
+        if any(item["id"] == rule["id"] for item in data.get("braceGenerationRules", [])):
+            data["braceGenerationRules"] = [item for item in data["braceGenerationRules"] if item["id"] != rule["id"]]
+        data.setdefault("braceGenerationRules", []).append(rule)
+        if conflicts := brace_rule_conflicts(data):
+            raise ComponentError(422, conflicts[0]['code'], message=conflicts[0]['message'], details=conflicts)
     elif action.type == "rule.add":
         rule = action.rule.model_dump()
         if not rule["id"].strip() or not rule["expression"].strip() or any(item["id"] == rule["id"] for item in data["rules"]):
@@ -539,7 +627,7 @@ def apply_action(document: ComponentDocument, action: TypedAction) -> ComponentD
                         minimum = max(item["min"], definition["minimum"]) if definition.get("minimum") is not None else item["min"]
                         maximum = min(item["max"], definition["maximum"]) if definition.get("maximum") is not None else item["max"]
                         member["parameterValues"][binding["memberParameterId"]] = min(maximum, max(minimum, item[field]))
-    if data.get("geometryDesign") and action.type not in ("definition.patch", "rule.expression", "rule.add", "rule.remove"):
+    if data.get("geometryDesign") and action.type not in ("definition.patch", "rule.expression", "rule.add", "rule.remove", "interface.hardware.set"):
         data["geometryDesign"]["verified"] = False
     if data == document.model_dump(by_alias=True):
         return document
@@ -634,6 +722,11 @@ def validate_component(document: ComponentDocument, *, code_unique: bool = True)
             for parameter in document.parameters), "参数绑定引用无效，或与成员参数范围没有交集"),
         check("patterns", "组件构成规则", all(pattern_valid(pattern) for pattern in document.patterns)
               and len({identifier for pattern in document.patterns for identifier in pattern.memberIds}) == sum(len(pattern.memberIds) for pattern in document.patterns), "重复构成规则引用无效成员、参数或重叠成员"),
+        *([check("brace.builtin", "柱片内置补齐", not built_in_brace_issues(document.model_dump(by_alias=True)),
+                 "柱片模板须在制作时内置完整补齐规则、覆盖立柱和撑杆并绑定高度；完成增高、缩短验收后交付")]
+          if column_frame_members(document.model_dump(by_alias=True)) is not None else []),
+        *([check("brace.rules", "撑杆生成规则", all(_brace_rule_error(document, rule) is None for rule in document.braceGenerationRules)
+                 and not brace_rule_conflicts(document.model_dump(by_alias=True)), "撑杆规则引用无效成员、参数、单位或撑杆接口，或多条规则重复使用同一撑杆原型")] if document.braceGenerationRules else []),
         check("slots", "槽位引用", len({slot.id for slot in document.slots}) == len(document.slots) and all(slot_valid(slot) for slot in document.slots), "槽位缺少有效基准接口、占用接口不兼容，或必填槽位尚未分配"),
         {"id": "assembly.solve", "label": "几何联动检查", "status": "pass" if document.geometryDesign and document.geometryDesign.verified else "pending", "message": "实际外形及已配置几何约束通过" if document.geometryDesign and document.geometryDesign.verified else "请在参数阶段试算并应用几何联动；当前未验证"},
         {"id": "rules.execution", "label": "工程规则执行", "status": "pending", "message": "当前仅保存规则说明，尚未接入规则执行"},
@@ -651,6 +744,7 @@ def serialize_component(document: ComponentDocument) -> dict:
             **{key: member.get(key, []) if key in ("parameterDefinitions", "resolvedInterfaces") else member[key] for key in ("name", "code", "role", "position", "rotation", "parameterValues", "parameterDefinitions", "resolvedInterfaces", "interfaces")}, "bindings": bindings,
             **({"planarMovement": True} if member.get("planarMovement") else {}),
             **({"instanceDocument": member["instanceDocument"]} if member.get("instanceDocument") else {}),
+            **{key: member[key] for key in ('generatedBy', 'generatedIndex') if key in member},
         })
     mates = [{
         "id": mate.id, "from": f"{mate.from_.memberId}.{mate.from_.interfaceId}", "to": f"{mate.to.memberId}.{mate.to.interfaceId}",
@@ -673,7 +767,7 @@ def serialize_component(document: ComponentDocument) -> dict:
             "definition": data["definition"], "assembly": {"members": members, "mates": mates}, "ports": ports,
             "interfaceTypes": data.get("interfaceTypes", []),
             "slots": data["slots"], "parameters": {parameter.id: parameter.value for parameter in document.parameters},
-            "parameterDefinitions": data["parameters"], "bindings": data["bindings"], "patterns": data["patterns"], "rules": data["rules"],
+            "parameterDefinitions": data["parameters"], "bindings": data["bindings"], "patterns": data["patterns"], "braceGenerationRules": data.get("braceGenerationRules", []), "rules": data["rules"],
             "validation": [{"name": check["label"], "passed": check["status"] == "pass", **check} for check in validate_component(document)],
         },
     }

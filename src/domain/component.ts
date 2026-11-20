@@ -32,7 +32,14 @@ export type PartInterface = {
   connectionMethod?: string;
   referenceFrame?: { originRef?: string | null; axis: "x" | "y" | "z" | "-x" | "-y" | "-z" };
   mating?: MatingContract;
+  hardware?: InterfaceHardware;
   region?: { mode?: string; uStart?: number; vStart?: number; uSpan?: number; vSpan?: number; uSpanExpression?: string; vSpanExpression?: string; countExpression?: string };
+};
+
+export type HardwareItem = { category?: string; name: string; specification: string; quantity: number };
+export type InterfaceHardware = {
+  mode: "auto" | "manual" | "none";
+  items?: HardwareItem[];
 };
 
 export type ComponentInterfaceType = { id: string; label: string };
@@ -90,6 +97,8 @@ export type ComponentMember = {
   parameterValues: Record<string, ParameterValue>;
   parameterDefinitions?: MemberParameterDefinition[];
   resolvedInterfaces?: ResolvedPartInterface[];
+  generatedBy?: string | null;
+  generatedIndex?: number | null;
   interfaces: PartInterface[];
   instanceDocument?: ComponentDocument | null;
 };
@@ -111,6 +120,18 @@ export type ComponentSlot = {
 export type ComponentParameter = { id: string; label: string; value: number | null; unit: string; min: number; max: number };
 export type ParameterBinding = { id: string; parameterId: string; memberId: string; memberParameterId: string };
 export type ComponentPattern = { id: string; label: string; memberIds: string[]; countParameterId: string; spacingParameterId: string; axis: "x" | "y" | "z" };
+export type BraceGenerationRule = {
+  enabled?: boolean;
+  id: string; label: string; heightParameterId: string; pitchParameterId: string; bottomOffsetParameterId: string; topClearanceParameterId: string;
+  leftColumnMemberId: string; rightColumnMemberId: string; horizontalMemberId: string; diagonalMemberId: string;
+  horizontalLeftInterfaceId: string; horizontalRightInterfaceId: string; diagonalLeftInterfaceId: string; diagonalRightInterfaceId: string;
+  connectionMode?: "geometry" | "mates";
+  horizontalRelation?: "贴合" | "同轴" | "重合"; diagonalRelation?: "贴合" | "同轴" | "重合";
+  leftColumnInterfacePattern?: string; rightColumnInterfacePattern?: string; diagonalLeftColumnInterfacePattern?: string; diagonalRightColumnInterfacePattern?: string;
+  columnInterfaceIndexStart?: number; columnInterfaceIndexStep?: number; diagonalColumnInterfaceIndexStep?: number; diagonalColumnInterfaceIndexStart?: number;
+  diagonalPitchParameterId?: string; diagonalAlternate?: boolean;
+  remainderPolicy?: "reject" | "top-clearance"; generatedMemberPrefix?: string;
+};
 export type ComponentRule = { id: string; kind?: "constraint" | "composition"; label?: string; expression: string };
 export type ConnectionType = "螺栓连接" | "焊接" | "卡扣连接" | "插接" | "铆接" | "胶接" | "型材槽连接" | "销钉连接" | "插接/卡扣" | "自定义";
 export type EvidenceFile = { id: string; fileName: string; mediaType: string; size: number; sha256: string; dataUrl?: string | null };
@@ -154,6 +175,7 @@ export type ComponentDocument = {
   parameters: ComponentParameter[];
   bindings: ParameterBinding[];
   patterns: ComponentPattern[];
+  braceGenerationRules?: BraceGenerationRule[];
   rules: ComponentRule[];
   geometryDesign?: GeometryDesign | null;
 };
@@ -173,7 +195,7 @@ export function createComponentDocument(): ComponentDocument {
       },
       designConstraints: "", evidenceFiles: [], evidence: [],
     },
-    assembly: { members: [], mates: [] }, ports: [], interfaceTypes: [], slots: [], bindings: [], patterns: [],
+    assembly: { members: [], mates: [] }, ports: [], interfaceTypes: [], slots: [], bindings: [], patterns: [], braceGenerationRules: [],
     parameters: [
       { id: "componentLength", label: "组件总长", value: 2400, unit: "mm", min: 1000, max: 6000 },
       { id: "componentWidth", label: "组件总宽", value: 600, unit: "mm", min: 100, max: 3000 },

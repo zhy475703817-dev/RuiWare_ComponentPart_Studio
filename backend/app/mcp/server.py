@@ -13,6 +13,7 @@ from starlette.responses import JSONResponse
 
 from ..components.service import ComponentError
 from ..library import LibraryError
+from .authoring import AUTHORING_INSTRUCTIONS
 
 
 def tool_result(body: dict, *, error: bool = False) -> CallToolResult:
@@ -63,7 +64,8 @@ def create_mcp(owner: FastAPI, public_base_url: str) -> FastMCP:
     mcp = FastMCP(
         "组件模板平台", instructions="查询已发布零部件；创建和编辑与网页共享的组件草稿。所有写操作使用 expectedRevision。"
         "网页手动编辑优先；Agent 写入使用精确修订检查。冲突后重新读取并由用户决定，不得自动换用最新修订覆盖用户输入。"
-        "Agent 修改在网页同步并展示前后差异。规则仅保存说明；装配求解、规则执行、几何重建和正式发布尚未接入。",
+        "Agent 修改在网页同步并展示前后差异。真实CAD几何联动、预览、整体应用和撤销已接入。\n"
+        + AUTHORING_INSTRUCTIONS,
         json_response=True, stateless_http=True,
         transport_security=TransportSecuritySettings(
             enable_dns_rebinding_protection=True,
