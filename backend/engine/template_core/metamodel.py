@@ -366,6 +366,9 @@ class PartInterface(BaseModel):
     connectionGender: Literal["male", "female", "neutral"] | None = None
     interfaceSize: dict[str, Any] | None = None
     connectionMethod: str | None = None
+    # Preserve the versioned assembly contract when reading published packages.
+    # Assembly compatibility validates its contents in the component domain.
+    mating: dict[str, Any] | None = None
     description: str = ""
     required: bool = False
     reviewed: bool = False

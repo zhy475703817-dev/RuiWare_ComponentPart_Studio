@@ -211,8 +211,9 @@ export async function loadReconstructionInfo(selected: PublishedTemplate, signal
     const interfaceType = typeof item.interfaceType === "string" ? item.interfaceType : "";
     const type: PartInterface["type"] = sourceType === "plane" || sourceType === "axis" || sourceType === "point"
       ? sourceType
-      : locatingType === "axisCoincident" || interfaceType === "connecting" ? "axis"
-        : locatingType === "pinHole" ? "point" : "plane";
+      : record(item.mating) && item.mating.family === "plane-contact" ? "plane"
+        : locatingType === "axisCoincident" || locatingType === "pinHole" || (record(item.mating) && ["pin-hole", "coaxial-fit"].includes(String(item.mating.family))) ? "axis"
+          : "plane";
     const rawTags = Array.isArray(item.tags) ? item.tags : Array.isArray(item.compatibilityTags) ? item.compatibilityTags : [];
     const tags = [...new Set(rawTags.filter((tag): tag is string => typeof tag === "string" && Boolean(tag.trim())).map(tag => tag.trim()))];
     if (interfaceType) tags.push(`interface:${interfaceType}`);
@@ -273,8 +274,8 @@ export async function loadReconstructionInfo(selected: PublishedTemplate, signal
       const dimensions: NonNullable<PartInterface["mating"]>["dimensions"] = {};
       for (const [key, value] of Object.entries(item.mating.dimensions)) {
         if (!record(value) || typeof value.nominal !== "number" || !Number.isFinite(value.nominal) || value.nominal <= 0 ||
-          typeof value.lowerTolerance !== "number" || !Number.isFinite(value.lowerTolerance) || value.lowerTolerance > 0 ||
-          typeof value.upperTolerance !== "number" || !Number.isFinite(value.upperTolerance) || value.upperTolerance < 0 ||
+          typeof value.lowerTolerance !== "number" || !Number.isFinite(value.lowerTolerance) ||
+          typeof value.upperTolerance !== "number" || !Number.isFinite(value.upperTolerance) || value.lowerTolerance > value.upperTolerance ||
           !["mm", "cm", "m", "in"].includes(String(value.unit)) ||
           (value.parameterRef !== undefined && value.parameterRef !== null && typeof value.parameterRef !== "string")) {
           throw new Error("无法读取零件接口配合尺寸。");

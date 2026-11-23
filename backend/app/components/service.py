@@ -151,7 +151,9 @@ def interfaces_compatible(a, b):
 def apply_action(document: ComponentDocument, action: TypedAction) -> ComponentDocument:
     action = ComponentAction.validate_python(action)
     data = document.model_dump(by_alias=True)
-    if action.type == "reset":
+    if action.type == "model.restore":
+        data.update(action.model.model_dump(by_alias=True))
+    elif action.type == "reset":
         data = create_component_document().model_dump(by_alias=True)
         data["revision"] = document.revision
     elif action.type == "definition.patch":
@@ -247,6 +249,10 @@ def apply_action(document: ComponentDocument, action: TypedAction) -> ComponentD
         if any(item.id == mate.id or (item.from_ == mate.from_ and item.to == mate.to) for item in document.assembly.mates):
             raise ComponentError(422, "DUPLICATE_CONNECTION")
         data["assembly"]["mates"].append(mate.model_dump(by_alias=True))
+    elif action.type == "mate.remove":
+        if not any(item["id"] == action.id for item in data["assembly"]["mates"]):
+            return document
+        data["assembly"]["mates"] = [item for item in data["assembly"]["mates"] if item["id"] != action.id]
     elif action.type == "slot.add":
         slot = action.slot
         name = slot.name.strip()

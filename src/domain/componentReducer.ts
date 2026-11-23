@@ -7,12 +7,14 @@ import type { ComponentDefinition, ComponentDocument, ComponentMember, Component
 const PRESET_CONNECTION_TYPE_IDS = new Set<string>(PRESET_INTERFACE_TYPES.map(item => item.id));
 
 export type ComponentAction =
+  | { type: "model.restore"; model: Pick<ComponentDocument, "assembly" | "ports" | "bindings" | "patterns" | "slots"> }
   | { type: "reset" }
   | { type: "definition.patch"; patch: Partial<ComponentDefinition> }
   | { type: "member.add"; member: ComponentMember }
-  | { type: "member.patch"; id: string; patch: Partial<Pick<ComponentMember, "role" | "position" | "rotation" | "planarMovement" | "parameterValues">> }
+  | { type: "member.patch"; id: string; patch: Partial<Pick<ComponentMember, "role" | "position" | "rotation" | "planarMovement" | "parameterValues" | "interfaces" | "resolvedInterfaces">> }
   | { type: "member.remove"; id: string }
   | { type: "mate.add"; mate: Mate }
+  | { type: "mate.remove"; id: string }
   | { type: "slot.add"; slot: ComponentSlot }
   | { type: "slot.patch"; id: string; patch: { name?: string; required?: boolean; baseInterface?: InterfaceSource | null; memberId?: string | null; interfaceId?: string | null } }
   | { type: "slot.remove"; id: string }
@@ -34,6 +36,7 @@ export type ComponentAction =
 export function componentReducer(document: ComponentDocument, action: ComponentAction): ComponentDocument {
   const next = (patch: Partial<ComponentDocument>): ComponentDocument => ({ ...document, ...patch, revision: document.revision + 1 });
   switch (action.type) {
+    case "model.restore": return next(structuredClone(action.model));
     case "reset": return createComponentDocument();
     case "definition.patch":
       if (Object.entries(action.patch).every(([key, value]) => document.definition[key as keyof ComponentDefinition] === value)) return document;
@@ -116,15 +119,18 @@ export function componentReducer(document: ComponentDocument, action: ComponentA
           item.from.memberId === mate.from.memberId && item.from.interfaceId === mate.from.interfaceId &&
           item.to.memberId === mate.to.memberId && item.to.interfaceId === mate.to.interfaceId
         ))) return document;
+      const used = (memberId: string, interfaceId: string) => document.assembly.mates.filter(item =>
+        item.from.memberId === memberId && item.from.interfaceId === interfaceId || item.to.memberId === memberId && item.to.interfaceId === interfaceId).length;
       const source = getInterface(document, mate.from), target = getInterface(document, mate.to);
       const sourceMember = document.assembly.members.find(member => member.id === mate.from.memberId);
       const targetMember = document.assembly.members.find(member => member.id === mate.to.memberId);
       if (assessInterfaceCompatibility(source, target, mate.relation, sourceMember, targetMember).status !== "compatible") return document;
-      const used = (memberId: string, interfaceId: string) => document.assembly.mates.filter(item =>
-        item.from.memberId === memberId && item.from.interfaceId === interfaceId || item.to.memberId === memberId && item.to.interfaceId === interfaceId).length;
-      if (!source?.mating || !target?.mating || used(mate.from.memberId, mate.from.interfaceId) >= source.mating.capacity || used(mate.to.memberId, mate.to.interfaceId) >= target.mating.capacity) return document;
+      if (!source?.mating || !target?.mating || used(mate.from.memberId, mate.from.interfaceId) > 0 || used(mate.to.memberId, mate.to.interfaceId) > 0 || used(mate.from.memberId, mate.from.interfaceId) >= source.mating.capacity || used(mate.to.memberId, mate.to.interfaceId) >= target.mating.capacity) return document;
       return next({ assembly: { ...document.assembly, mates: [...document.assembly.mates, structuredClone(mate)] } });
     }
+    case "mate.remove":
+      if (!document.assembly.mates.some(mate => mate.id === action.id)) return document;
+      return next({ assembly: { ...document.assembly, mates: document.assembly.mates.filter(mate => mate.id !== action.id) } });
     case "slot.add": {
       const slot = action.slot;
       if (!slot.id.trim() || !slot.name.trim() || document.slots.some(item => item.id === slot.id)) return document;

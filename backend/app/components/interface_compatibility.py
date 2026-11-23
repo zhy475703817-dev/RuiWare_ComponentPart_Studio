@@ -71,8 +71,12 @@ def assess_interface_compatibility(a: PartInterface | None, b: PartInterface | N
             add("FAMILY_MATCH", "pass", f"配合族匹配：{left.family}")
         roles = _ROLES.get(left.family)
         if roles:
-            matched = (left.role, right.role) == roles or (left.role, right.role) == roles[::-1]
-            add("ROLE_COMPLEMENTARY", "pass" if matched else "fail", "配合角色符合规则" if matched else "配合角色不符合该配合族规则")
+            normalize_role = lambda role: "contact-face" if left.family == "plane-contact" and role == "surface" else role
+            pair = (normalize_role(left.role), normalize_role(right.role))
+            matched = all(role in ("pin", "hole") for role in pair) if left.family == "pin-hole" else pair == roles or pair == roles[::-1]
+            expected_roles = "surface ↔ surface（兼容 contact-face）" if left.family == "plane-contact" else "pin ↔ pin、hole ↔ hole 或 pin ↔ hole" if left.family == "pin-hole" else f"{roles[0]} ↔ {roles[1]}"
+            add("ROLE_COMPLEMENTARY", "pass" if matched else "fail", "配合角色符合规则" if matched else
+                f"配合角色不符合 {left.family} 规则：“{a.name}”为 {left.role}，“{b.name}”为 {right.role}；要求 {expected_roles}。请在模板端核对 mating.role 并发布更新版本。")
         elif left.role and right.role:
             add("ROLE_UNSUPPORTED", "unknown", "当前没有该配合族的角色校验规则")
         kind = _GEOMETRY.get(left.family)
@@ -106,6 +110,9 @@ def assess_interface_compatibility(a: PartInterface | None, b: PartInterface | N
                 add("DIMENSION_UNRESOLVED", "unknown", "销/轴与孔的直径、公差或参数值未完整声明")
             elif not left.connectionMethod or left.connectionMethod != right.connectionMethod:
                 add("CONNECTION_METHOD_UNKNOWN", "fail" if left.connectionMethod and right.connectionMethod else "unknown", "两端需声明相同且受支持的配合机制")
+            elif left.family == "pin-hole" and left.role == right.role and left.role in ("pin", "hole"):
+                passed = max(shaft_range[0], bore_range[0]) <= min(shaft_range[1], bore_range[1]) + 1e-9
+                add("DIAMETER_FIT", "pass" if passed else "fail", f"同角色接口直径公差区间{'重叠，可同轴连接' if passed else '不重叠，无法匹配'}")
             else:
                 min_clearance, max_clearance = bore_range[0] - shaft_range[1], bore_range[1] - shaft_range[0]
                 passed = min_clearance >= -1e-9 if left.connectionMethod == "clearance-fit" else max_clearance <= 1e-9 if left.connectionMethod == "interference-fit" else min_clearance <= 1e-9 and max_clearance >= -1e-9 if left.connectionMethod == "transition-fit" else None
