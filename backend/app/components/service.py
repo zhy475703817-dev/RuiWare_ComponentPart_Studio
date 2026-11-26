@@ -287,6 +287,15 @@ def apply_action(document: ComponentDocument, action: TypedAction) -> ComponentD
         else:
             data["assembly"]["members"] = [item for item in data["assembly"]["members"] if item["id"] != action.id]
             data["assembly"]["mates"] = [item for item in data["assembly"]["mates"] if item["from"]["memberId"] != action.id and item["to"]["memberId"] != action.id]
+            if "groups" in data["assembly"]:
+                groups = [{**group, "memberIds": [identifier for identifier in group["memberIds"] if identifier != action.id]}
+                          for group in data["assembly"]["groups"]]
+                groups = [group for group in groups if group["memberIds"]]
+                group_ids = {group["id"] for group in groups}
+                for group in groups:
+                    if group.get("parentId") not in group_ids:
+                        group.pop("parentId", None)
+                data["assembly"]["groups"] = groups
             data["ports"] = [item for item in data["ports"] if item["source"]["memberId"] != action.id]
             data["bindings"] = [item for item in data["bindings"] if item["memberId"] != action.id]
             data["patterns"] = [
@@ -764,7 +773,7 @@ def serialize_component(document: ComponentDocument) -> dict:
         "name": document.definition.name,
         **({"geometryDesign": data["geometryDesign"]} if data.get("geometryDesign") else {}),
         "stages": {
-            "definition": data["definition"], "assembly": {"members": members, "mates": mates}, "ports": ports,
+            "definition": data["definition"], "assembly": {"members": members, "mates": mates, **({"groups": data["assembly"]["groups"]} if data["assembly"].get("groups") else {})}, "ports": ports,
             "interfaceTypes": data.get("interfaceTypes", []),
             "slots": data["slots"], "parameters": {parameter.id: parameter.value for parameter in document.parameters},
             "parameterDefinitions": data["parameters"], "bindings": data["bindings"], "patterns": data["patterns"], "braceGenerationRules": data.get("braceGenerationRules", []), "rules": data["rules"],

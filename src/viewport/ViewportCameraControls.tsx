@@ -18,6 +18,7 @@ type Props = {
 // Camera state belongs to the viewport, independently of member selection/transforms.
 export function ViewportCameraControls({ enabled, radius, hasContent, resetToken, storageKey }: Props) {
   const camera = useThree(state => state.camera) as PerspectiveCamera;
+  const domElement = useThree(state => state.events.connected || state.gl.domElement);
   const controls = useRef<OrbitControlsImpl>(null);
   const initialized = useRef(false);
   const waitingForContent = useRef(false);
@@ -120,9 +121,21 @@ export function ViewportCameraControls({ enabled, radius, hasContent, resetToken
     };
   }, [saveView]);
 
+  useEffect(() => {
+    const onPointerDown = (event: PointerEvent) => {
+      // OrbitControls also treats Ctrl/Meta as pan modifiers; only Shift pans here.
+      if (event.button === 1 && !event.shiftKey && (event.ctrlKey || event.metaKey)) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      }
+    };
+    domElement.addEventListener("pointerdown", onPointerDown, true);
+    return () => domElement.removeEventListener("pointerdown", onPointerDown, true);
+  }, [domElement]);
+
   return <OrbitControls ref={controls} enabled={enabled} makeDefault
     minDistance={.01} maxDistance={1e12} screenSpacePanning
-    mouseButtons={{ LEFT: MOUSE.ROTATE, MIDDLE: MOUSE.PAN, RIGHT: MOUSE.PAN }}
+    mouseButtons={{ LEFT: undefined, MIDDLE: MOUSE.ROTATE, RIGHT: undefined }}
     onStart={() => { waitingForContent.current = false; }}
     onChange={scheduleSave} onEnd={saveView}/>;
 }
