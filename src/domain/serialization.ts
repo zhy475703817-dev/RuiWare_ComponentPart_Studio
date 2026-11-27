@@ -11,6 +11,7 @@ export function serializeComponent(document: ComponentDocument): string {
     stages: {
       definition: { ...definition },
       assembly: {
+        ...(assembly.groups?.length ? { groups: assembly.groups } : {}),
         members: assembly.members.map(member => ({
           memberId: member.id, partTemplateVersion: member.template.publicationId,
           partTemplateRef: { ...member.template },
@@ -18,6 +19,8 @@ export function serializeComponent(document: ComponentDocument): string {
           position: member.position, rotation: member.rotation, parameterValues: member.parameterValues,
           ...(member.planarMovement ? { planarMovement: true } : {}),
           ...(member.instanceDocument ? { instanceDocument: member.instanceDocument } : {}),
+          ...(member.generatedBy !== undefined ? { generatedBy: member.generatedBy } : {}),
+          ...(member.generatedIndex !== undefined ? { generatedIndex: member.generatedIndex } : {}),
           parameterDefinitions: member.parameterDefinitions || [],
           resolvedInterfaces: member.resolvedInterfaces || [],
           bindings: { ...member.parameterValues, ...(document.geometryDesign ? {} : Object.fromEntries(bindings.filter(binding => binding.memberId === member.id).map(binding => [binding.memberParameterId, binding.parameterId]))) },
@@ -31,7 +34,8 @@ export function serializeComponent(document: ComponentDocument): string {
       ports: ports.map(port => ({ id: port.id, name: port.name, sourceMemberId: port.source.memberId, sourceInterfaceId: port.source.interfaceId, source: port.source, tags: port.tags, interface: port.interface })),
       interfaceTypes: document.interfaceTypes ?? [],
       slots, parameters: Object.fromEntries(parameters.map(parameter => [parameter.id, parameter.value])),
-      parameterDefinitions: parameters, bindings, patterns: document.patterns, rules,
+      parameterDefinitions: parameters, bindings, patterns: document.patterns,
+      braceGenerationRules: document.braceGenerationRules ?? [], rules,
       validation: validateComponent(document).map(check => ({ name: check.label, passed: check.status === "pass", ...check })),
     },
   }, null, 2);

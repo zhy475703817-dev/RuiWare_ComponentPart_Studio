@@ -11,7 +11,7 @@ export async function loadConnectionGeometry(member: ComponentMember, signal: Ab
   signal.throwIfAborted();
   const interfaces = interfacesForReconstruction(info).map(item => {
     const existing = member.interfaces.find(old => old.id === item.id);
-    return existing?.connectionTypeId === undefined ? item : { ...item, connectionTypeId: existing.connectionTypeId };
+    return { ...item, ...(existing?.connectionTypeId === undefined ? {} : { connectionTypeId: existing.connectionTypeId }), ...(existing?.hardware ? { hardware: existing.hardware } : {}) };
   });
   return { member: { ...member, interfaces, resolvedInterfaces: info.resolvedInterfaces },
     bounds: { min: box.min.toArray() as Vector3, max: box.max.toArray() as Vector3 } };

@@ -93,5 +93,6 @@ export function AssemblyStage({ members, mates, onAddMate, selectedMember: membe
         : result.status === "needs_review" ? "历史连接，未按新契约评估" : "当前契约判定不兼容";
       return <div className="info-row" key={mate.id}><Link2 size={14}/><span>{a ? interfaceLabel(a.member, a.item) : `${mate.from.memberId}.${mate.from.interfaceId}`} <b>→</b> {b ? interfaceLabel(b.member, b.item) : `${mate.to.memberId}.${mate.to.interfaceId}`}<small>{mate.relation} · 偏置 {mate.offset} mm · {connectionStatus}</small></span></div>;
     })}
+
   </>;
 }

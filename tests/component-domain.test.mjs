@@ -9,6 +9,7 @@ import { serializeComponent } from '../src/domain/serialization.ts';
 import { deriveComponentMetrics, effectiveParameterBounds } from '../src/domain/parameterMetrics.ts';
 import { resolveComponentComposition } from '../src/domain/composition.ts';
 import { interfacesCompatible } from '../src/domain/interfaceCompatibility.ts';
+import { groupHardwareUsage, summarizeHardwareUsage } from '../src/domain/hardware.ts';
 
 const template = { publicationId: 'version.1', templateId: 'part.1', version: 3, sha256: 'a'.repeat(64) };
 const member = id => ({
@@ -19,6 +20,40 @@ const member = id => ({
   } }],
 });
 const source = memberId => ({ memberId, interfaceId: 'face.left' });
+
+test('撑杆规则允许共用立柱，制作预检查拒绝重复原型、错误孔位格式及斜撑孔距单位', () => {
+  const draft = createComponentDocument();
+  draft.parameters = [['height', 400], ['pitch', 100], ['bottom', 0], ['top', 0]]
+    .map(([id, value]) => ({ id, label: id, value, unit: 'mm', min: 0, max: 1000 }));
+  draft.parameters.push({ id: 'badPitch', label: '错误孔距', value: 10, unit: 'cm', min: 0, max: 20 });
+  draft.assembly.members = ['left', 'right', 'h1', 'd1', 'h2', 'd2'].map(id => {
+    const item = member(id);
+    item.interfaces.push({ ...structuredClone(item.interfaces[0]), id: 'face.right' });
+    return item;
+  });
+  const base = { id: 'odd', label: '奇数孔列', heightParameterId: 'height', pitchParameterId: 'pitch', bottomOffsetParameterId: 'bottom', topClearanceParameterId: 'top',
+    leftColumnMemberId: 'left', rightColumnMemberId: 'right', horizontalMemberId: 'h1', diagonalMemberId: 'd1',
+    horizontalLeftInterfaceId: 'face.left', horizontalRightInterfaceId: 'face.right', diagonalLeftInterfaceId: 'face.left', diagonalRightInterfaceId: 'face.right',
+    columnInterfaceIndexStart: 1, columnInterfaceIndexStep: 2, diagonalColumnInterfaceIndexStep: 2, connectionMode: 'geometry' };
+  draft.braceGenerationRules = [base, { ...base, id: 'even', label: '偶数孔列', horizontalMemberId: 'h2', diagonalMemberId: 'd2', columnInterfaceIndexStart: 2 }];
+  const checked = value => validateComponent(value).find(c => c.id === 'brace.rules');
+  assert.equal(checked(draft).status, 'pass');
+  for (const patch of [
+    { horizontalMemberId: 'h1' }, { leftColumnMemberId: 'h1' },
+    { diagonalPitchParameterId: 'badPitch' }, { diagonalPitchParameterId: 'top' },
+    { leftColumnInterfacePattern: 'hole.001' }, { rightColumnInterfacePattern: 'hole.{index:999999d}' },
+    { diagonalRightColumnInterfacePattern: 'hole.{index}.{unknown}' }, { diagonalRightInterfaceId: 'face.left' },
+  ]) {
+    const invalid = structuredClone(draft);
+    Object.assign(invalid.braceGenerationRules[1], patch);
+    const before = structuredClone(invalid);
+    assert.equal(checked(invalid).status, 'fail', JSON.stringify(patch));
+    assert.deepEqual(invalid, before);
+  }
+  const generated = structuredClone(draft);
+  generated.assembly.members.find(m => m.id === 'h1').generatedBy = 'odd';
+  assert.equal(checked(generated).status, 'fail');
+});
 
 test('平面移动按成员保存，旧成员和关闭选项的导出保持兼容', () => {
   let draft = componentReducer(createComponentDocument(), { type: 'member.add', member: member('part') });
@@ -114,6 +149,104 @@ test('接口可分类为预置或自定义类型，开放接口快照同步且�
   assert.deepEqual(cleared.assembly.members[0].interfaces[0].connectableTypeIds, []);
   assert.equal(componentReducer(cleared, { type: 'interface.type.set', memberId: 'missing', interfaceId: 'face.left', connectionTypeId: 'bolt.male.v1' }), cleared);
   assert.equal(componentReducer(cleared, { type: 'interface.type.set', memberId: 'a', interfaceId: 'face.left', connectionTypeId: 'custom:未知' }), cleared);
+});
+
+test('接口五金配置随草稿保存，并按已连接接口汇总去重用量', () => {
+  let draft = createComponentDocument();
+  const male = { ...member('a'), interfaces: [{ ...member('a').interfaces[0], connectionTypeId: 'bolt.male.v1', interfaceSize: { diameter: 8 } }] };
+  const female = { ...member('b'), interfaces: [{ ...member('b').interfaces[0], connectionTypeId: 'bolt.female.v1', interfaceSize: { diameter: 8 } }] };
+  draft = componentReducer(draft, { type: 'member.add', member: male });
+  draft = componentReducer(draft, { type: 'member.add', member: female });
+  draft = componentReducer(draft, { type: 'mate.add', mate: { id: 'mate-a', from: source('a'), to: source('b'), relation: '贴合', offset: 0 } });
+  const usage = summarizeHardwareUsage(draft.assembly.members, draft.assembly.mates);
+  assert.deepEqual(usage, [
+    { category: '垫圈', name: '平垫圈', specification: 'M8', quantity: 2 },
+    { category: '螺母', name: '六角螺母', specification: 'M8', quantity: 1 },
+    { category: '螺栓', name: '六角螺栓', specification: 'M8 × 长度待定', quantity: 1 },
+  ]);
+  assert.deepEqual(groupHardwareUsage(usage).map(({ category, varieties, quantity }) => ({ category, varieties, quantity })), [
+    { category: '垫圈', varieties: 1, quantity: 2 },
+    { category: '螺母', varieties: 1, quantity: 1 },
+    { category: '螺栓', varieties: 1, quantity: 1 },
+  ]);
+  const mixed = groupHardwareUsage([...usage, { category: '螺栓', name: '六角螺栓', specification: 'M10×40', quantity: 6 }]);
+  assert.equal(mixed.length, 3);
+  assert.equal(mixed.find(item => item.category === '螺栓').varieties, 2);
+  assert.equal(mixed.find(item => item.category === '螺栓').quantity, 7);
+  assert.equal(mixed.reduce((sum, item) => sum + item.quantity, 0), 10);
+  draft = componentReducer(draft, { type: 'interface.hardware.set', memberId: 'a', interfaceId: 'face.left', hardware: { mode: 'manual', items: [{ name: '螺栓套件', specification: 'M8×30', quantity: 2 }] } });
+  assert.equal(draft.assembly.members[0].interfaces[0].hardware.items[0].quantity, 2);
+  assert.deepEqual(componentReducer(draft, { type: 'interface.hardware.set', memberId: 'a', interfaceId: 'face.left', hardware: { mode: 'manual', items: [] } }), draft);
+});
+
+const hardwareMember = (id, hardware) => ({ ...member(id), interfaces: [{ ...member(id).interfaces[0], connectionTypeId: 'bolt.female.v1', hardware }] });
+const hardwareKit = quantity => ({ mode: 'manual', items: [
+  { category: '螺栓', name: '六角螺栓', specification: '已配置螺栓', quantity },
+  { category: '螺母', name: '六角螺母', specification: '配套', quantity: 1 },
+  { category: '垫圈', name: '平垫圈', specification: '配套', quantity: 2 },
+] });
+const geometryConnection = (a, b, id = `${a}-${b}`) => ({ id, a: { path: [a], interfaceId: 'face.left' }, b: { path: [b], interfaceId: 'face.left' }, mode: 'preserve-offset', origin: 'inferred', offset: [0, 13, 0] });
+const hardwareGeometry = relations => ({ version: 1, axes: 'xyz', anchor: 'bottom-center', locks: [], relations, dimensions: [1, 1, 1], solverVersion: 'test', inputHash: 'test', verified: true });
+
+test('几何装配无需另建普通连接，多零件共用节点只统计一套且手动配置优先', () => {
+  const parts = [hardwareMember('a'), hardwareMember('b', hardwareKit(1)), hardwareMember('c', hardwareKit(1)), hardwareMember('unused', hardwareKit(99))];
+  const geometry = hardwareGeometry([geometryConnection('a', 'b'), geometryConnection('b', 'c'), geometryConnection('a', 'c')]);
+  const usage = summarizeHardwareUsage(parts, [], geometry);
+  assert.equal(usage.length, 3);
+  assert.equal(usage.reduce((sum, item) => sum + item.quantity, 0), 4);
+  assert.equal(usage.find(item => item.category === '螺栓').specification, '已配置螺栓');
+  const mate = { id: 'same-node', from: source('a'), to: source('b'), relation: '同轴', offset: 0 };
+  assert.deepEqual(summarizeHardwareUsage(parts, [mate], geometry), usage);
+  assert.deepEqual(summarizeHardwareUsage(parts, [], hardwareGeometry([])), []);
+});
+
+test('独立节点累加，规格按种分组，修改配置立即重算', () => {
+  const parts = ['a', 'b', 'c', 'd'].map(id => hardwareMember(id, hardwareKit(1)));
+  const geometry = hardwareGeometry([geometryConnection('a', 'b'), geometryConnection('c', 'd')]);
+  const initial = summarizeHardwareUsage(parts, [], geometry);
+  assert.equal(initial.reduce((sum, item) => sum + item.quantity, 0), 8);
+  parts[0].interfaces[0].hardware.items[0].quantity = 3;
+  let usage = summarizeHardwareUsage(parts, [], geometry);
+  assert.equal(usage.find(item => item.category === '螺栓').quantity, 4);
+  parts[0].interfaces[0].hardware.items[0].specification = '另一规格';
+  usage = summarizeHardwareUsage(parts, [], geometry);
+  assert.equal(groupHardwareUsage(usage).find(item => item.category === '螺栓').varieties, 2);
+  assert.equal(initial.find(item => item.category === '螺栓').quantity, 2);
+});
+
+test('同一节点的自动推荐选择完整且尺寸明确的一套，不叠加通用孔侧推荐', () => {
+  const parts = [hardwareMember('a'), hardwareMember('b'), hardwareMember('c')];
+  parts[1].interfaces[0].interfaceSize = { diameter: 8 };
+  parts[2].interfaces[0].connectionTypeId = 'hole.v1';
+  const geometry = hardwareGeometry([geometryConnection('a', 'b'), geometryConnection('b', 'c')]);
+  const usage = summarizeHardwareUsage(parts, [], geometry);
+  assert.equal(usage.length, 3);
+  assert.equal(usage.reduce((sum, item) => sum + item.quantity, 0), 4);
+  assert.ok(usage.every(item => item.specification.startsWith('M8')));
+  assert.deepEqual(summarizeHardwareUsage([...parts].reverse(), [], geometry), usage);
+});
+
+test('支承面及失效几何关系不生成五金，不使用五金可覆盖自动推荐', () => {
+  const parts = [hardwareMember('a', { mode: 'none' }), hardwareMember('b')];
+  const support = geometryConnection('a', 'b'); support.a.interfaceId = '@support:side';
+  assert.deepEqual(summarizeHardwareUsage(parts, [], hardwareGeometry([support, geometryConnection('a', 'missing')])), []);
+  assert.deepEqual(summarizeHardwareUsage(parts, [], hardwareGeometry([geometryConnection('a', 'b')])), []);
+  parts[0].interfaces[0].hardware = { mode: 'auto' };
+  assert.equal(summarizeHardwareUsage(parts, [], hardwareGeometry([geometryConnection('a', 'b')])).reduce((sum, item) => sum + item.quantity, 0), 4);
+});
+
+test('子组件实例分别累加，父级深层连接及导出接口与内部共用节点去重', () => {
+  const nested = createComponentDocument();
+  nested.assembly = { members: [hardwareMember('a', hardwareKit(1)), hardwareMember('b', hardwareKit(1))], mates: [] };
+  nested.geometryDesign = hardwareGeometry([geometryConnection('a', 'b')]);
+  nested.ports = [{ id: 'port', name: '导出接口', source: source('a'), tags: [] }];
+  const instance = id => ({ ...member(id), interfaces: [{ ...nested.assembly.members[0].interfaces[0], id: 'port' }], instanceDocument: structuredClone(nested) });
+  const parts = [instance('one'), instance('two'), hardwareMember('c', hardwareKit(1))];
+  const relation = geometryConnection('one', 'c'); relation.a.interfaceId = 'port';
+  const deep = geometryConnection('one', 'c'); deep.a.path = ['one', 'b'];
+  const usage = summarizeHardwareUsage(parts, [], hardwareGeometry([relation, deep]));
+  assert.equal(usage.reduce((sum, item) => sum + item.quantity, 0), 8);
+  assert.equal(usage.find(item => item.category === '螺栓').quantity, 2);
 });
 
 test('嵌套组件的自定义接口类型目录可合并且名称冲突会拒绝', () => {

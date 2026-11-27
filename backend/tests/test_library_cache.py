@@ -50,6 +50,8 @@ def reconstructable_package(valid=True, *, template_id='draft-1', code='BEAM-1')
 
 class LibraryCacheTests(unittest.TestCase):
     def setUp(self):
+        from backend.tests.storage_helpers import qualified_storage_fixture
+        qualified_storage_fixture(self)
         self.tmp = TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.settings = Settings(api_url='http://parts.test', api_key='test-secret',

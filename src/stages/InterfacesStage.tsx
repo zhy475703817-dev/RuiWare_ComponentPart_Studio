@@ -1,11 +1,13 @@
 import { CheckCircle2, CircleHelp, Link2, Plus, Trash2 } from "lucide-react";
-import { useState } from "react";
-import type { ComponentMember, ComponentPort, ComponentSlot, InterfaceSelection, Mate, PartInterface, ResolvedPartInterface } from "../domain/component";
+import { useEffect, useState } from "react";
+import type { ComponentMember, ComponentPort, ComponentSlot, GeometryDesign, HardwareItem, InterfaceHardware, InterfaceSelection, Mate, PartInterface, ResolvedPartInterface } from "../domain/component";
 import { sameInterfaceSelection, supportsInterfacePreview } from "../domain/interfaceGeometry";
 import { interfacesCompatible } from "../domain/interfaceCompatibility";
 import { assessInterfaceCompatibility } from "../domain/interfaceCompatibility";
 import { defaultConnectableTypeIds, interfaceTypeLabel, PRESET_INTERFACE_TYPES } from "../domain/interfaceTypes";
 import { interfaceContractGroups } from "../domain/interfaceContractGroups";
+import { inferHardwareCategory, recommendInterfaceHardware } from "../domain/hardware";
+import { HardwareSummary } from "./HardwareSummary";
 
 function interfaceSummary(item: PartInterface, members: ComponentMember[], customTypes: { id: string; label: string }[]): string {
   const size = item.interfaceSize;
@@ -55,7 +57,40 @@ function sourceLabel(members: ComponentMember[], source: { memberId: string; int
 
 type SlotPatch = { name?: string; required?: boolean; baseInterface?: { memberId: string; interfaceId: string } | null; memberId?: string | null; interfaceId?: string | null };
 
-export function InterfacesStage({ members, ports, slots, mates, interfaceTypes, selectedInterface, interfacePreview, editable, onSelectInterface, onConnect, onRemoveConnection, onSetInterfaceExposure, onSetInterfaceType, onSetInterfaceConnectableTypes, onRenamePort, onAddSlot, onPatchSlot, onRemoveSlot }: { members: ComponentMember[]; ports: ComponentPort[]; slots: ComponentSlot[]; mates: Mate[]; interfaceTypes: { id: string; label: string }[]; selectedInterface: InterfaceSelection | null; interfacePreview?: { selection: InterfaceSelection; status: "loading" | "ready" | "error"; resolvedInterfaces?: ResolvedPartInterface[] }; editable: boolean; onSelectInterface: (selection: InterfaceSelection) => void; onConnect: (from: InterfaceSelection, to: InterfaceSelection) => Promise<boolean>; onRemoveConnection: (id: string) => void; onSetInterfaceExposure: (memberId: string, interfaceId: string, exposed: boolean) => void; onSetInterfaceType: (memberId: string, interfaceId: string, connectionTypeId: string | null, customTypeLabel?: string) => void; onSetInterfaceConnectableTypes: (memberId: string, interfaceId: string, connectableTypeIds: string[]) => void; onRenamePort: (id: string, name: string) => void; onAddSlot: () => void; onPatchSlot: (id: string, patch: SlotPatch) => void; onRemoveSlot: (id: string) => void }) {
+function InterfaceHardwareEditor({ memberId, item, editable, onSave }: { memberId: string; item: PartInterface; editable: boolean; onSave: (memberId: string, interfaceId: string, hardware: InterfaceHardware) => void }) {
+  const stored = item.hardware;
+  const storedKey = JSON.stringify(stored || null);
+  const [mode, setMode] = useState<InterfaceHardware["mode"]>(stored?.mode || "auto");
+  const [items, setItems] = useState<HardwareItem[]>(stored?.items || []);
+  useEffect(() => {
+    setMode(stored?.mode || "auto"); setItems(stored?.items || []);
+  }, [memberId, item.id, storedKey]);
+  const recommendation = recommendInterfaceHardware(item);
+  return <div className="interface-hardware-editor" aria-label="接口五金配置">
+    <label>五金识别方式<select aria-label={`${item.name}：五金识别方式`} disabled={!editable} value={mode} onChange={event => {
+      const next = event.currentTarget.value as InterfaceHardware["mode"];
+      setMode(next);
+      if (next === "auto") onSave(memberId, item.id, { mode: next });
+      else if (next === "none") onSave(memberId, item.id, { mode: next });
+      else setItems(recommendation.length ? recommendation.map(entry => ({ ...entry })) : [{ category: "其他", name: "五金件", specification: "未指定规格", quantity: 1 }]);
+    }}><option value="auto">自动识别与推荐</option><option value="manual">手动指定</option><option value="none">不使用额外五金</option></select></label>
+    {mode === "auto" && <div className="hardware-suggestion-list">{recommendation.length ? recommendation.map((entry, index) => <small key={`${entry.name}-${index}`}>{entry.name} · {entry.specification} × {entry.quantity}</small>) : <small>暂未识别到适用五金，可切换为手动指定。</small>}</div>}
+    {mode === "manual" && <>
+      {items.map((entry, index) => <div className="hardware-edit-row" key={index}>
+        <label>类别<input aria-label={`${item.name}：五金类别 ${index + 1}`} maxLength={80} disabled={!editable} value={entry.category || inferHardwareCategory(entry.name)} placeholder="例如：螺栓" onChange={event => setItems(items.map((value, row) => row === index ? { ...value, category: event.currentTarget.value } : value))}/></label>
+        <label>名称<input aria-label={`${item.name}：五金名称 ${index + 1}`} maxLength={80} disabled={!editable} value={entry.name} placeholder="例如：六角螺栓" onChange={event => setItems(items.map((value, row) => row === index ? { ...value, name: event.currentTarget.value } : value))}/></label>
+        <label>规格<input aria-label={`${item.name}：五金规格 ${index + 1}`} maxLength={120} disabled={!editable} value={entry.specification} placeholder="例如：M8 × 30" onChange={event => setItems(items.map((value, row) => row === index ? { ...value, specification: event.currentTarget.value } : value))}/></label>
+        <label>数量<input aria-label={`${item.name}：五金数量 ${index + 1}`} type="number" min={1} max={10000} step={1} disabled={!editable} value={entry.quantity} onChange={event => setItems(items.map((value, row) => row === index ? { ...value, quantity: Math.min(10000, Math.max(1, Math.floor(event.currentTarget.valueAsNumber) || 1)) } : value))}/></label>
+        <button type="button" className="icon-button" aria-label={`删除第 ${index + 1} 类五金`} disabled={!editable} onClick={() => setItems(current => current.filter((_, row) => row !== index))}><Trash2 size={14}/></button>
+      </div>)}
+      <div className="action-row"><button type="button" className="ghost compact-action" disabled={!editable || items.length >= 50} onClick={() => setItems(current => [...current, { category: "其他", name: "五金件", specification: "未指定规格", quantity: 1 }])}><Plus size={13}/>增加五金</button>
+        <button type="button" className="primary compact-action" disabled={!editable || items.length === 0 || items.some(entry => !entry.name.trim())} onClick={() => onSave(memberId, item.id, { mode, items })}>保存五金配置</button></div>
+    </>}
+    <small>保存后自动更新模板五金统计，共用五金只计一次。</small>
+  </div>;
+}
+
+export function InterfacesStage({ members, ports, slots, mates, geometryDesign, interfaceTypes, selectedInterface, interfacePreview, editable, onSelectInterface, onConnect, onRemoveConnection, onSetInterfaceExposure, onSetInterfaceType, onSetInterfaceConnectableTypes, onSetInterfaceHardware, onRenamePort, onAddSlot, onPatchSlot, onRemoveSlot }: { members: ComponentMember[]; ports: ComponentPort[]; slots: ComponentSlot[]; mates: Mate[]; geometryDesign?: GeometryDesign | null; interfaceTypes: { id: string; label: string }[]; selectedInterface: InterfaceSelection | null; interfacePreview?: { selection: InterfaceSelection; status: "loading" | "ready" | "error"; resolvedInterfaces?: ResolvedPartInterface[] }; editable: boolean; onSelectInterface: (selection: InterfaceSelection) => void; onConnect: (from: InterfaceSelection, to: InterfaceSelection) => Promise<boolean>; onRemoveConnection: (id: string) => void; onSetInterfaceExposure: (memberId: string, interfaceId: string, exposed: boolean) => void; onSetInterfaceType: (memberId: string, interfaceId: string, connectionTypeId: string | null, customTypeLabel?: string) => void; onSetInterfaceConnectableTypes: (memberId: string, interfaceId: string, connectableTypeIds: string[]) => void; onSetInterfaceHardware: (memberId: string, interfaceId: string, hardware: InterfaceHardware) => void; onRenamePort: (id: string, name: string) => void; onAddSlot: () => void; onPatchSlot: (id: string, patch: SlotPatch) => void; onRemoveSlot: (id: string) => void }) {
   const [customTypeLabel, setCustomTypeLabel] = useState("");
   const [connectionFrom, setConnectionFrom] = useState<InterfaceSelection | null>(null);
   const [connectionTo, setConnectionTo] = useState<InterfaceSelection | null>(null);
@@ -134,7 +169,7 @@ export function InterfacesStage({ members, ports, slots, mates, interfaceTypes, 
       <small role="status">{!editable ? "草稿暂不可编辑，请先处理草稿同步状态。" : !connectionFrom || !connectionTo ? "请分别点击两个不同零部件的接口，填入接口 A 和接口 B。" : connectionNotice}</small>
       {pendingAssessment && <div className={`interface-check-report ${pendingAssessment.status === "compatible" ? "pass" : "fail"}`} role="status"><b>连接检查：{pendingAssessment.status === "compatible" ? "通过" : pendingAssessment.status === "needs_review" ? "需要复核" : "未通过"}</b><small>{pendingAssessment.reason}</small>{pendingAssessment.checks.map((check, index) => <span key={`${check.code}-${index}`} className={check.status === "pass" ? "check-pass" : "check-fail"}><i>{check.status === "pass" ? "✓" : "×"}</i>{check.message}</span>)}</div>}
     </div>
-    <h4>已连接接口</h4>
+    <div className="section-heading"><h4>已连接接口</h4><HardwareSummary members={members} mates={mates} geometryDesign={geometryDesign}/></div>
     <div className="connected-interface-list">
       {mates.length === 0 && <p className="empty-text">暂无连接接口</p>}
       {mates.map(mate => {
@@ -228,6 +263,14 @@ export function InterfacesStage({ members, ports, slots, mates, interfaceTypes, 
         </fieldset>
         <small>类型仅用于分类展示；接口连接关系不由类型定义决定。</small>
       </div>;
+    })()}
+    <h4>接口五金</h4>
+    {(() => {
+      const member = selectedInterface ? members.find(candidate => candidate.id === selectedInterface.memberId) : undefined;
+      const item = member?.interfaces.find(candidate => candidate.id === selectedInterface?.interfaceId);
+      if (!member || !item) return <p className="empty-text">先选择一个零部件接口，再设置其连接五金。</p>;
+      return <InterfaceHardwareEditor key={`${member.id}:${item.id}`} memberId={member.id} item={item} editable={editable}
+        onSave={(memberId, interfaceId, hardware) => onSetInterfaceHardware(memberId, interfaceId, hardware)}/>;
     })()}
     {selectedInterface && (() => {
       const member = members.find(item => item.id === selectedInterface.memberId);

@@ -5,6 +5,7 @@ import type { PublishedTemplate } from "./publishedLibrary.ts";
 export type ComponentPublication = PublishedTemplate & { templateKind: "component"; document: ComponentDocument; checks: ValidationCheck[] };
 
 const messages: Record<string, string> = {
+  AUTHORING_QUALIFICATION_REQUIRED: "当前修订尚未通过自动制作验收，请先处理失败项并完成复验。",
   REMOTE_STORAGE_NOT_CONFIGURED: "\u5c1a\u672a\u914d\u7f6e\u5171\u4eab\u53d1\u5e03\u5e93\uff0c\u8bf7\u4f7f\u7528\u73b0\u6709\u5b58\u50a8\u914d\u7f6e\u5e76\u91cd\u542f\u7ec4\u4ef6\u5e73\u53f0\u3002",
   REMOTE_STORAGE_UNAVAILABLE: "\u5171\u4eab\u53d1\u5e03\u5e93\u6682\u65f6\u65e0\u6cd5\u8bbf\u95ee\uff0c\u8349\u7a3f\u5df2\u4fdd\u7559\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002",
   REMOTE_STORAGE_INTEGRITY_ERROR: "\u6a21\u677f\u5305\u6821\u9a8c\u5931\u8d25\uff0c\u8bf7\u8054\u7cfb\u53d1\u5e03\u8005\u786e\u8ba4\u53d1\u5e03\u7248\u672c\u3002",
@@ -62,7 +63,7 @@ export function componentPublicationMember(publication: ComponentPublication, id
       const source = port.interface || document.assembly.members.find(member => member.id === port.source.memberId)?.interfaces.find(item => item.id === port.source.interfaceId);
       if (!source) return [];
       const exposed: ComponentMember["interfaces"][number] = { ...structuredClone(source), id: port.id, name: port.name, tags: [...port.tags] };
-      for (const key of ["declarationMode", "interfaceType", "locatingType", "role", "geometryRefs", "parameterRefs", "description", "required", "connectionGender", "connectionTypeId", "connectableTypeIds", "interfaceSize", "connectionMethod", "mating", "region"] as const) {
+      for (const key of ["declarationMode", "interfaceType", "locatingType", "role", "geometryRefs", "parameterRefs", "description", "required", "connectionGender", "connectionTypeId", "connectableTypeIds", "interfaceSize", "connectionMethod", "mating", "hardware", "region"] as const) {
         const value = source[key];
         if (value !== undefined) exposed[key] = value as never;
       }

@@ -55,3 +55,16 @@ STORAGE_ENV = {
     'RUIWARE_MINIO_BUCKET': 'shared-templates', 'RUIWARE_MINIO_PREFIX': 'publishers/test-user',
     'RUIWARE_MINIO_READ_PREFIX': 'publishers', 'RUIWARE_MINIO_SECURE': 'false',
 }
+def qualified_storage_fixture(testcase):
+    """Stub CAD certificates only in storage/dependency protocol tests.
+
+    test_qualification exercises the real pipeline and hard gate separately.
+    These legacy storage fixtures intentionally contain no reconstructable CAD.
+    """
+    from unittest.mock import patch
+    from backend.app.components.repository import DraftRepository
+    from backend.app.components.qualification_policy import QualificationConfig
+    def certificate(cls, connection, draft_id, document):
+        return {"draftId": draft_id, "revision": document.revision, "status": "passed", "deliveryReady": True,
+                "config": QualificationConfig().model_dump(), "message": "storage-test fixture", "cases": []}
+    testcase.enterContext(patch.object(DraftRepository, '_qualification', classmethod(certificate)))

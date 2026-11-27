@@ -153,6 +153,8 @@ class ComponentPublications:
         draft = self.drafts.get(draft_id)
         if draft["document"]["revision"] != expected_revision:
             raise ComponentError(409, "REVISION_CONFLICT")
+        if not self.drafts.qualification(draft_id)["deliveryReady"]:
+            raise ComponentError(409, "AUTHORING_QUALIFICATION_REQUIRED")
         self._require_storage()
         self._dependencies(draft["document"])
         snapshot = self.drafts.prepare_publication(draft_id, expected_revision)

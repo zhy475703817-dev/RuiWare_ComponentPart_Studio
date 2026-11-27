@@ -5,6 +5,7 @@ import { deriveComponentMetrics, effectiveParameterBounds, formatParameterValue,
 
 type Props = {
   geometryPanel?: ReactNode;
+  hardwarePanel?: ReactNode;
   geometryReadOnly?: boolean;
   parameters: ComponentParameter[];
   bindings: ParameterBinding[];
@@ -65,7 +66,7 @@ function dimensionCandidates(parameter: ComponentParameter, axis: keyof typeof d
   return members.flatMap(member => (member.parameterDefinitions || []).filter(definition => definition.unit === parameter.unit && ["number", "integer"].includes(definition.valueType) && dimensionAliases[axis].some(alias => definition.id.toLowerCase().includes(alias.toLowerCase()) || definition.label.toLowerCase().includes(alias.toLowerCase()))).map(definition => ({ member, definition })));
 }
 
-export function ParametersStage({ geometryPanel, geometryReadOnly = false, parameters, bindings, patterns = [], rules = [], members = [], definitionName, definitionCode, onChange, onBindingChange, onAddParameter, onRemoveParameter, onAddPattern, onRemovePattern, onAddRule, onRemoveRule }: Props) {
+export function ParametersStage({ geometryPanel, hardwarePanel, geometryReadOnly = false, parameters, bindings, patterns = [], rules = [], members = [], definitionName, definitionCode, onChange, onBindingChange, onAddParameter, onRemoveParameter, onAddPattern, onRemovePattern, onAddRule, onRemoveRule }: Props) {
   const [newParameter, setNewParameter] = useState({ id: "", label: "", unit: "mm", min: "0", max: "100", value: "0" });
   const [newPattern, setNewPattern] = useState({ id: "", label: "", countParameterId: "", spacingParameterId: "", axis: "z" as ComponentPattern["axis"], memberIds: [] as string[] });
   const [newConstraint, setNewConstraint] = useState({ label: "", expression: "" });
@@ -105,6 +106,7 @@ export function ParametersStage({ geometryPanel, geometryReadOnly = false, param
   };
   return <>
     {geometryPanel}
+    {hardwarePanel}
     <details><summary>已有参数、绑定和构成规则</summary>
     {geometryReadOnly && <p className="hint">当前尺寸由几何联动统一计算。以下为已保存的设计资料；外形修改请使用上方目标尺寸。</p>}
     <fieldset className="stage-fields" disabled={geometryReadOnly}>

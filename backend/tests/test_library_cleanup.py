@@ -15,6 +15,8 @@ from backend.tests.test_package_similarity import package as part_package
 
 class LibraryCleanupFixture:
     def setUp(self):
+        from backend.tests.storage_helpers import qualified_storage_fixture
+        qualified_storage_fixture(self)
         self.tmp = TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.storage = MemoryMinio()

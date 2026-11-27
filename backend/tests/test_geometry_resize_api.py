@@ -61,9 +61,9 @@ class ResizeApiTests(unittest.TestCase):
         self.assertEqual(self.client.post(self.base+'/resize-apply', json=self.body(job)).status_code, 409)
         exported = self.client.get(self.base+'/export').json()
         self.assertTrue(exported['geometryDesign']['verified'])
-        publication = self.app.state.drafts.prepare_publication(self.draft['draftId'], revision)
-        self.assertEqual(publication['schemaVersion'], 'component-package-1.1')
-        self.assertEqual(publication['document'], applied.json()['document'])
+        # A single resize preview is no longer sufficient for publication.
+        with self.assertRaisesRegex(Exception, 'AUTHORING_QUALIFICATION_REQUIRED'):
+            self.app.state.drafts.prepare_publication(self.draft['draftId'], revision)
         # Simulate losing process-local jobs. Undo must use the committed snapshot.
         self.app.state.resize_jobs = ResizeJobs(self.app)
         saved = self.client.get(self.base+'/resize-history').json()['undo']
@@ -79,6 +79,168 @@ class ResizeApiTests(unittest.TestCase):
         self.assertEqual(new['status'], 'ready', new)
         self.assertEqual(self.client.get(self.base+'/resize-jobs/'+old['jobId']).json()['status'], 'stale')
         self.assertEqual(self.client.post(self.base+'/resize-apply', json=self.body(old)).status_code, 409)
+
+    def test_repeat_inspection_reuses_verified_measurement_without_cad_or_queue(self):
+        initial = self.wait(self.start(inspectOnly=True))
+        self.assertEqual(initial['status'], 'ready', initial)
+        with patch('backend.app.components.resize_jobs.load_geometry', side_effect=AssertionError('must use measured result')):
+            repeated = self.start(inspectOnly=True)
+        self.assertEqual(repeated['status'], 'ready', repeated)
+        self.assertEqual(repeated['result'], initial['result'])
+        self.assertNotIn('document', repeated['result'])
+        self.assertEqual(self.client.get(self.base).json()['document'], self.draft['document'])
+        # Cached responses must not expose the stored result to mutation.
+        self.app.state.resize_jobs.jobs[repeated['jobId']]['result']['dimensions'][0] = 999
+        self.assertEqual(self.start(inspectOnly=True)['result']['dimensions'], [10, 10, 100])
+
+    def test_hardware_edit_keeps_measurement_but_parameter_and_position_edits_remeasure(self):
+        initial = self.wait(self.start(inspectOnly=True))
+        self.draft = self.client.post(self.base+'/actions', json={'expectedRevision': 1, 'action': {
+            'type': 'interface.hardware.set', 'memberId': 'a', 'interfaceId': 'start',
+            'hardware': {'mode': 'manual', 'items': [{'name': '螺栓', 'specification': 'M8', 'quantity': 2}]}}}).json()
+        with patch('backend.app.components.resize_jobs.load_geometry', side_effect=AssertionError('hardware must not rebuild CAD')):
+            self.assertEqual(self.start(inspectOnly=True)['result'], initial['result'])
+        self.draft = self.client.post(self.base+'/actions', json={'expectedRevision': self.draft['document']['revision'],
+            'action': {'type': 'member.patch', 'id': 'a', 'patch': {'parameterValues': {'length': 120}}}}).json()
+        remeasured = self.wait(self.start(inspectOnly=True))
+        self.assertEqual(remeasured['result']['dimensions'], [10, 10, 120])
+        self.draft = self.client.post(self.base+'/actions', json={'expectedRevision': self.draft['document']['revision'],
+            'action': {'type': 'member.patch', 'id': 'a', 'patch': {'rotation': [0, 1.5707963267948966, 0]}}}).json()
+        rotated = self.wait(self.start(inspectOnly=True))
+        self.assertAlmostEqual(rotated['result']['dimensions'][0], 120)
+        self.assertAlmostEqual(rotated['result']['dimensions'][2], 10)
+
+    def test_inspection_does_not_make_resize_preview_applicable(self):
+        self.wait(self.start(inspectOnly=True))
+        cached = self.start(inspectOnly=True)
+        rejected = self.client.post(self.base+'/resize-apply', json={
+            'expectedRevision': cached['expectedRevision'], 'jobId': cached['jobId'], 'checksum': 'inspection'})
+        self.assertEqual(rejected.status_code, 409)
+        preview = self.wait(self.start([10, 10, 140]))
+        self.assertEqual(preview['status'], 'ready', preview)
+        self.assertAlmostEqual(preview['result']['dimensions'][2], 140, delta=.1)
+
+    def test_preview_uses_authoring_recovery_and_reports_full_change(self):
+        from backend.app.components.resize_solver import ResizeSolver, ResizeFailure
+        solve = ResizeSolver.solve
+        def needs_continuation(solver):
+            target = solver.request.get('dimensions')
+            length = solver.document['assembly']['members'][0]['parameterValues']['length']
+            if target and not solver.request.get('inspectOnly') and abs(target[2]-length) > 26:
+                raise ResizeFailure('需要分步求解', 'RESIZE_NO_SOLUTION')
+            return solve(solver)
+        with patch('backend.app.components.resize_jobs.ResizeSolver.solve', needs_continuation):
+            job = self.wait(self.start())
+        self.assertEqual(job['status'], 'ready', job)
+        self.assertTrue(job['result']['automaticRecovery'])
+        self.assertEqual(job['result']['changes'][0]['before']['parameterValues']['length'], 100)
+        self.assertAlmostEqual(job['result']['changes'][0]['after']['parameterValues']['length'], 150, delta=.1)
+        self.assertEqual(self.client.get(self.base).json()['document'], self.draft['document'])
+
+    def test_brace_resize_preserves_source_dimensions_and_change_origins(self):
+        from backend.app.components.resize_jobs import solve_with_recovery
+
+        source = copy.deepcopy(self.draft['document'])
+        source['braceGenerationRules'] = [{'id': 'brace-grid'}]
+        original_member = source['assembly']['members'][0]
+        removed_member = {**copy.deepcopy(original_member), 'id': 'old-brace', 'name': '旧撑杆'}
+        unchanged_member = {**copy.deepcopy(original_member), 'id': 'unchanged', 'name': '未调整撑杆'}
+        source['assembly']['members'].extend([removed_member, unchanged_member])
+
+        class TargetAwareSolver:
+            def __init__(self, document, provider, publications, request, *args):
+                self.document = document
+                self.request = request
+
+            def solve(self):
+                if self.request.get('inspectOnly'):
+                    return {'dimensions': [10, 10, 100], 'changes': []}
+                target_document = copy.deepcopy(self.document)
+                target_document['assembly']['members'][0]['parameterValues']['length'] = 150
+                added = {**copy.deepcopy(original_member), 'id': 'new-brace', 'name': '新增撑杆'}
+                rounding_only = copy.deepcopy(unchanged_member)
+                rounding_only['position'][0] += 1e-10
+                target_document['assembly']['members'] = [target_document['assembly']['members'][0], rounding_only, added]
+                return {
+                    'document': target_document,
+                    'dimensions': self.request['dimensions'],
+                    'originalDimensions': [10, 10, 150],
+                    'changes': [{'path': ['old-brace']}, {'path': ['new-brace']}, {'path': ['unchanged']}],
+                }
+
+        with patch('backend.app.components.resize_jobs.ResizeSolver', TargetAwareSolver):
+            result = solve_with_recovery(source, None, {}, {'dimensions': [10, 10, 150]}, lambda: False, lambda _: None)
+
+        self.assertEqual(result['originalDimensions'], [10, 10, 100])
+        self.assertEqual(result['changes'][0]['path'], [original_member['id']])
+        self.assertEqual(result['changes'][0]['before']['parameterValues'], original_member['parameterValues'])
+        self.assertEqual(result['changes'][0]['after']['parameterValues']['length'], 150)
+        self.assertEqual(len(result['changes']), 1)
+        self.assertEqual(result['structureChanges'], {
+            'added': [{'path': ['new-brace'], 'name': '新增撑杆'}],
+            'removed': [{'path': ['old-brace'], 'name': '旧撑杆'}],
+        })
+        self.assertEqual(source['assembly']['members'][0]['parameterValues'], original_member['parameterValues'])
+        self.assertEqual(len(source['assembly']['members']), 3)
+
+    def test_adjacent_brace_heights_preserve_original_error_without_invalid_retry(self):
+        from backend.app.components.resize_jobs import solve_with_recovery
+        from backend.app.components.resize_solver import ResizeFailure
+        from backend.tests.test_qualification import ScenarioPlanTests
+
+        source = copy.deepcopy(self.draft['document'])
+        source.update(ScenarioPlanTests.brace_document())
+        failure = ResizeFailure('明确连接与目标尺寸冲突', 'RESIZE_CONTACT_LOST', [{'relationId': 'user-contact'}])
+        requests = []
+        class UnreachableSolver:
+            def __init__(self, document, provider, publications, request, *args):
+                self.request = request
+            def solve(self):
+                if self.request.get('inspectOnly'):
+                    return {'dimensions': [10, 10, 2400]}
+                requests.append(self.request)
+                raise failure
+        body = {'dimensions': [10, 10, 2250], 'design': {'locks': [{'path': ['a']}]}}
+        before = copy.deepcopy(source)
+        with patch('backend.app.components.resize_jobs.ResizeSolver', UnreachableSolver):
+            with self.assertRaises(ResizeFailure) as caught:
+                solve_with_recovery(source, None, {}, body, lambda: False, lambda _: None)
+        self.assertIs(caught.exception, failure)
+        self.assertEqual(requests, [body])
+        self.assertEqual(source, before)
+
+    def test_authoring_accepts_only_actual_applied_geometry_for_current_revision(self):
+        from backend.app.mcp.authoring import authoring_report
+
+        self.assertFalse(authoring_report(self.draft)['geometryVerified'])
+        job = self.wait(self.start())
+        self.assertEqual(job['status'], 'ready', job)
+        self.assertFalse(authoring_report(self.client.get(self.base).json())['geometryVerified'])
+        applied = self.client.post(self.base+'/resize-apply', json=self.body(job)).json()
+        history = self.app.state.drafts.resize_history(self.draft['draftId'])
+        report = authoring_report(applied, history)
+        self.assertTrue(report['geometryVerified'], report)
+        self.assertEqual(report['status'], 'geometry_verified', report)
+        updated = self.client.post(self.base+'/actions', json={'expectedRevision': applied['document']['revision'],
+            'action': {'type': 'definition.patch', 'patch': {'name': '继续制作'}}}).json()
+        self.assertFalse(authoring_report(updated, history)['geometryVerified'])
+
+    def test_original_dimensions_preflight_finds_unlinked_member_without_applying(self):
+        from backend.app.mcp.authoring import authoring_report
+        from backend.tests.test_geometry_resize import member
+
+        source = document([member('left'), {**member('right'), 'position': [0, 30, 0]}])
+        source['definition']['code'] = 'AUTHORING-TEST'
+        self.draft = self.app.state.drafts.create(document=ComponentDocument.model_validate(source))
+        self.base = '/api/component-drafts/' + self.draft['draftId']
+        report = authoring_report(self.draft)
+        self.assertIn('AUTHORING_RELATION_UNCONFIRMED', {issue['code'] for issue in report['issues']})
+        response = self.client.post(self.base+'/resize-jobs', json={'expectedRevision': self.draft['document']['revision']})
+        self.assertEqual(response.status_code, 202, response.text)
+        result = self.wait(response.json())
+        self.assertEqual(result['status'], 'needs_choice', result)
+        self.assertEqual(result['error']['code'], 'RESIZE_NEEDS_CHOICE')
+        self.assertEqual(self.client.get(self.base).json()['document'], self.draft['document'])
 
     def test_other_page_edit_invalidates_preview(self):
         job = self.wait(self.start())
