@@ -73,6 +73,9 @@ class ComponentTests(unittest.TestCase):
             self.assertEqual(response.json()["document"]["assembly"]["mates"], [])
 
     def setUp(self):
+        if self._testMethodName.startswith('test_publish'):
+            from backend.tests.storage_helpers import qualified_storage_fixture
+            qualified_storage_fixture(self)
         self.directory = TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         self.environment = patch.dict(os.environ, {**STORAGE_ENV, "COMPONENT_DRAFT_DB": str(Path(self.directory.name) / "drafts.sqlite3")})
@@ -391,6 +394,89 @@ console.log(JSON.stringify({document:result,checks:validateComponent(result),exp
         document = apply_action(document, ComponentAction.validate_python({"type": "member.remove", "id": "support"}))
         self.assertEqual(document.patterns, [])
 
+    def test_brace_generation_rule_is_saved_and_invalid_rules_are_rejected_or_reported(self):
+        from backend.app.components.models import ComponentAction, ComponentDocument
+        from backend.app.components.service import ComponentError, apply_action, create_component_document, validate_component
+
+        document = create_component_document()
+        data = document.model_dump(by_alias=True)
+        data["parameters"].extend([
+            {"id": "bracePitch", "label": "撑杆孔距", "value": 50, "unit": "mm", "min": 10, "max": 100},
+            {"id": "braceBottom", "label": "底部余量", "value": 0, "unit": "mm", "min": 0, "max": 100},
+            {"id": "braceTop", "label": "顶部余量", "value": 0, "unit": "mm", "min": 0, "max": 100},
+            {"id": "wrongUnitPitch", "label": "错误单位的孔距", "value": 5, "unit": "cm", "min": 1, "max": 10},
+        ])
+        document = ComponentDocument.model_validate(data)
+        for identifier in ("left", "right", "horizontal", "diagonal"):
+            item = member(identifier)
+            item["interfaces"] = [{"id": "left", "name": "左端", "type": "plane", "tags": []},
+                                  {"id": "right", "name": "右端", "type": "plane", "tags": []}]
+            document = apply_action(document, ComponentAction.validate_python({"type": "member.add", "member": item}))
+
+        rule = {
+            "id": "column-braces", "label": "柱片横撑斜撑", "heightParameterId": "componentHeight",
+            "pitchParameterId": "bracePitch", "bottomOffsetParameterId": "braceBottom", "topClearanceParameterId": "braceTop",
+            "leftColumnMemberId": "left", "rightColumnMemberId": "right", "horizontalMemberId": "horizontal",
+            "diagonalMemberId": "diagonal", "horizontalLeftInterfaceId": "left", "horizontalRightInterfaceId": "right",
+            "diagonalLeftInterfaceId": "left", "diagonalRightInterfaceId": "right",
+            "leftColumnInterfacePattern": "hole.{index:03d}", "rightColumnInterfacePattern": "hole.{index:03d}",
+        }
+        document = apply_action(document, ComponentAction.validate_python({"type": "brace.rule.set", "rule": rule}))
+        self.assertEqual(document.braceGenerationRules[0].id, "column-braces")
+        self.assertEqual(next(item for item in validate_component(document) if item["id"] == "brace.rules")["status"], "pass")
+
+        invalid_cases = [
+            ({"horizontalMemberId": "missing"}, "INVALID_BRACE_RULE_MEMBER"),
+            ({"heightParameterId": "missing"}, "INVALID_BRACE_RULE_PARAMETERS"),
+            ({"leftColumnMemberId": "right"}, "INVALID_BRACE_RULE_COLUMNS"),
+            ({"diagonalMemberId": "horizontal"}, "INVALID_BRACE_RULE_MEMBER_ROLE"),
+            ({"horizontalLeftInterfaceId": "missing"}, "INVALID_BRACE_RULE_INTERFACE"),
+            ({"leftColumnInterfacePattern": "hole.001"}, "INVALID_BRACE_RULE_PATTERN"),
+            ({"diagonalRightColumnInterfacePattern": "hole.{index}.{index}"}, "INVALID_BRACE_RULE_PATTERN"),
+            ({"rightColumnInterfacePattern": "hole.{index:999999d}"}, "INVALID_BRACE_RULE_PATTERN"),
+            ({"diagonalPitchParameterId": "missing"}, "INVALID_BRACE_RULE_PARAMETERS"),
+            ({"diagonalPitchParameterId": "braceTop"}, "INVALID_BRACE_RULE_RANGE"),
+            ({"diagonalPitchParameterId": "wrongUnitPitch"}, "INVALID_BRACE_RULE_UNIT"),
+        ]
+        for changes, expected_code in invalid_cases:
+            with self.subTest(expected_code=expected_code), self.assertRaises(ComponentError) as error:
+                apply_action(document, ComponentAction.validate_python({"type": "brace.rule.set", "rule": {**rule, **changes}}))
+            self.assertEqual(error.exception.code, expected_code)
+
+        invalid_range_data = document.model_dump(by_alias=True)
+        next(item for item in invalid_range_data["parameters"] if item["id"] == "braceBottom")["value"] = 2000
+        invalid_range_document = ComponentDocument.model_validate(invalid_range_data)
+        with self.assertRaises(ComponentError) as error:
+            apply_action(invalid_range_document, ComponentAction.validate_python({"type": "brace.rule.set", "rule": rule}))
+        self.assertEqual(error.exception.code, "INVALID_BRACE_RULE_RANGE")
+
+        legacy_data = document.model_dump(by_alias=True)
+        legacy_data["braceGenerationRules"][0]["horizontalMemberId"] = "removed-member"
+        legacy_document = ComponentDocument.model_validate(legacy_data)
+        self.assertEqual(next(item for item in validate_component(legacy_document) if item["id"] == "brace.rules")["status"], "fail")
+
+        # Updating this rule retains ownership; another rule needs independent
+        # physical prototypes, though they may use the same published templates.
+        document = apply_action(document, ComponentAction.validate_python({"type": "brace.rule.set", "rule": rule}))
+        before = document.model_dump(by_alias=True)
+        with self.assertRaises(ComponentError) as error:
+            apply_action(document, ComponentAction.validate_python({'type': 'brace.rule.set', 'rule': {**rule, 'id': 'second'}}))
+        self.assertEqual(error.exception.code, 'BRACE_RULE_PROTOTYPE_CONFLICT')
+        self.assertEqual(document.model_dump(by_alias=True), before)
+        imported = ComponentDocument.model_validate({**before, 'braceGenerationRules': [rule, {**rule, 'id': 'second'}]})
+        self.assertEqual(next(item for item in validate_component(imported) if item['id'] == 'brace.rules')['status'], 'fail')
+        for identifier in ('horizontal-2', 'diagonal-2'):
+            item = member(identifier)
+            item['interfaces'] = [i.model_dump() for i in document.assembly.members[2].interfaces]
+            document = apply_action(document, ComponentAction.validate_python({'type': 'member.add', 'member': item}))
+        second = {**rule, 'id': 'second', 'horizontalMemberId': 'horizontal-2', 'diagonalMemberId': 'diagonal-2',
+                  'leftColumnInterfacePattern': 'other.{index}', 'rightColumnInterfacePattern': 'other.{index}'}
+        document = apply_action(document, ComponentAction.validate_python({'type': 'brace.rule.set', 'rule': second}))
+        self.assertEqual(next(item for item in validate_component(document) if item['id'] == 'brace.rules')['status'], 'pass')
+        with self.assertRaises(ComponentError) as error:
+            apply_action(document, ComponentAction.validate_python({'type': 'brace.rule.set', 'rule': {**second, 'leftColumnMemberId': 'horizontal'}}))
+        self.assertEqual(error.exception.code, 'BRACE_RULE_MEMBER_ROLE_CONFLICT')
+
     def test_inherited_component_port_preserves_interface_contract(self):
         from backend.app.components.models import ComponentAction
         from backend.app.components.service import apply_action, create_component_document, serialize_component, validate_component
@@ -659,7 +745,7 @@ console.log(JSON.stringify({document:result,checks:validateComponent(result),exp
             self.assertEqual(hashlib.sha256(package.content).hexdigest(), published["sha256"])
             self.assertEqual(len(package.content), published["size"])
             with ZipFile(BytesIO(package.content)) as archive:
-                self.assertEqual(set(archive.namelist()), {"manifest.json", "component.json", "checks.json"})
+                self.assertEqual(set(archive.namelist()), {"manifest.json", "component.json", "checks.json", "qualification.json"})
                 self.assertEqual(json.loads(archive.read("component.json")), published["document"])
                 self.assertEqual(json.loads(archive.read("checks.json")), published["checks"])
 

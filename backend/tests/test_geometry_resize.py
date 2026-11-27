@@ -10,6 +10,7 @@ from backend.app.components.repository import DraftRepository
 from backend.app.components.service import create_component_document, ComponentError
 from backend.app.components.resize_geometry import Geometry, exact_bounds, matrix
 from backend.app.components.resize_solver import ResizeSolver, ResizeFailure
+from backend.app.components.brace_generation import expand_brace_generation_rules
 
 
 class BoxProvider:
@@ -24,6 +25,27 @@ class BoxProvider:
         frames = {id: {'center': np.array([5., 5., z]), 'normal': np.array([0., 0., direction]), 'u': np.array([1., 0., 0.]), 'source': (id,)} for id, z, direction in [('start', 0, -1), ('end', length, 1)]}
         definitions = [{'id': 'length', 'label': '长度', 'unit': 'mm', 'valueType': 'number', 'minimum': 10, 'maximum': 200, 'default': 100, 'allowedValues': []}]
         return Geometry(shape, exact_bounds(shape), frames, interfaces, [], [], definitions)
+
+
+class HoleRowProvider(BoxProvider):
+    """A size-dependent source array whose last occurrence can disappear."""
+    def evaluate(self, reference, parameters):
+        g = super().evaluate(reference, parameters)
+        pitch = parameters.get('pitch', 19.)
+        g.definitions.append({'id': 'pitch', 'label': '孔距', 'unit': 'mm', 'valueType': 'number',
+                              'minimum': 10, 'maximum': 30, 'default': 19, 'allowedValues': []})
+        for index in range(max(0, int(np.floor((parameters['length']-20)/pitch))+1)):
+            id = f'holes.{index+1:03d}'
+            g.frames[id] = {'center': np.array([5., 5., 10+index*pitch]), 'normal': np.array([1., 0., 0.]),
+                            'u': np.array([0., 1., 0.]), 'source': ('holes', 'row', id, ('face',)), 'featureAxis': True}
+            g.interfaces.append({'id': id, 'name': id, 'type': 'axis', 'tags': []})
+            g.resolved.append({'id': id, 'declarationMode': 'featureDerived', 'sourceFeatureRuleId': 'row', 'sourceFeatureId': id})
+        return g
+
+    def generation_margins(self, reference, parameters, occurrences):
+        return {i['id']: np.array([(int(i['id'].split('.')[-1])-1)*parameters.get('pitch', 19.),
+                                   parameters['length']-20-(int(i['id'].split('.')[-1])-1)*parameters.get('pitch', 19.)])
+                for i in occurrences}
 
 
 def member(id, z=0):
@@ -42,6 +64,359 @@ def document(members=None):
 
 
 class ResizeTests(unittest.TestCase):
+    def test_brace_rule_materializes_dynamic_provider_holes_before_expansion(self):
+        d = document()
+        d["parameters"] = [
+            {"id": "height", "label": "高度", "value": 120, "unit": "mm", "min": 100, "max": 1000},
+            {"id": "pitch", "label": "孔距", "value": 20, "unit": "mm", "min": 10, "max": 300},
+            {"id": "bottom", "label": "底部余量", "value": 20, "unit": "mm", "min": 0, "max": 100},
+            {"id": "top", "label": "顶部余量", "value": 0, "unit": "mm", "min": 0, "max": 100},
+        ]
+        def brace_member(identifier):
+            item = member(identifier)
+            item["interfaces"] = [{"id": name, "name": name, "type": "plane", "tags": []} for name in ("left", "right")]
+            item["parameterValues"] = {"length": 80}
+            return item
+        left, right = member("left"), member("right")
+        left["parameterValues"] = right["parameterValues"] = {"length": 120}
+        horizontal, diagonal = brace_member("horizontal"), brace_member("diagonal")
+        d["assembly"] = {"members": [left, right, horizontal, diagonal], "mates": []}
+        d["braceGenerationRules"] = [{
+            "id": "provider-grid", "label": "动态孔列撑杆", "heightParameterId": "height", "pitchParameterId": "pitch",
+            "bottomOffsetParameterId": "bottom", "topClearanceParameterId": "top", "leftColumnMemberId": "left",
+            "rightColumnMemberId": "right", "horizontalMemberId": "horizontal", "diagonalMemberId": "diagonal",
+            "horizontalLeftInterfaceId": "left", "horizontalRightInterfaceId": "right",
+            "diagonalLeftInterfaceId": "left", "diagonalRightInterfaceId": "right",
+            "leftColumnInterfacePattern": "holes.{index:03d}", "rightColumnInterfacePattern": "holes.{index:03d}",
+            "columnInterfaceIndexStart": 1, "columnInterfaceIndexStep": 1, "remainderPolicy": "reject",
+        }]
+        solver = ResizeSolver(d, HoleRowProvider(), {}, {"dimensions": [10, 10, 120]})
+        source = {m["id"]: m for m in solver.document["assembly"]["members"]}
+        self.assertEqual(
+            {item["id"] for item in source["left"]["interfaces"] if item["id"].startswith("holes.")},
+            {f"holes.{index:03d}" for index in range(1, 7)},
+        )
+        self.assertEqual(
+            sum(member.get("generatedBy") == "provider-grid" for member in solver.document["assembly"]["members"]),
+            9,
+        )
+
+    def test_brace_rule_materializes_target_height_through_member_binding(self):
+        d = document()
+        d["parameters"] = [
+            {"id": "height", "label": "高度", "value": 120, "unit": "mm", "min": 100, "max": 1000},
+            {"id": "pitch", "label": "孔距", "value": 20, "unit": "mm", "min": 10, "max": 300},
+            {"id": "bottom", "label": "底部余量", "value": 20, "unit": "mm", "min": 0, "max": 100},
+            {"id": "top", "label": "顶部余量", "value": 0, "unit": "mm", "min": 0, "max": 100},
+        ]
+        def brace_member(identifier):
+            item = member(identifier)
+            item["interfaces"] = [{"id": name, "name": name, "type": "plane", "tags": []} for name in ("left", "right")]
+            item["parameterValues"] = {"length": 80}
+            return item
+        left, right = member("left"), member("right")
+        left["parameterValues"] = right["parameterValues"] = {"length": 120}
+        horizontal, diagonal = brace_member("horizontal"), brace_member("diagonal")
+        d["assembly"] = {"members": [left, right, horizontal, diagonal], "mates": []}
+        d["bindings"] = [
+            {"id": "height-left", "parameterId": "height", "memberId": "left", "memberParameterId": "length"},
+            {"id": "height-right", "parameterId": "height", "memberId": "right", "memberParameterId": "length"},
+        ]
+        d["braceGenerationRules"] = [{
+            "id": "target-grid", "label": "目标高度动态孔列撑杆", "heightParameterId": "height", "pitchParameterId": "pitch",
+            "bottomOffsetParameterId": "bottom", "topClearanceParameterId": "top", "leftColumnMemberId": "left",
+            "rightColumnMemberId": "right", "horizontalMemberId": "horizontal", "diagonalMemberId": "diagonal",
+            "horizontalLeftInterfaceId": "left", "horizontalRightInterfaceId": "right",
+            "diagonalLeftInterfaceId": "left", "diagonalRightInterfaceId": "right",
+            "leftColumnInterfacePattern": "holes.{index:03d}", "rightColumnInterfacePattern": "holes.{index:03d}",
+            "columnInterfaceIndexStart": 1, "columnInterfaceIndexStep": 1, "remainderPolicy": "reject",
+        }]
+        solver = ResizeSolver(d, HoleRowProvider(), {}, {"dimensions": [10, 10, 180]})
+        source = {m["id"]: m for m in solver.document["assembly"]["members"]}
+        self.assertEqual(source["left"]["parameterValues"]["length"], 180)
+        self.assertEqual(
+            {item["id"] for item in source["left"]["interfaces"] if item["id"].startswith("holes.")},
+            {f"holes.{index:03d}" for index in range(1, 10)},
+        )
+        parameters = {leaf["path"]: dict(leaf["member"]["parameterValues"]) for leaf in solver.leaves}
+        transforms = {leaf["path"]: leaf["world"] for leaf in solver.leaves}
+        path = ("left",)
+        measured, frames, _, _ = solver.measure(parameters, transforms)
+        self.assertEqual(measured[path].bounds[1, 2], 180)
+        self.assertTrue(all((path, f"holes.{index:03d}") in frames for index in range(1, 10)))
+        self.assertEqual(
+            sum(member.get("generatedBy") == "target-grid" for member in solver.document["assembly"]["members"]),
+            15,
+        )
+        generated_braces = [member for member in solver.document["assembly"]["members"]
+                            if member.get("generatedBy") == "target-grid"]
+        self.assertTrue(generated_braces)
+        self.assertTrue(all(member["parameterValues"]["length"] == 80 for member in generated_braces))
+        inspected = ResizeSolver(d, HoleRowProvider(), {}, {
+            'inspectOnly': True, 'dimensions': [10, 10, 180], 'design': {'locks': [{'path': ['left']}]},
+        })
+        self.assertEqual(inspected.by_path[('left',)]['member']['parameterValues']['length'], 120)
+        self.assertEqual(next(p['value'] for p in inspected.document['parameters'] if p['id'] == 'height'), 120)
+
+        original = copy.deepcopy(d)
+        for lock in ({'path': ['left']}, {'path': ['left'], 'parameterId': 'length'}):
+            with self.subTest(lock=lock), self.assertRaises(ResizeFailure) as caught:
+                ResizeSolver(d, HoleRowProvider(), {}, {
+                    'dimensions': [10, 10, 180], 'design': {'locks': [lock]},
+                })
+            self.assertEqual(caught.exception.code, 'RESIZE_LOCK_CONFLICT')
+            self.assertEqual(caught.exception.details[0]['before'], 120)
+            self.assertEqual(caught.exception.details[0]['after'], 180)
+        self.assertEqual(d, original)
+
+        binding_driven = copy.deepcopy(d)
+        binding_driven['assembly']['members'][0]['parameterValues']['length'] = 100
+        current_height = ResizeSolver(binding_driven, HoleRowProvider(), {}, {
+            'dimensions': [10, 10, 120], 'design': {'locks': [{'path': ['left']}]},
+        })
+        self.assertEqual(current_height.by_path[('left',)]['member']['parameterValues']['length'], 120)
+        with self.assertRaises(ResizeFailure) as caught:
+            ResizeSolver(binding_driven, HoleRowProvider(), {}, {
+                'dimensions': [10, 10, 180], 'design': {'locks': [{'path': ['left']}]},
+            })
+        self.assertEqual(caught.exception.details[0]['before'], 120)
+
+        # Saved locks apply even when no design override is sent. Unrelated
+        # dimensions remain legal, rather than blocking every column lock.
+        saved = copy.deepcopy(d)
+        saved['geometryDesign'] = {'locks': [{'path': ['left'], 'parameterId': 'length'}]}
+        with self.assertRaises(ResizeFailure) as caught:
+            ResizeSolver(saved, HoleRowProvider(), {}, {'dimensions': [10, 10, 180]})
+        self.assertEqual(caught.exception.code, 'RESIZE_LOCK_CONFLICT')
+        allowed = ResizeSolver(d, HoleRowProvider(), {}, {
+            'dimensions': [10, 10, 180], 'design': {'locks': [{'path': ['left'], 'parameterId': 'pitch'}]},
+        })
+        self.assertEqual(allowed.by_path[('left',)]['member']['parameterValues']['length'], 180)
+
+        # A shortened rule must not silently remove a locked generated rod.
+        expanded = copy.deepcopy(solver.document)
+        top = max((m for m in expanded['assembly']['members'] if m.get('generatedBy') == 'target-grid'),
+                  key=lambda m: m['generatedIndex'])
+        for lock in ({'path': [top['id']]}, {'path': [top['id']], 'parameterId': 'length'}):
+            with self.subTest(removed_lock=lock), self.assertRaises(ResizeFailure) as caught:
+                ResizeSolver(expanded, HoleRowProvider(), {}, {
+                    'dimensions': [10, 10, 120], 'design': {'locks': [lock]},
+                })
+            self.assertEqual(caught.exception.code, 'RESIZE_LOCK_CONFLICT')
+            self.assertEqual(caught.exception.details[0]['path'], [top['id']])
+
+        # A dimension lock allows rigid repositioning. A whole-member lock
+        # preserves the input pose even if CAD seeding proposes another one.
+        from unittest.mock import patch
+        def move_seed(brace, *_args):
+            brace['position'] = [20., 30., 40.]
+            brace['rotation'] = [.1, .2, .3]
+        with patch('backend.app.components.brace_generation._place_brace', side_effect=move_seed):
+            locked = ResizeSolver(d, HoleRowProvider(), {}, {
+                'dimensions': [10, 10, 180], 'design': {'locks': [{'path': ['horizontal']}]},
+            })
+            size_locked = ResizeSolver(d, HoleRowProvider(), {}, {
+                'dimensions': [10, 10, 180], 'design': {'locks': [{'path': ['horizontal'], 'parameterId': 'length'}]},
+            })
+        self.assertEqual(locked.by_path[('horizontal',)]['member']['position'], horizontal['position'])
+        self.assertEqual(locked.by_path[('horizontal',)]['member']['rotation'], horizontal['rotation'])
+        self.assertEqual(size_locked.by_path[('horizontal',)]['member']['position'], [20., 30., 40.])
+
+    def test_brace_rule_rebuilds_fixed_instances_from_hole_grid_without_accumulating(self):
+        d = document()
+        d["parameters"] = [
+            {"id": "height", "label": "高度", "value": 200, "unit": "mm", "min": 100, "max": 1000},
+            {"id": "pitch", "label": "孔距", "value": 100, "unit": "mm", "min": 50, "max": 300},
+            {"id": "bottom", "label": "底部余量", "value": 0, "unit": "mm", "min": 0, "max": 100},
+            {"id": "top", "label": "顶部余量", "value": 0, "unit": "mm", "min": 0, "max": 100},
+        ]
+        def brace_member(identifier):
+            item = member(identifier)
+            item["interfaces"] = [{"id": name, "name": name, "type": "plane", "tags": []} for name in ("left", "right")]
+            item["parameterValues"] = {"length": 80}
+            return item
+        left, right = member("left"), member("right")
+        for column in (left, right):
+            column["interfaces"] = [{"id": f"hole.{index:03d}", "name": "孔位", "type": "axis", "tags": []} for index in range(1, 5)]
+        horizontal, diagonal = brace_member("horizontal"), brace_member("diagonal")
+        d["assembly"] = {"members": [left, right, horizontal, diagonal], "mates": []}
+        d["braceGenerationRules"] = [{
+            "id": "brace-grid", "label": "柱片撑杆", "heightParameterId": "height", "pitchParameterId": "pitch",
+            "bottomOffsetParameterId": "bottom", "topClearanceParameterId": "top", "leftColumnMemberId": "left",
+            "rightColumnMemberId": "right", "horizontalMemberId": "horizontal", "diagonalMemberId": "diagonal",
+            "horizontalLeftInterfaceId": "left", "horizontalRightInterfaceId": "right",
+            "diagonalLeftInterfaceId": "left", "diagonalRightInterfaceId": "right",
+            "leftColumnInterfacePattern": "hole.{index:03d}", "rightColumnInterfacePattern": "hole.{index:03d}",
+            "columnInterfaceIndexStart": 1, "columnInterfaceIndexStep": 1, "remainderPolicy": "reject",
+        }]
+        expand_brace_generation_rules(d)
+        self.assertEqual(sum(m.get("generatedBy") == "brace-grid" for m in d["assembly"]["members"]), 3)
+        self.assertEqual(len(d["assembly"]["mates"]), 10)
+        horizontal_targets = {
+            mate["from"]["memberId"]: mate["to"]["interfaceId"]
+            for mate in d["assembly"]["mates"]
+            if mate["id"].startswith("__brace__brace-grid__horizontal") and mate["from"]["memberId"]
+        }
+        self.assertEqual(
+            {target for member_id, target in horizontal_targets.items() if member_id == "horizontal"},
+            {"hole.001"},
+        )
+        self.assertEqual(
+            {target for member_id, target in horizontal_targets.items() if member_id.endswith("-1")},
+            {"hole.002"},
+        )
+        self.assertEqual(
+            {target for member_id, target in horizontal_targets.items() if member_id.endswith("-2")},
+            {"hole.003"},
+        )
+        snapshot = copy.deepcopy(d["assembly"])
+        expand_brace_generation_rules(d)
+        self.assertEqual(d["assembly"], snapshot)
+        self.assertEqual({m["id"] for m in d["assembly"]["members"] if m.get("generatedBy")},
+                         {"generated-brace-brace-grid-horizontal-1", "generated-brace-brace-grid-horizontal-2",
+                          "generated-brace-brace-grid-diagonal-1"})
+
+        geometry = copy.deepcopy(d)
+        geometry["braceGenerationRules"][0]["connectionMode"] = "geometry"
+        original_mate = {"id": "user-connection", "from": {"memberId": "horizontal", "interfaceId": "left"},
+                         "to": {"memberId": "left", "interfaceId": "hole.001"}, "relation": "贴合", "offset": 0}
+        geometry["assembly"]["mates"].append(original_mate)
+        geometric_relations = expand_brace_generation_rules(geometry)
+        self.assertEqual(geometry["assembly"]["mates"], [original_mate])
+        self.assertEqual(len(geometric_relations), 10)
+        self.assertTrue(all(relation["mode"] == "coincident" for relation in geometric_relations))
+        self.assertTrue(all(relation["a"]["path"] and relation["b"]["interfaceId"].startswith("hole.")
+                            for relation in geometric_relations))
+        self.assertEqual(expand_brace_generation_rules(geometry), geometric_relations)
+        self.assertNotIn("geometryDesign", geometry)
+
+        declared = copy.deepcopy(d)
+        declared["assembly"]["mates"].append(original_mate)
+        expand_brace_generation_rules(declared)
+        self.assertIn(original_mate, declared["assembly"]["mates"])
+        self.assertEqual(len(declared["assembly"]["mates"]), 10)
+        external = {"id": "user-attached-to-top-brace", "from": {"memberId": "generated-brace-brace-grid-horizontal-2", "interfaceId": "left"},
+                    "to": {"memberId": "right", "interfaceId": "hole.004"}, "relation": "贴合", "offset": 0}
+        declared["assembly"]["mates"].append(external)
+        declared["parameters"][0]["value"] = 100
+        expand_brace_generation_rules(declared)
+        self.assertIn(external, declared["assembly"]["mates"])
+        self.assertNotIn("generated-brace-brace-grid-horizontal-2", {m["id"] for m in declared["assembly"]["members"]})
+
+        foreign = brace_member("foreign-generated")
+        foreign["generatedBy"] = "other-rule"
+        d["assembly"]["members"].append(foreign)
+        d["assembly"]["mates"].append({
+            "id": "__brace__other-rule__keep",
+            "from": {"memberId": foreign["id"], "interfaceId": "left"},
+            "to": {"memberId": "left", "interfaceId": "hole.001"},
+            "relation": "贴合", "offset": 0,
+        })
+        foreign_snapshot = copy.deepcopy(foreign)
+        foreign_mate_snapshot = copy.deepcopy(d["assembly"]["mates"][-1])
+        expand_brace_generation_rules(d)
+        self.assertEqual(next(item for item in d["assembly"]["members"] if item["id"] == foreign["id"]), foreign_snapshot)
+        self.assertIn(foreign_mate_snapshot, d["assembly"]["mates"])
+        self.assertEqual(
+            {item["id"] for item in d["assembly"]["members"] if item.get("generatedBy") == "brace-grid"},
+            {"generated-brace-brace-grid-horizontal-1", "generated-brace-brace-grid-horizontal-2", "generated-brace-brace-grid-diagonal-1"},
+        )
+
+        oversized = copy.deepcopy(d)
+        oversized["parameters"][0]["value"] = 1_000_000
+        oversized["parameters"][1]["value"] = 1
+        oversized["braceGenerationRules"][0]["remainderPolicy"] = "top-clearance"
+        oversized['parameters'][0]['max'] = 1_000_000
+        oversized['parameters'][1]['min'] = 1
+        with self.assertRaises(ResizeFailure) as error:
+            expand_brace_generation_rules(oversized)
+        self.assertEqual(error.exception.code, "RESIZE_RESOURCE_LIMIT")
+
+        collision = copy.deepcopy(d)
+        next(item for item in collision["assembly"]["members"]
+             if item["id"] == "generated-brace-brace-grid-horizontal-1").pop("generatedBy")
+        with self.assertRaises(ResizeFailure) as error:
+            expand_brace_generation_rules(collision)
+        self.assertEqual(error.exception.code, "BRACE_RULE_MEMBER_COLLISION")
+
+    def test_brace_rule_rejects_non_modular_height(self):
+        d = document()
+        d["parameters"] = [
+            {"id": "height", "label": "高度", "value": 250, "unit": "mm", "min": 100, "max": 1000},
+            {"id": "pitch", "label": "孔距", "value": 100, "unit": "mm", "min": 50, "max": 300},
+            {"id": "bottom", "label": "底部余量", "value": 0, "unit": "mm", "min": 0, "max": 100},
+            {"id": "top", "label": "顶部余量", "value": 0, "unit": "mm", "min": 0, "max": 100},
+        ]
+        d["braceGenerationRules"] = [{"id": "invalid", "heightParameterId": "height", "pitchParameterId": "pitch",
+            "bottomOffsetParameterId": "bottom", "topClearanceParameterId": "top"}]
+        with self.assertRaises(ResizeFailure) as error:
+            expand_brace_generation_rules(d)
+        self.assertEqual(error.exception.code, "BRACE_RULE_INVALID")
+
+    def test_brace_rule_diagonal_spans_multiple_hole_pitches(self):
+        d = document()
+        d["parameters"] = [
+            {"id": "height", "label": "高度", "value": 400, "unit": "mm", "min": 100, "max": 1000},
+            {"id": "pitch", "label": "孔距", "value": 100, "unit": "mm", "min": 50, "max": 300},
+            {"id": "bottom", "label": "底部余量", "value": 0, "unit": "mm", "min": 0, "max": 100},
+            {"id": "top", "label": "顶部余量", "value": 0, "unit": "mm", "min": 0, "max": 100},
+        ]
+        columns = [member("left"), member("right")]
+        for column in columns:
+            column["interfaces"] = [
+                {"id": f"hole.{index:03d}", "name": "孔位", "type": "axis", "tags": []}
+                for index in range(1, 6)
+            ]
+        def brace_member(identifier):
+            item = member(identifier)
+            item["interfaces"] = [{"id": name, "name": name, "type": "plane", "tags": []} for name in ("left", "right")]
+            item["parameterValues"] = {"length": 80}
+            return item
+        horizontal, diagonal = brace_member("horizontal"), brace_member("diagonal")
+        d["assembly"] = {"members": [*columns, horizontal, diagonal], "mates": []}
+        d["braceGenerationRules"] = [{
+            "id": "stepped-grid", "heightParameterId": "height", "pitchParameterId": "pitch",
+            "bottomOffsetParameterId": "bottom", "topClearanceParameterId": "top",
+            "leftColumnMemberId": "left", "rightColumnMemberId": "right",
+            "horizontalMemberId": "horizontal", "diagonalMemberId": "diagonal",
+            "horizontalLeftInterfaceId": "left", "horizontalRightInterfaceId": "right",
+            "diagonalLeftInterfaceId": "left", "diagonalRightInterfaceId": "right",
+            "leftColumnInterfacePattern": "hole.{index:03d}", "rightColumnInterfacePattern": "hole.{index:03d}",
+            "columnInterfaceIndexStart": 1, "columnInterfaceIndexStep": 2,
+            "diagonalColumnInterfaceIndexStep": 2, "remainderPolicy": "reject",
+        }]
+        expand_brace_generation_rules(d)
+        diagonal_mates = [mate for mate in d["assembly"]["mates"] if "__diagonal__" in mate["id"]]
+        self.assertEqual(len(diagonal_mates), 4)
+        horizontal_mates = [mate for mate in d["assembly"]["mates"] if "__horizontal__" in mate["id"] and mate["id"].endswith("__left")]
+        self.assertEqual({mate["to"]["interfaceId"] for mate in horizontal_mates}, {"hole.001", "hole.003", "hole.005"})
+        generated_horizontal = next(item for item in d["assembly"]["members"]
+                                    if item.get("generatedBy") == "stepped-grid" and "horizontal" in item["id"])
+        self.assertEqual(generated_horizontal["position"][2], 200)
+        self.assertEqual(
+            {(mate["from"]["memberId"], mate["to"]["interfaceId"]) for mate in diagonal_mates if mate["id"].endswith("__left")},
+            {("diagonal", "hole.001"), ("generated-brace-stepped-grid-diagonal-1", "hole.003")},
+        )
+        generated_diagonal = next(item for item in d["assembly"]["members"] if item.get("generatedBy") == "stepped-grid" and "diagonal" in item["id"])
+        self.assertEqual(generated_diagonal["position"][2], 200)
+        self.assertEqual(generated_diagonal["parameterValues"]["length"], 80)
+
+        too_short = copy.deepcopy(d)
+        too_short["parameters"][0]["value"] = 200
+        too_short["braceGenerationRules"][0]["diagonalColumnInterfaceIndexStep"] = 3
+        with self.assertRaises(ResizeFailure) as error:
+            expand_brace_generation_rules(too_short)
+        self.assertEqual(error.exception.code, "BRACE_RULE_TOO_SHORT")
+        self.assertEqual(error.exception.details, [{"minimumHeight": 300}])
+
+        for field, value in (("columnInterfaceIndexStep", 1.5), ("columnInterfaceIndexStart", True),
+                             ("diagonalColumnInterfaceIndexStart", 10001)):
+            invalid = copy.deepcopy(d)
+            invalid["braceGenerationRules"][0][field] = value
+            with self.subTest(field=field), self.assertRaises(ResizeFailure) as error:
+                expand_brace_generation_rules(invalid)
+            self.assertEqual(error.exception.code, "BRACE_RULE_RANGE_INVALID")
+
     def test_single_member_changes_geometry_not_mesh_scale(self):
         original = document(); snapshot = copy.deepcopy(original)
         result = ResizeSolver(original, BoxProvider(), {}, {'dimensions': [10, 10, 150]}).solve()
@@ -151,6 +526,70 @@ class ResizeTests(unittest.TestCase):
         with self.assertRaises(ResizeFailure) as raised:
             ResizeSolver(document(), Changing(), {}, {'dimensions': [10, 10, 150]}).solve()
         self.assertEqual(raised.exception.code, 'RESIZE_INTERFACE_MISSING')
+
+    def test_shrink_can_remove_only_unused_generated_occurrences(self):
+        source = document(); before = copy.deepcopy(source)
+        result = ResizeSolver(source, HoleRowProvider(), {}, {'dimensions': [10, 10, 80]}).solve()
+        ids = {i['id'] for i in result['document']['assembly']['members'][0]['interfaces']}
+        self.assertNotIn('holes.005', ids)
+        self.assertIn('end', ids)
+        self.assertEqual(source, before)
+
+    def test_shrink_adjusts_pitch_to_keep_exported_occurrence(self):
+        source = document()
+        source['ports'][0]['source']['interfaceId'] = 'holes.005'
+        result = ResizeSolver(source, HoleRowProvider(), {}, {'dimensions': [10, 10, 80]}).solve()
+        member = result['document']['assembly']['members'][0]
+        self.assertLess(member['parameterValues']['pitch'], 15)
+        self.assertEqual(result['document']['ports'][0]['interface']['id'], 'holes.005')
+        self.assertTrue(np.allclose(result['dimensions'], [10, 10, 80], atol=.1))
+
+    def test_locked_pitch_cannot_silently_drop_exported_occurrence(self):
+        source = document(); source['ports'][0]['source']['interfaceId'] = 'holes.005'
+        before = copy.deepcopy(source)
+        with self.assertRaises(ResizeFailure):
+            ResizeSolver(source, HoleRowProvider(), {}, {'dimensions': [10, 10, 80],
+                'design': {'locks': [{'path': ['a'], 'parameterId': 'pitch'}]}}).solve()
+        self.assertEqual(source, before)
+
+    def test_unoccupied_slot_still_protects_its_base_occurrence(self):
+        source = document()
+        source['slots'] = [{'id': 'future', 'name': '预留槽位', 'memberId': None, 'interfaceId': None,
+                            'required': False, 'baseInterface': {'memberId': 'a', 'interfaceId': 'holes.005'}}]
+        result = ResizeSolver(source, HoleRowProvider(), {}, {'dimensions': [10, 10, 80]}).solve()
+        member = result['document']['assembly']['members'][0]
+        self.assertLess(member['parameterValues']['pitch'], 15)
+        self.assertIn('holes.005', {i['id'] for i in member['interfaces']})
+
+    def test_missing_connected_occurrence_reports_member_and_interface(self):
+        class Missing(HoleRowProvider):
+            def evaluate(self, reference, parameters):
+                g = super().evaluate(reference, parameters)
+                if parameters['length'] < 90: g.frames.pop('holes.001', None)
+                return g
+        source = document()
+        relation = {'id': 'connection', 'a': {'path': ['a'], 'interfaceId': 'holes.001'},
+                    'b': {'path': ['b'], 'interfaceId': 'holes.001'}, 'mode': 'preserve-offset',
+                    'origin': 'user', 'offset': [30, 0, 0]}
+        source['assembly']['members'].append({**member('b'), 'position': [30, 0, 0]})
+        before = copy.deepcopy(source)
+        with self.assertRaises(ResizeFailure) as raised:
+            ResizeSolver(source, Missing(), {}, {'dimensions': [40, 10, 80], 'design': {'relations': [relation]}}).solve()
+        self.assertEqual(raised.exception.code, 'RESIZE_NO_SOLUTION')
+        self.assertEqual(raised.exception.details[0]['interfaceId'], 'holes.001')
+        self.assertIn('a', raised.exception.details[0]['path'])
+        self.assertEqual(source, before)
+
+    def test_unused_generated_occurrence_cannot_change_source(self):
+        class Changing(HoleRowProvider):
+            def evaluate(self, reference, parameters):
+                g = super().evaluate(reference, parameters)
+                if parameters['length'] < 90: g.frames['holes.001']['source'] = ('another-source',)
+                return g
+        with self.assertRaises(ResizeFailure) as raised:
+            ResizeSolver(document(), Changing(), {}, {'dimensions': [10, 10, 80]}).solve()
+        self.assertEqual(raised.exception.code, 'RESIZE_INTERFACE_MISSING')
+        self.assertEqual(raised.exception.details[0]['interfaceId'], 'holes.001')
 
     def test_atomic_revision_and_export(self):
         with tempfile.TemporaryDirectory() as directory:

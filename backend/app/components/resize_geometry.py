@@ -85,6 +85,47 @@ class CadProvider:
         self.templates = templates
         self.cache = {}
         self.lock = RLock()
+        self.include_hull = True
+
+    def generation_margins(self, reference, parameters, occurrences):
+        """Continuous source-rule bounds for retained linear-array occurrences.
+
+        Evaluate the original occurrence even when the new integer count omits it.
+        These guide optimization only; full CAD still verifies count and identity.
+        """
+        from template_core import TemplateDraft
+        from template_core.rules import evaluate_expression, resolve_parameters
+        data, material = self.templates[(reference["publicationId"], reference["sha256"])]
+        draft = TemplateDraft.model_validate(data)
+        external = {name: material.get(name, {}) for name in ("product", "component", "projectZone", "standard")}
+        external["material"] = material.get("record", material)
+        values, _, diagnostics = resolve_parameters(draft.parameterDefinitions, parameters, external)
+        if any(d.severity == "error" for d in diagnostics):
+            raise GeometryFailure("接口生成参数无效")
+        rules = {r.id: r for r in draft.featureRules}
+        faces = {f.id: f for f in draft.geometryRecipe.semanticFaces}
+        margins = {}
+        for occurrence in occurrences:
+            rule = rules.get(occurrence.get("sourceFeatureRuleId"))
+            refs = occurrence.get("geometryRefs", [])
+            face = faces.get(refs[0]) if len(refs) == 1 else None
+            if not rule or not rule.enabled or rule.placement.mode != "linearArray" or face is None:
+                continue
+            prefix = f"{rule.id}.{face.id.replace('.', '_')}."
+            feature_id = occurrence.get("sourceFeatureId") or ""
+            suffix = feature_id.removeprefix(prefix)
+            if not feature_id.startswith(prefix) or not suffix.isdigit() or int(suffix) < 1:
+                continue
+            index = int(suffix)-1
+            context = {**external, **values, **{d.id: values[d.parameterId] for d in rule.profileDimensions}}
+            context.update({rule.indexVariable: index, "count": evaluate_expression(rule.countExpression, context)})
+            placement = rule.placement
+            start = float(evaluate_expression(placement.startMarginExpression, context))
+            end = float(evaluate_expression(placement.endMarginExpression, context))
+            span = float(evaluate_expression(face.uSpanExpression if placement.axis == "u" else face.vSpanExpression, context))
+            offset = index * float(evaluate_expression(placement.pitchExpression, context))
+            margins[occurrence["id"]] = np.array([offset, span-start-end-offset])
+        return margins
 
     def probe(self, reference, parameters):
         """Linearization only. Final acceptance always rebuilds every CAD operation.
@@ -104,7 +145,10 @@ class CadProvider:
         key = (reference["publicationId"], reference["sha256"], hashlib.sha256(json.dumps(parameters, sort_keys=True).encode()).hexdigest())
         with self.lock:
             if key in self.cache:
-                return self.cache[key]
+                result = self.cache[key]
+                if self.include_hull and result.hull is None:
+                    result.hull = self._hull(result.shape)
+                return result
             draft, material = self.templates[key[:2]]
             definitions = editable_parameters(draft)
             for definition in definitions:
@@ -251,8 +295,12 @@ class CadProvider:
                     "source": (occurrence["sourceInterfaceId"], occurrence.get("sourceFeatureRuleId"), occurrence.get("sourceFeatureId"), tuple(refs))}
             except (RuntimeError, ValueError) as error:
                 diagnostics.append({"severity": "warning", "code": "RESIZE_FRAME_UNRESOLVED", "message": f'{occurrence["id"]}: {error}'})
-        # A tight convex support cloud accelerates trial rotations. It is never
-        # the acceptance measurement: the solver rechecks AddOptimal on full CAD.
+        return Geometry(shape, exact_bounds(shape), frames, interfaces, resolved, diagnostics, definitions,
+                        self._hull(shape) if self.include_hull else None)
+
+    @staticmethod
+    def _hull(shape):
+        # Only resize optimization needs this mesh; inspection measures the exact CAD.
         from OCP.BRepMesh import BRepMesh_IncrementalMesh
         from OCP.BRep import BRep_Tool
         from OCP.TopAbs import TopAbs_FACE
@@ -275,4 +323,4 @@ class CadProvider:
         if vertices:
             points = np.unique(np.round(vertices, 8), axis=0)
             hull = points[ConvexHull(points).vertices]
-        return Geometry(shape, exact_bounds(shape), frames, interfaces, resolved, diagnostics, definitions, hull)
+        return hull

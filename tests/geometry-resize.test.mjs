@@ -57,3 +57,14 @@ test('发布组件的两份实例覆盖互不污染发布源', () => {
   assert.equal(resolveComponentComposition(right.instanceDocument || document)[0].parameterValues.length, 150);
   assert.equal(document.assembly.members[0].parameterValues.length, 150);
 });
+
+test('导出保留自动撑杆所属规则和序号，旧成员不增加生成标记', () => {
+  const document = fixture();
+  const generated = { ...structuredClone(document.assembly.members[0]), id: 'generated-brace-grid-1', generatedBy: 'grid', generatedIndex: 1 };
+  document.assembly.members.push(generated);
+  const output = JSON.parse(serializeComponent(document));
+  assert.equal(output.stages.assembly.members[1].generatedBy, 'grid');
+  assert.equal(output.stages.assembly.members[1].generatedIndex, 1);
+  assert.equal('generatedBy' in output.stages.assembly.members[0], false);
+  assert.equal('generatedIndex' in output.stages.assembly.members[0], false);
+});

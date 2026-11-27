@@ -13,6 +13,8 @@ from starlette.responses import JSONResponse
 
 from ..components.service import ComponentError
 from ..library import LibraryError
+from .authoring import AUTHORING_INSTRUCTIONS
+from .authoring import AUTHORING_INSTRUCTIONS
 
 
 def tool_result(body: dict, *, error: bool = False) -> CallToolResult:
@@ -62,12 +64,16 @@ def create_mcp(owner: FastAPI, public_base_url: str) -> FastMCP:
     base = urlsplit(public_base_url)
     if base.scheme not in ("http", "https") or not base.hostname or base.username or base.password or base.query or base.fragment or base.path.rstrip("/"):
         raise ValueError("COMPONENT_PUBLIC_BASE_URL must be an http(s) origin")
-    mcp = FastMCP(
-        "组件模板平台", instructions="查询已发布零部件和组件；创建和编辑与网页共享的组件草稿。修改已有草稿必须使用 expectedRevision。"
+    instructions = (
+        "查询已发布零部件和组件；创建和编辑与网页共享的组件草稿。所有写操作使用 expectedRevision。"
         "网页手动编辑优先；Agent 写入使用精确修订检查。冲突后重新读取并核对，不得自动换用最新修订覆盖用户输入。"
         "Agent 修改在网页同步并展示前后差异。支持完整草稿动作、固定版本成员加入、真实CAD贴地和接口对齐、"
-        "几何试算/应用/撤销、正式发布及发布库维护。试算不修改草稿，应用需明确确认预览；规则仍仅保存说明，不执行表达式。"
-        "发布、清理、恢复会修改共享存储；发布库同步包含自动旧包备份清理，调用前核对用户意图。",
+        "几何试算/应用/撤销、正式发布及发布库维护。试算不修改草稿，应用需明确确认预览。"
+        "发布、清理、恢复会修改共享存储；发布库同步包含自动旧包备份清理，调用前核对用户意图。\n"
+        + AUTHORING_INSTRUCTIONS
+    )
+    mcp = FastMCP(
+        "组件模板平台", instructions=instructions,
         json_response=True, stateless_http=True,
         transport_security=TransportSecuritySettings(
             enable_dns_rebinding_protection=True,

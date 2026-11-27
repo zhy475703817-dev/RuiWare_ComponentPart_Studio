@@ -81,7 +81,7 @@ def register(mcp, app, invoke):
 
     @mcp.tool(annotations=readonly, structured_output=False)
     async def component_get_template_preview(publicationId: str, sha256: Annotated[str, Field(pattern=SHA256)]) -> CallToolResult:
-        """校验固定发布版本并读取参数、原始接口契约及 STL 地址；仅为预览，不加入装配或重建模型。"""
+        """AI选型时先读取固定发布版本的真实参数和接口契约，确认可调范围及连接来源再装配；返回STL预览地址，不加入装配，不代表CAD联动已验证。"""
         async def get():
             cached = await read_preview(app.state.http, app.state.settings, app.state.preview_cache, publicationId, sha256,
                                         storage=getattr(app.state, "published_storage", None),
