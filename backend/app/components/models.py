@@ -364,9 +364,50 @@ class ComponentDefinition(ComponentModel):
         if sum(item.size for item in self.evidenceFiles) > 15 * 1024 * 1024:
             raise ValueError("Evidence files exceed the 15 MB total limit")
         return self
+class ComponentGroup(ComponentModel):
+    id: str = Field(min_length=1, max_length=200)
+    name: str = Field(min_length=1, max_length=200)
+    memberIds: list[str] = Field(min_length=1, max_length=10000)
+    parentId: str | None = None
+
+    @model_serializer(mode="wrap")
+    def preserve_optional_parent(self, handler):
+        data = handler(self)
+        if self.parentId is None:
+            data.pop("parentId", None)
+        return data
+
+
 class Assembly(ComponentModel):
     members: list[ComponentMember]
     mates: list[Mate]
+    groups: list[ComponentGroup] = Field(default_factory=list, max_length=10000)
+
+    @model_serializer(mode="wrap")
+    def preserve_legacy_assembly(self, handler):
+        data = handler(self)
+        if "groups" not in self.model_fields_set:
+            data.pop("groups", None)
+        return data
+
+    @model_validator(mode="after")
+    def validate_groups(self):
+        member_ids = {item.id for item in self.members}
+        groups = {group.id: group for group in self.groups}
+        if len(groups) != len(self.groups) or member_ids.intersection(groups):
+            raise ValueError("Selection group IDs must be unique")
+        for group in self.groups:
+            if len(set(group.memberIds)) != len(group.memberIds) or not set(group.memberIds).issubset(member_ids):
+                raise ValueError("Invalid selection group member reference")
+            visited = {group.id}
+            current = group
+            while current.parentId is not None:
+                parent = groups.get(current.parentId)
+                if parent is None or parent.id in visited or not set(current.memberIds).issubset(parent.memberIds):
+                    raise ValueError("Invalid selection group hierarchy")
+                visited.add(parent.id)
+                current = parent
+        return self
 
 
 class GeometryEndpoint(ComponentModel):

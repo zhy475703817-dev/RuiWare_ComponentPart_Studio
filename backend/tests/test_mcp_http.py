@@ -88,6 +88,19 @@ class MCPHTTPTests(unittest.TestCase):
                     reread = await session.call_tool("component_get_draft", {"draftId": draft["draftId"]})
                     self.assertEqual(reread.structuredContent["document"]["parameters"][0]["value"], 4100)
                     self.assertEqual(reread.structuredContent["document"]["revision"], 4)
+                    batch = await session.call_tool("component_apply_actions", {
+                        "draftId": draft["draftId"], "expectedRevision": 4,
+                        "actions": [
+                            {"type": "slot.add", "slot": {"id": "http-slot", "name": "安装位", "required": False, "memberId": None}},
+                            {"type": "rule.add", "rule": {"id": "http-rule", "expression": "仅记录说明"}},
+                        ],
+                    })
+                    self.assertFalse(batch.isError, batch)
+                    self.assertEqual(batch.structuredContent['document']['revision'], 5)
+                    page = (await transport.get(base + f"/api/component-drafts/{draft['draftId']}?afterRevision=4")).json()
+                    self.assertEqual(page['document']['slots'][0]['name'], '安装位')
+                    self.assertEqual(page['changes'][0]['actor'], 'agent')
+                    self.assertEqual(len(page['changes']), 1)
 
 
 if __name__ == "__main__":

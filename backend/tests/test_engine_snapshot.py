@@ -250,6 +250,21 @@ class AvailabilityTests(unittest.TestCase):
         self.assertEqual(invalid.status_code, 422)
         resolve.assert_not_called()
 
+    @patch("backend.app.reconstruction.resolved_interfaces")
+    def test_reconstruction_rejects_numeric_discrete_values_before_resolving_interfaces(self, resolve):
+        length = next(item for item in self.draft['parameterDefinitions'] if item['id'] == 'length')
+        length['allowedValues'] = [1200, 1500]
+        length['default'] = 1200
+        resolve.return_value = ([], [])
+        url = f"/api/published-templates/version-1/reconstruction?sha256={self.publication.sha256}&parameters="
+        rejected = self.client.get(url + json.dumps({'length': 1000}))
+        self.assertEqual(rejected.status_code, 422, rejected.text)
+        self.assertEqual(rejected.json()['error']['code'], 'PARAMETER_INVALID')
+        resolve.assert_not_called()
+        resolve.return_value = ([], [])
+        accepted = self.client.get(url + json.dumps({'length': 1200}))
+        self.assertEqual(accepted.status_code, 200, accepted.text)
+
 
 if __name__ == "__main__":
     unittest.main()

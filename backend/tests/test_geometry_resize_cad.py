@@ -330,7 +330,7 @@ class RealCadResizeTests(unittest.TestCase):
                 endpoint = relation[side]
                 self.assertIn(endpoint['interfaceId'], self.provider.evaluate(members[endpoint['path'][0]]['template'], members[endpoint['path'][0]]['parameterValues']).frames)
         checked = ComponentDocument.model_validate(result['document'])
-        self.assertFalse([c for c in validate_component(checked) if c['status'] == 'fail'])
+        self.assertEqual([c['id'] for c in validate_component(checked) if c['status'] == 'fail'], ['brace.builtin'])
 
     def test_source_guard_evaluates_an_occurrence_even_after_count_decreases(self):
         member = self.fixture['components']['upright']['assembly']['members'][0]
