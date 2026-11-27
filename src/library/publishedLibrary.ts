@@ -110,6 +110,55 @@ export async function fetchAvailableTemplates(signal: AbortSignal, onUpdate?: (i
 
 export const publicationKey = (item: PublishedTemplate) => `${item.templateKind || "part"}:${item.publicationId}`;
 
+export const libraryCategories = [
+  ["load-bearing", "承载骨架"], ["stabilizing", "稳定与支撑"], ["connector", "连接件"],
+  ["fastener", "标准紧固件"], ["foundation", "基础与调节"], ["surface", "承载面与围护"], ["accessory", "功能附件"],
+] as const;
+
+export type LibraryCategory = typeof libraryCategories[number][0];
+const libraryCategoryKeys = new Set<string>(libraryCategories.map(([key]) => key));
+
+export function classifyPublishedTemplate(item: PublishedTemplate): { category: LibraryCategory; categoryLabel: string; characteristic: string } {
+  const text = `${item.name} ${item.code}`.toLocaleLowerCase();
+  const category: LibraryCategory = /螺栓|螺母|垫圈|销钉|锚栓|bolt|nut|washer/.test(text) ? "fastener"
+    : /底板|底座|地脚|调节脚|base.?plate|foundation/.test(text) ? "foundation"
+      : /连接板|连接件|挂钩|挂爪|柱抓|拼接|隔套|connector|hook|claw/.test(text) ? "connector"
+        : /层板|托盘|面板|背板|网片|shelf|panel/.test(text) ? "surface"
+          : /斜撑|横撑|连接杆|拉杆|支撑|brace|link.?rod/.test(text) ? "stabilizing"
+            : /立柱|横梁|梁|柱|upright|beam|column/.test(text) ? "load-bearing" : "accessory";
+  const characteristic = item.templateKind === "component" ? "可复用组件"
+    : /[Ωω]\s*型|omega/.test(text) ? "Ω 型材"
+      : /c\s*型|c型/.test(text) ? "C 型材"
+        : /u\s*型|u型/.test(text) ? "U 型材"
+          : /z\s*型|z型/.test(text) ? "Z 型材"
+            : /矩管|方管|tube/.test(text) ? "矩形管"
+              : /圆管/.test(text) ? "圆管"
+                : /角铁|角钢|l\s*型|l型/.test(text) ? "角型材"
+                  : /板/.test(text) ? "板件" : /型材|冷弯/.test(text) ? "冷弯型材" : "未标注";
+  return { category, categoryLabel: libraryCategories.find(([key]) => key === category)![1], characteristic };
+}
+
+export function parseStoredPublicationKeys(value: string | null): string[] {
+  if (!value) return [];
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return Array.isArray(parsed) ? [...new Set(parsed.filter(item => typeof item === "string" && item.length <= 256))].slice(0, 50) : [];
+  } catch { return []; }
+}
+
+export function parseStoredClassifications(value: string | null): Record<string, LibraryCategory> {
+  if (!value) return {};
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (!isRecord(parsed)) return {};
+    return Object.fromEntries(Object.entries(parsed).filter(([key, category]) => key.length <= 256 && libraryCategoryKeys.has(String(category)))) as Record<string, LibraryCategory>;
+  } catch { return {}; }
+}
+
+export function pendingPublishedTemplates(items: PublishedTemplate[], classifications: Record<string, LibraryCategory>): PublishedTemplate[] {
+  return items.filter(item => (item.templateKind || "part") === "part" && classifications[publicationKey(item)] === undefined);
+}
+
 export async function fetchReusableTemplates(signal: AbortSignal, onUpdate: (items: PublishedTemplate[]) => void): Promise<PublishedTemplate[]> {
   let parts: PublishedTemplate[] = [], components: PublishedTemplate[] = [];
   const merged = () => [...parts, ...components].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
