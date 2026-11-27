@@ -26,6 +26,8 @@ backend/app/library_sync.py       后台增量同步、模型准入及缓存列�
 backend/app/preview.py            包下载校验、安全 ZIP 读取、模型缓存和预览路由
 backend/app/main.py               FastAPI 入口、生命周期、健康检查、静态页面
 backend/app/components/           共享工程模型、编辑/验证/导出、SQLite 修订事务、REST
+backend/app/components/assembly.py  固定发布成员导入、复制、真实 CAD 贴地与连接组对齐
+backend/app/components/geometry_sources.py  装配和几何试算共用的固定版本 CAD 输入加载
 backend/app/mcp/                  官方 MCP SDK Streamable HTTP 入口及业务工具
 src/app/sharedDraft.ts            共享草稿请求、串行保存、乐观显示、轮询和冲突恢复
 src/app/AgentChanges.tsx           Agent 来源提示、修订记录、中文字段前后差异
@@ -54,7 +56,7 @@ FastAPI 提供 `/api/health`、`/api/published-templates`、兼容 STL 预览接
 | parameters | ParametersStage | 编辑数值，显示范围与绑定数据 |
 | rules | RulesStage | 编辑规则说明 |
 | validation | ValidationStage | 显示当前草稿修订对应的基础检查及待接入检查 |
-| publish | PublishStage | 汇总检查结果并导出草稿 |
+| publish | PublishStage | 汇总检查结果、导出草稿并发布组件版本 |
 
 阶段只是编辑视角。切换阶段不修改工程数据，也不表示该阶段已完成。
 
@@ -76,11 +78,15 @@ FastAPI 提供 `/api/health`、`/api/published-templates`、兼容 STL 预览接
 
 ## 验证与导出
 
-`validateComponent(document)` 每次对当前文档计算 `pass / fail / pending`。基础数据检查不能证明几何可装配或规则满足，装配求解和规则执行目前固定为 pending。
+`validateComponent(document)` 每次对当前文档计算 `pass / fail / pending`。基础数据检查不能证明几何可装配或规则满足；真实 CAD 几何联动应用且 verified 后，几何检查可通过，规则执行仍为 pending。
 
 网页保存完成后的检查与导出使用后端 `validate_component` / `serialize_component`，保存期间使用前端纯函数显示预检查；两者受共享文档兼容测试约束。`sharedDraft` 控制器串行保存，空闲时读取 AI 修改并持续展示前后差异，保存响应中的 Agent 变更同样进入提示。SQLite 在同一事务记录来源和差异；用户旧修订写入只在全部中间修订均来自 Agent 时重放该动作，实现同字段用户优先、其他字段保留。MCP 仍使用精确修订检查；其他用户窗口冲突、历史不全、重置和对象删除不会自动合并。保存失败时保留本地投影，可下载本地副本，显式重新读取才放弃未保存内容。草稿选择保存在 URL `?draft=` 与 localStorage，工程数据保存在后端。
 
 MCP `/mcp` 与 REST 共用 `DraftRepository`、HTTP 客户端和预览缓存，MCP 会话管理器由 FastAPI lifespan 启停。预览通过显式 `client/settings/cache` 参数复用，不依赖虚构的 HTTP Request。MCP 工具不会模拟浏览器点击，模型返回固定发布哈希的绝对下载 URL。详见 [MCP 接入](MCP.md)。
+
+MCP 当前提供 66 个工具，按草稿、完整编辑动作、装配、发布库和维护拆分注册。原子批量动作、CAD 自动放置/对齐都复用后端动作验证，并在一次 SQLite 事务中保存一个修订。几何应用/撤销也接收服务入口指定的 actor；MCP 统一记为 agent，REST 记为 user，网页差异和用户优先合并覆盖两类路径。MCP 统一入口为所有草稿编辑结果附加当前修订制作检查，选型工具复用参数重建接口，不依赖旧 STL。清理工具复用 REST 业务处理与原有备份/引用/审计保护，并把 HTTP 失败及部分清理失败映射为结构化 MCP 错误。
+
+发布门槛由当前修订的自动制作验收证据控制；包内 qualification.json 绑定文档及配置哈希。发布回读同时返回 qualification、参考附件和 readiness，区分模板可复用与工程验算完成。参考附件经同一事务校验后打包到可选 evidence.json，旧包缺附件或证据仍可读取但不会宣称交付齐全。完整 MCP 制作、验收、发布和嵌套复用通过真实 CAD 集成测试，见 docs/MCP.md 的 Agent 工作流。
 
 `serializeComponent(document)` 保留 `component-1.0` 的 `name`、`stages.definition`、`stages.assembly`、`stages.ports`、参数值、规则及验证主体结构。增加修订、完整版本引用、结构化引用、参数定义、槽位和绑定。旧连接字符串仍导出，新增读取方应使用 `fromRef/toRef` 以避免含点号标识的歧义。旧接口的 `sourceMemberId/sourceInterfaceId` 字段保留。
 
@@ -88,6 +94,6 @@ MCP `/mcp` 与 REST 共用 `DraftRepository`、HTTP 客户端和预览缓存，M
 
 ## 下一步扩展位置
 
-发布包完整性与兼容 STL 预览位于 `backend/app/preview.py`，本地重建位于 `backend/app/reconstruction.py`，固定 CAD 引擎快照位于 `backend/engine/`；前端 `library` 管理参数、请求取消和共享模型缓存。零件实例位置按实际包围盒计算，不更改几何本身；画布上的参数失败会保留上一次可用几何。接口连接目前只记录关系，不执行几何约束求解；原始接口契约保留在发布定义中，不能用接口名称推断装配位置。
+发布包完整性与兼容 STL 预览位于 `backend/app/preview.py`，本地重建位于 `backend/app/reconstruction.py`，固定 CAD 引擎快照位于 `backend/engine/`；前端 `library` 管理参数、请求取消和共享模型缓存。零件实例位置按实际包围盒计算，不更改几何本身；画布上的参数失败会保留上一次可用几何。记录连接关系、自动对齐和完整几何联动是独立操作；原始接口契约保留在发布定义中，不能用接口名称推断装配位置。
 
-真实模型已接入 `viewport`。成员变换、接口求解、参数求值属于工程能力，应通过工作台协调和领域操作写回数据。正式发布另接发布服务，不用本地 JSON 下载代替发布。
+真实模型已接入 `viewport`。MCP 装配操作使用同一固定 CAD 引擎读取真实边界和明确接口定位，贴地和连接组整体变换以修订检查原子保存；缺少真实接口来源时拒绝猜测。正式发布已通过 ComponentPublications 接入共享存储，与本地 JSON 导出独立；规则执行尚未实现。

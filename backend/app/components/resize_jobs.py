@@ -356,22 +356,22 @@ class ResizeJobs:
                     design_key(brace_mode_document(job["before"], body.get('autoFillBraces')), body.get("design")), body["dimensions"], {**job["error"], "message": job["message"]})
 
     @serialized
-    def apply(self, draft_id, body):
+    def apply(self, draft_id, body, *, actor="user"):
         job = self.get(draft_id, body.jobId)
         if job["status"] != "ready" or "document" not in job.get("result", {}):
             raise ComponentError(409, "RESIZE_PREVIEW_UNAVAILABLE")
         if body.expectedRevision != job["expectedRevision"] or body.checksum != job["result"]["checksum"]:
             raise ComponentError(409, "RESIZE_PREVIEW_MISMATCH")
-        result = self.app.state.drafts.replace_geometry(draft_id, body.expectedRevision, job["result"]["document"], history={"jobId": body.jobId, "checksum": body.checksum})
+        result = self.app.state.drafts.replace_geometry(draft_id, body.expectedRevision, job["result"]["document"], history={"jobId": body.jobId, "checksum": body.checksum}, actor=actor)
         job.update(status="applied", appliedRevision=result["document"]["revision"], message="几何联动已整体保存")
         return result
 
     @serialized
-    def undo(self, draft_id, body):
+    def undo(self, draft_id, body, *, actor="user"):
         job = self.get(draft_id, body.jobId)
         if job["status"] != "applied" or job.get("appliedRevision") != body.expectedRevision or body.checksum != job["result"]["checksum"]:
             raise ComponentError(409, "RESIZE_UNDO_STALE")
-        result = self.app.state.drafts.replace_geometry(draft_id, body.expectedRevision, job["before"])
+        result = self.app.state.drafts.replace_geometry(draft_id, body.expectedRevision, job["before"], actor=actor)
         job.update(status="stale", message="已恢复应用前的组件")
         return result
 

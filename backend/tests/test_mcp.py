@@ -54,7 +54,8 @@ class MCPTests(unittest.TestCase):
             tools = self.rpc(client, "tools/list").json()["result"]["tools"]
             names = {tool["name"] for tool in tools}
             self.assertTrue({"component_get_status", "component_create_draft", "component_list_drafts", "component_set_parameter", "component_get_template_preview", "component_add_mate"} <= names)
-            self.assertFalse(any("solve" in name or "publish_draft" in name or "execute_rule" in name for name in names))
+            self.assertIn("component_publish_draft", names)
+            self.assertFalse(any("solve" in name or "execute_rule" in name for name in names))
             created = self.call(client, "component_create_draft", {"name": "MCP 创建"})
             self.assertFalse(created.get("isError", False))
             draft = created["structuredContent"]

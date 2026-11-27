@@ -337,7 +337,9 @@ async def reconstruction_info(publication_id: str, request: Request, response: R
         elif value_type == "boolean":
             if not isinstance(value, bool):
                 raise LibraryError(422, "PARAMETER_INVALID")
-        elif not isinstance(value, str) or (definition["allowedValues"] and value not in definition["allowedValues"]):
+        elif not isinstance(value, str):
+            raise LibraryError(422, "PARAMETER_INVALID")
+        if definition["allowedValues"] and value not in definition["allowedValues"]:
             raise LibraryError(422, "PARAMETER_INVALID")
     resolved, diagnostics = await asyncio.to_thread(resolved_interfaces, draft, material, overrides)
     response.headers["Cache-Control"] = "no-store"
