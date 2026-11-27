@@ -40,6 +40,9 @@ export type HardwareItem = { category?: string; name: string; specification: str
 export type InterfaceHardware = {
   mode: "auto" | "manual" | "none";
   items?: HardwareItem[];
+  /** Explicit selection; absent on legacy configurations until reviewed. */
+  scenarioId?: string;
+  note?: string;
 };
 
 export type ComponentInterfaceType = { id: string; label: string };

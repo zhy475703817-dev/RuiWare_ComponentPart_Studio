@@ -113,3 +113,11 @@ npm run dev
 本机运行构建版本：先执行 `npm run build`，再启动 `.venv\Scripts\python.exe -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8020`（不带 `--reload`），打开 <http://127.0.0.1:8020>。FastAPI 同时提供 `dist` 页面、静态资源和 API，构建应在后端启动前完成。
 
 若将 `dist` 单独部署到静态服务器，需把同源 `/api` 转发到 FastAPI；只复制前端文件不会包含后端。公网部署时通过正式反向代理提供 HTTPS，并按部署环境配置地址和访问控制。不要将密钥写入前端构建。
+
+## 接口连接与五金配置资料
+
+[接口连接类型与五金配置说明](docs/INTERFACE-HARDWARE.md)覆盖全部预设接口、定义阶段连接方式及自定义情况；[JSON 配置目录](docs/interface-hardware-catalog.v1.json)提供 15 个可选方案，包含现有自动推荐与按实际结构填写的手动清单。目录本身不是组件导入文件；使用 `node scripts/prepare-interface-hardware.mjs --help` 查看如何生成现有五金配置接口接受的请求。
+
+“接口 → 接口五金”已接入 25 个连接场景与 14 类规格预设；螺纹、长度、型号等可选预设或自由输入，不读取接口尺寸、不检查适用性。五金配置完成情况默认收起，点击摘要查看逐节点待填写清单。MCP 可用 `component_get_hardware_selection_rules`、`component_get_hardware_input_presets` 和 `component_set_interface_hardware` 读取及保存相同配置。
+
+已连接接口需要五金时必须填写五金；无需五金须明确场景和原因。规则涵盖普通连接、几何连接及子组件内部连接，未配置完整不能发布或标记交付完成。未连接的预留接口不强制填写，共用节点只计一套五金。

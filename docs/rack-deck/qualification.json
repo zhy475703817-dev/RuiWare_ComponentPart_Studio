@@ -1,0 +1,136 @@
+{
+  "jobId": "6e03fc05-b1ca-4344-ab36-532ac0570221",
+  "revision": 4,
+  "inputHash": "56e7fb73e388a5c67f0243ffc62114a792a67234a34b35c836c13c46312eb22c",
+  "configHash": "e7db32b70e4ff51a9c0058fa2d76e8d20437643e7561dddc22e23bfc71c0107f",
+  "policyVersion": "authoring-qualification-6",
+  "status": "passed",
+  "message": "制作验收通过，已保存原尺寸及联动关系，可发布",
+  "cases": [
+    {
+      "label": "原尺寸联动与修复复验",
+      "dimensions": [
+        2520.0,
+        1114.0,
+        125.00000000000006
+      ],
+      "status": "passed"
+    },
+    {
+      "label": "X缩小",
+      "dimensions": [
+        2280.0,
+        1114.0,
+        125.00000000000006
+      ],
+      "status": "passed",
+      "attempts": 1,
+      "actualDimensions": [
+        2280.000071933394,
+        1114.0,
+        125.00000000000006
+      ],
+      "verification": {
+        "dimensionToleranceMm": 0.1,
+        "positionToleranceMm": 0.05,
+        "angleToleranceDegrees": 0.1,
+        "cadValid": true,
+        "leafCount": 33,
+        "targetDimensions": [
+          2280.0,
+          1114.0,
+          125.00000000000006
+        ],
+        "dimensionErrors": [
+          7.193339388322784e-05,
+          0.0,
+          0.0
+        ],
+        "maximumNormalizedResidual": 0.0007193339388322784
+      }
+    },
+    {
+      "label": "X放大",
+      "dimensions": [
+        2760.0,
+        1114.0,
+        125.00000000000006
+      ],
+      "status": "passed",
+      "attempts": 1,
+      "actualDimensions": [
+        2759.999929701094,
+        1114.0,
+        125.00000000000006
+      ],
+      "verification": {
+        "dimensionToleranceMm": 0.1,
+        "positionToleranceMm": 0.05,
+        "angleToleranceDegrees": 0.1,
+        "cadValid": true,
+        "leafCount": 33,
+        "targetDimensions": [
+          2760.0,
+          1114.0,
+          125.00000000000006
+        ],
+        "dimensionErrors": [
+          -7.029890593912569e-05,
+          0.0,
+          0.0
+        ],
+        "maximumNormalizedResidual": 0.0007029890593912569
+      }
+    }
+  ],
+  "automaticRecoveries": 0,
+  "detail": "",
+  "axes": [
+    0
+  ],
+  "nominalDimensions": [
+    2520.0,
+    1114.0,
+    125.00000000000006
+  ],
+  "minimumDimensions": [
+    2280.0,
+    1114.0,
+    125.00000000000006
+  ],
+  "maximumDimensions": [
+    2760.0,
+    1114.0,
+    125.00000000000006
+  ],
+  "rangeIsExplicit": true,
+  "scope": "测试点通过不代表区间内任意尺寸均可实现；新尺寸仍需真实CAD预览。",
+  "nominalRepairCount": 4,
+  "sourceRevision": 3,
+  "draftId": "31020233-96dd-4751-a012-7b5f9f642bbc",
+  "hardwareSelection": {
+    "ruleVersion": "hardware-selection-v2",
+    "total": 36,
+    "configured": 18,
+    "notRequired": 18,
+    "pending": 0,
+    "complete": true
+  },
+  "config": {
+    "axes": [
+      0
+    ],
+    "minimumDimensions": [
+      2280.0,
+      1114.0,
+      125.00000000000006
+    ],
+    "maximumDimensions": [
+      2760.0,
+      1114.0,
+      125.00000000000006
+    ],
+    "targets": []
+  },
+  "deliveryReady": true
+}

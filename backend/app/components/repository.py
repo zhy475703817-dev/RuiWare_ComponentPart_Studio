@@ -13,11 +13,14 @@ from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 from .changes import document_changes
 from .models import ComponentAction, ComponentDocument, Revision, TypedAction
 from .service import ComponentError, apply_action, create_component_document, validate_component
+from .hardware_selection import audit_hardware_selection
 from pydantic import TypeAdapter
 
 
 def envelope(draft_id: str, document: ComponentDocument, *, code_unique: bool = True) -> dict:
-    return {"draftId": draft_id, "document": document.model_dump(by_alias=True), "checks": validate_component(document, code_unique=code_unique)}
+    data = document.model_dump(by_alias=True)
+    return {"draftId": draft_id, "document": data, "checks": validate_component(document, code_unique=code_unique),
+            "hardwareSelection": audit_hardware_selection(data)}
 
 
 class DraftRepository:
@@ -136,6 +139,12 @@ class DraftRepository:
             document = self._read(connection, draft_id)
             if document.revision != expected_revision:
                 raise ComponentError(409, "REVISION_CONFLICT")
+            hardware = audit_hardware_selection(document.model_dump(by_alias=True))
+            if not hardware["complete"]:
+                raise ComponentError(422, "HARDWARE_SELECTION_REQUIRED",
+                                     message="已连接接口需要五金时必须完成五金配置；无需五金须明确说明。",
+                                     details=[{"id": entry["id"], "message": entry["label"], "issues": entry["issues"]}
+                                              for entry in hardware["entries"] if entry["status"] == "pending"])
             qualification = self._qualification(connection, draft_id, document)
             if not qualification["deliveryReady"]:
                 raise ComponentError(409, "AUTHORING_QUALIFICATION_REQUIRED")
@@ -261,8 +270,10 @@ class DraftRepository:
                    and report.get("configHash") == digest(config) and report.get("policyVersion") == QUALIFICATION_VERSION)
         if row and not current:
             report = {"status": "stale", "message": "草稿或使用范围已变化，需重新验收", "cases": []}
+        hardware = audit_hardware_selection(document.model_dump(by_alias=True))
         return {**report, "draftId": draft_id, "revision": document.revision, "config": config,
-                "deliveryReady": current and report["status"] == "passed"}
+                "hardwareSelection": {key: hardware[key] for key in ("ruleVersion", "total", "configured", "notRequired", "pending", "complete")},
+                "deliveryReady": current and report["status"] == "passed" and hardware["complete"]}
 
     def qualification(self, draft_id):
         with closing(self._connect()) as connection:

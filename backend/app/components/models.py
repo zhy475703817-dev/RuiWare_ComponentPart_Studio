@@ -80,6 +80,16 @@ class HardwareItem(ComponentModel):
 class InterfaceHardware(ComponentModel):
     mode: Literal["auto", "manual", "none"]
     items: list[HardwareItem] = Field(default_factory=list, max_length=50)
+    scenarioId: str | None = Field(default=None, max_length=80)
+    note: str | None = Field(default=None, max_length=500)
+
+    @model_serializer(mode="wrap")
+    def preserve_selection_metadata(self, handler):
+        data = handler(self)
+        for field in ("scenarioId", "note"):
+            if field not in self.model_fields_set:
+                data.pop(field, None)
+        return data
 
 
 

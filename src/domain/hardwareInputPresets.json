@@ -1,0 +1,516 @@
+{
+  "version": "hardware-input-presets-v1",
+  "reviewedOn": "2026-11-26",
+  "purpose": "市售类型与常用尺寸的输入预设，所有尺寸可手动填写；不读取接口尺寸，不检查适用性，不保证组合为厂家库存SKU。",
+  "interfaceDimensionChecks": false,
+  "families": [
+    {
+      "id": "hex-bolt",
+      "category": "螺栓",
+      "name": "六角螺栓",
+      "standard": "ISO 4017 / DIN 933",
+      "format": "ISO 4017 / {thread} × {length} mm / {grade}",
+      "fields": [
+        {
+          "id": "thread",
+          "label": "螺纹",
+          "values": [
+            "M3",
+            "M4",
+            "M5",
+            "M6",
+            "M8",
+            "M10",
+            "M12",
+            "M14",
+            "M16",
+            "M20"
+          ]
+        },
+        {
+          "id": "length",
+          "label": "长度（mm）",
+          "values": [
+            "10",
+            "12",
+            "16",
+            "20",
+            "25",
+            "30",
+            "35",
+            "40",
+            "45",
+            "50",
+            "60",
+            "70",
+            "80",
+            "90",
+            "100",
+            "120"
+          ]
+        },
+        {
+          "id": "grade",
+          "label": "等级/材质",
+          "values": [
+            "8.8级钢",
+            "10.9级钢",
+            "12.9级钢",
+            "A2-70",
+            "A4-70"
+          ]
+        }
+      ],
+      "source": "https://www.norelemusa.com/en-us/Product-Overview/Flexible-standard-component-system/07000/Nuts-screws-washers-securing-elements/Hexagon-head-bolts-DIN-933-ISO-4017/Hexagon-head-bolts-DIN-933-ISO-4017-steel/p/agid.19862"
+    },
+    {
+      "id": "socket-screw",
+      "category": "螺钉",
+      "name": "内六角圆柱头螺钉",
+      "standard": "ISO 4762",
+      "format": "ISO 4762 / {thread} × {length} mm / {grade}",
+      "fields": [
+        {
+          "id": "thread",
+          "label": "螺纹",
+          "values": [
+            "M3",
+            "M4",
+            "M5",
+            "M6",
+            "M8",
+            "M10",
+            "M12",
+            "M14",
+            "M16",
+            "M20"
+          ]
+        },
+        {
+          "id": "length",
+          "label": "长度（mm）",
+          "values": [
+            "10",
+            "12",
+            "16",
+            "20",
+            "25",
+            "30",
+            "35",
+            "40",
+            "45",
+            "50",
+            "60",
+            "70",
+            "80",
+            "90",
+            "100",
+            "120"
+          ]
+        },
+        {
+          "id": "grade",
+          "label": "等级/材质",
+          "values": [
+            "8.8级钢",
+            "10.9级钢",
+            "12.9级钢",
+            "A2-70",
+            "A4-70"
+          ]
+        }
+      ],
+      "source": "https://www.norelem-china.com/xs_db/DOKUMENT_DB/www/NORELEM/DataSheet/en/07/07160_ST_Datasheet_32102_Socket_head_screws_DIN_EN_ISO_4762_enhanced_steel--en.pdf"
+    },
+    {
+      "id": "stud",
+      "category": "螺柱",
+      "name": "螺柱",
+      "standard": "DIN 6379",
+      "format": "DIN 6379 / {thread} × {length} mm",
+      "fields": [
+        {
+          "id": "thread",
+          "label": "螺纹",
+          "values": [
+            "M6",
+            "M8",
+            "M10",
+            "M12",
+            "M14",
+            "M16",
+            "M20",
+            "M24"
+          ]
+        },
+        {
+          "id": "length",
+          "label": "长度（mm）",
+          "values": [
+            "40",
+            "50",
+            "63",
+            "80",
+            "100",
+            "125",
+            "160",
+            "200",
+            "250",
+            "315",
+            "400"
+          ]
+        }
+      ],
+      "source": "https://www.elesa-ganter.com/siteassets/PDF/EN/DIN%206379.pdf"
+    },
+    {
+      "id": "hex-nut",
+      "category": "螺母",
+      "name": "六角螺母",
+      "standard": "DIN 934",
+      "format": "DIN 934 / {thread} / {grade}",
+      "fields": [
+        {
+          "id": "thread",
+          "label": "螺纹",
+          "values": [
+            "M3",
+            "M4",
+            "M5",
+            "M6",
+            "M8",
+            "M10",
+            "M12",
+            "M14",
+            "M16",
+            "M20"
+          ]
+        },
+        {
+          "id": "grade",
+          "label": "等级/材质",
+          "values": [
+            "8级钢",
+            "10级钢",
+            "12级钢",
+            "A2-70",
+            "A4-70"
+          ]
+        }
+      ],
+      "source": "https://www.norelemusa.com/medias/07210-ST-Datasheet-32698-Hexagon-nuts-DIN-934-steel-en.pdf?context=bWFzdGVyfHJvb3R8MTgwNTk2fGFwcGxpY2F0aW9uL3BkZnxhR1ptTDJnNVppODVNVFV3T1RnM056TXdPVGMwTHpBM01qRXdYMU5VWDBSaGRHRnphR1ZsZEY4ek1qWTVPRjlJWlhoaFoyOXVYMjUxZEhOZlJFbE9Yemt6TkY5emRHVmxiQzB0Wlc0dWNHUm18Y2ZhYTUwNjI4NDUyY2ExODBlNjI3YTdkN2QyOWFmZGE3NzY0NGFhMzI3ZWNmZDMzNGQ4OWY0YjAzYzAxYmZkYQ"
+    },
+    {
+      "id": "washer",
+      "category": "垫圈",
+      "name": "平垫圈",
+      "standard": "ISO 7089",
+      "format": "ISO 7089 / {thread} / {material}",
+      "fields": [
+        {
+          "id": "thread",
+          "label": "公称规格",
+          "values": [
+            "M3",
+            "M4",
+            "M5",
+            "M6",
+            "M8",
+            "M10",
+            "M12",
+            "M14",
+            "M16",
+            "M20"
+          ]
+        },
+        {
+          "id": "material",
+          "label": "材质",
+          "values": [
+            "钢",
+            "不锈钢A2",
+            "不锈钢A4"
+          ]
+        }
+      ],
+      "source": "https://www.norelemusa.com/en-us/Product-Overview/Flexible-standard-component-system/07000/Nuts-screws-washers-securing-elements/Washers-medium-DIN-EN-ISO-7089-A/p/agid.4120"
+    },
+    {
+      "id": "dowel",
+      "category": "销",
+      "name": "定位销",
+      "standard": "DIN 6325",
+      "format": "DIN 6325 / Ø{diameter} × {length} mm / {tolerance}",
+      "fields": [
+        {
+          "id": "diameter",
+          "label": "直径（mm）",
+          "values": [
+            "3",
+            "4",
+            "5",
+            "6",
+            "8",
+            "10",
+            "12",
+            "16",
+            "20"
+          ]
+        },
+        {
+          "id": "length",
+          "label": "长度（mm）",
+          "values": [
+            "10",
+            "12",
+            "16",
+            "20",
+            "25",
+            "30",
+            "35",
+            "40",
+            "45",
+            "50",
+            "60",
+            "70",
+            "80",
+            "90",
+            "100",
+            "120"
+          ]
+        },
+        {
+          "id": "tolerance",
+          "label": "公差标记",
+          "values": [
+            "m6"
+          ]
+        }
+      ],
+      "source": "https://www.elesa-ganter.com/en/www/dowel-pins-din-6325"
+    },
+    {
+      "id": "slot-nut",
+      "category": "螺母",
+      "name": "T型槽螺母",
+      "standard": "型材槽螺母",
+      "format": "槽系列 {series} / {thread} / {material}",
+      "fields": [
+        {
+          "id": "series",
+          "label": "槽系列",
+          "values": [
+            "5",
+            "6",
+            "8",
+            "10",
+            "12"
+          ]
+        },
+        {
+          "id": "thread",
+          "label": "螺纹",
+          "values": [
+            "M3",
+            "M4",
+            "M5",
+            "M6",
+            "M8",
+            "M10",
+            "M12",
+            "M14",
+            "M16",
+            "M20"
+          ]
+        },
+        {
+          "id": "material",
+          "label": "材质/表面",
+          "values": [
+            "钢镀锌",
+            "不锈钢"
+          ]
+        }
+      ],
+      "source": "https://www.item24.com/en-gb/t-slot-nut-8-st-m8-bright-zinc-plated-2618"
+    },
+    {
+      "id": "bearing",
+      "category": "轴承",
+      "name": "深沟球轴承",
+      "standard": "轴承型号",
+      "format": "{model}",
+      "fields": [
+        {
+          "id": "model",
+          "label": "型号",
+          "values": [
+            "6204（20×47×14 mm，开式）"
+          ]
+        }
+      ],
+      "source": "https://www.skf.com/hr/products/rolling-bearings/ball-bearings/deep-groove-ball-bearings/productid-6204"
+    },
+    {
+      "id": "bushing",
+      "category": "轴套",
+      "name": "滑动轴套",
+      "standard": "igus GSM",
+      "format": "{model}",
+      "fields": [
+        {
+          "id": "model",
+          "label": "型号（内径×外径×长）",
+          "values": [
+            "GSM-1012-10（10×12×10 mm）",
+            "GSM-1012-12（10×12×12 mm）",
+            "GSM-1012-15（10×12×15 mm）"
+          ]
+        }
+      ],
+      "source": "https://www.igus.com/us/pdf/g300.pdf"
+    },
+    {
+      "id": "ring",
+      "category": "挡圈",
+      "name": "轴用弹性挡圈",
+      "standard": "DIN 471",
+      "format": "DIN 471 / 公称轴径 {size} mm / {material}",
+      "fields": [
+        {
+          "id": "size",
+          "label": "公称尺寸（mm）",
+          "values": [
+            "8",
+            "10",
+            "12",
+            "15",
+            "16",
+            "20",
+            "25",
+            "30",
+            "35",
+            "40"
+          ]
+        },
+        {
+          "id": "material",
+          "label": "材质",
+          "values": [
+            "弹簧钢",
+            "不锈钢1.4122"
+          ]
+        }
+      ],
+      "source": "https://www.norelemusa.com/en-us/Product-Overview/Flexible-standard-component-system/07000/Nuts-screws-washers-securing-elements/Circlips-for-shafts-DIN-471/p/agid.4129"
+    },
+    {
+      "id": "key",
+      "category": "键",
+      "name": "平键",
+      "standard": "DIN 6885 A",
+      "format": "DIN 6885 A / {section} × {length} mm",
+      "fields": [
+        {
+          "id": "section",
+          "label": "宽×高（mm）",
+          "values": [
+            "3×3",
+            "4×4",
+            "5×5",
+            "6×6",
+            "8×7",
+            "10×8",
+            "12×8",
+            "14×9",
+            "16×10"
+          ]
+        },
+        {
+          "id": "length",
+          "label": "长度（mm）",
+          "values": [
+            "8",
+            "10",
+            "12",
+            "14",
+            "16",
+            "18",
+            "20",
+            "22",
+            "25",
+            "28",
+            "32",
+            "36",
+            "40",
+            "45",
+            "50",
+            "56",
+            "63",
+            "70",
+            "80",
+            "90",
+            "100"
+          ]
+        }
+      ],
+      "source": "https://norelem.co.uk/medias/03288-Datasheet-2776-Parallel-keys-DIN-6885-A-en.pdf?context=bWFzdGVyfHJvb3R8MjEzNzE1fGFwcGxpY2F0aW9uL3BkZnxhRFZsTDJnMFl5ODVNelUyTXpNNE16TXhOamM0THpBek1qZzRYMFJoZEdGemFHVmxkRjh5TnpjMlgxQmhjbUZzYkdWc1gydGxlWE5mUkVsT1h6WTRPRFZmUVMwdFpXNHVjR1JtfDYyZmE4NDM4ZmM2ZjdmYTFkYmI1NDM5ZDc5ZWY1NGFlMTU4NmE3MmFmZWNmZDRlYTQ0OGI1OTIyMDQ0OGE4OTg"
+    },
+    {
+      "id": "rivet",
+      "category": "铆钉",
+      "name": "抽芯铆钉",
+      "standard": "抽芯铆钉型号",
+      "format": "{model}",
+      "fields": [
+        {
+          "id": "model",
+          "label": "型号",
+          "values": [
+            "GESIPA PolyGrip 1433869 / 钢-钢 / 圆头 / Ø4×10 mm"
+          ]
+        }
+      ],
+      "source": "https://www.gesipa.com/products/polygrip-blind-rivets/1433869-polygrip-blind-rivets-steelsteel-dome-head-4-x-10/"
+    },
+    {
+      "id": "clip",
+      "category": "卡扣件",
+      "name": "搭扣锁扣",
+      "standard": "GN 8330",
+      "format": "{model}",
+      "fields": [
+        {
+          "id": "model",
+          "label": "型号",
+          "values": [
+            "GN 8330-15-ST-A",
+            "GN 8330-20-ST-A",
+            "GN 8330-29-ST-A",
+            "GN 8330-40-ST-A",
+            "GN 8330-15-NI-A",
+            "GN 8330-20-NI-A"
+          ]
+        }
+      ],
+      "source": "https://www.elesa-ganter.com/siteassets/PDF/EN/GN%208330.pdf"
+    },
+    {
+      "id": "rail-stop",
+      "category": "导轨附件",
+      "name": "导轨限位件",
+      "standard": "item Limit Stop 8",
+      "format": "{model}",
+      "fields": [
+        {
+          "id": "model",
+          "label": "型号",
+          "values": [
+            "item Limit Stop 8 / 0.0.337.11"
+          ]
+        }
+      ],
+      "source": "https://www.item24.com/en-de/limit-stop-8-33711"
+    }
+  ]
+}

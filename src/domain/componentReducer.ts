@@ -240,7 +240,11 @@ export function componentReducer(document: ComponentDocument, action: ComponentA
       if (!member || !target || !["auto", "manual", "none"].includes(mode) || items.length > 50
         || items.some(item => !item.name.trim() || item.name.trim().length > 80 || (item.category?.trim().length || 0) > 80 || item.specification.length > 120 || !Number.isInteger(item.quantity) || item.quantity < 1 || item.quantity > 10000)
         || mode === "manual" && items.length === 0) return document;
-      const hardware = { mode, items: mode === "manual" ? items.map(item => ({ ...(item.category?.trim() ? { category: item.category.trim() } : {}), name: item.name.trim(), specification: item.specification.trim(), quantity: item.quantity })) : [] };
+      if (action.hardware.scenarioId !== undefined && (typeof action.hardware.scenarioId !== "string" || action.hardware.scenarioId.length > 80)
+        || action.hardware.note !== undefined && (typeof action.hardware.note !== "string" || action.hardware.note.length > 500)) return document;
+      const hardware = { mode, items: mode === "manual" ? items.map(item => ({ ...(item.category?.trim() ? { category: item.category.trim() } : {}), name: item.name.trim(), specification: item.specification.trim(), quantity: item.quantity })) : [],
+        ...(action.hardware.scenarioId !== undefined ? { scenarioId: action.hardware.scenarioId.trim() } : {}),
+        ...(action.hardware.note !== undefined ? { note: action.hardware.note.trim() } : {}) };
       if (JSON.stringify(target.hardware) === JSON.stringify(hardware)) return document;
       const interfaces = member.interfaces.map(item => item.id === target.id ? { ...item, hardware } : item);
       const ports = document.ports.map(port => port.source.memberId === member.id && port.source.interfaceId === target.id

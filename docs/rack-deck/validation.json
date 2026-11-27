@@ -1,0 +1,1348 @@
+{
+  "draftId": "31020233-96dd-4751-a012-7b5f9f642bbc",
+  "revision": 4,
+  "checks": [
+    {
+      "id": "definition",
+      "label": "组件名称",
+      "status": "pass",
+      "message": "基础数据检查通过"
+    },
+    {
+      "id": "code.format",
+      "label": "组件编码格式",
+      "status": "pass",
+      "message": "基础数据检查通过"
+    },
+    {
+      "id": "code.unique",
+      "label": "组件编码唯一",
+      "status": "pass",
+      "message": "基础数据检查通过"
+    },
+    {
+      "id": "members",
+      "label": "装配成员",
+      "status": "pass",
+      "message": "基础数据检查通过"
+    },
+    {
+      "id": "references",
+      "label": "固定版本引用",
+      "status": "pass",
+      "message": "基础数据检查通过"
+    },
+    {
+      "id": "mates",
+      "label": "内部连接数据",
+      "status": "pass",
+      "message": "基础数据检查通过"
+    },
+    {
+      "id": "ports",
+      "label": "对外接口",
+      "status": "pass",
+      "message": "基础数据检查通过"
+    },
+    {
+      "id": "parameters",
+      "label": "参数范围",
+      "status": "pass",
+      "message": "基础数据检查通过"
+    },
+    {
+      "id": "bindings",
+      "label": "参数绑定来源",
+      "status": "pass",
+      "message": "基础数据检查通过"
+    },
+    {
+      "id": "patterns",
+      "label": "组件构成规则",
+      "status": "pass",
+      "message": "基础数据检查通过"
+    },
+    {
+      "id": "slots",
+      "label": "槽位引用",
+      "status": "pass",
+      "message": "基础数据检查通过"
+    },
+    {
+      "id": "hardware.selection",
+      "label": "连接五金选型",
+      "status": "pass",
+      "message": "已检查 36 个已连接节点，五金配置已明确"
+    },
+    {
+      "id": "assembly.solve",
+      "label": "几何联动检查",
+      "status": "pass",
+      "message": "实际外形及已配置几何约束通过"
+    },
+    {
+      "id": "rules.execution",
+      "label": "工程规则执行",
+      "status": "pending",
+      "message": "当前仅保存规则说明，尚未接入规则执行"
+    }
+  ],
+  "authoring": {
+    "policyVersion": "2026-11-26.2",
+    "revision": 4,
+    "hardwareSelection": {
+      "ruleVersion": "hardware-selection-v2",
+      "scope": "connected",
+      "total": 36,
+      "configured": 18,
+      "notRequired": 18,
+      "pending": 0,
+      "complete": true,
+      "entries": [
+        {
+          "id": "[[\"beam-front\",\"beam-body\"],\"tubeBeam.leftNode.part_face_front.001\"]",
+          "label": "beam-front / beam-body · 矩管主梁 · 起始端节点孔接口 ↔ beam-front / beam-plate-left · 左端连接板 · leftFar扁孔螺栓接口",
+          "status": "configured",
+          "connected": true,
+          "endpoints": [
+            {
+              "path": [
+                "beam-front",
+                "beam-body"
+              ],
+              "interfaceId": "tubeBeam.leftNode.part_face_front.001",
+              "label": "beam-front / beam-body · 矩管主梁 · 起始端节点孔接口"
+            },
+            {
+              "path": [
+                "beam-front",
+                "beam-plate-left"
+              ],
+              "interfaceId": "connector.bolt.leftFar.part_face_front.001",
+              "label": "beam-front / beam-plate-left · 左端连接板 · leftFar扁孔螺栓接口"
+            }
+          ],
+          "issues": []
+        },
+        {
+          "id": "[[\"beam-front\",\"beam-body\"],\"tubeBeam.leftNode.part_face_front.002\"]",
+          "label": "beam-front / beam-body · 矩管主梁 · 起始端节点孔接口 ↔ beam-front / beam-plate-left · 左端连接板 · rightFar扁孔螺栓接口",
+          "status": "configured",
+          "connected": true,
+          "endpoints": [
+            {
+              "path": [
+                "beam-front",
+                "beam-body"
+              ],
+              "interfaceId": "tubeBeam.leftNode.part_face_front.002",
+              "label": "beam-front / beam-body · 矩管主梁 · 起始端节点孔接口"
+            },
+            {
+              "path": [
+                "beam-front",
+                "beam-plate-left"
+              ],
+              "interfaceId": "connector.bolt.rightFar.part_face_front.001",
+              "label": "beam-front / beam-plate-left · 左端连接板 · rightFar扁孔螺栓接口"
+            }
+          ],
+          "issues": []
+        },
+        {
+          "id": "[[\"beam-front\",\"beam-body\"],\"tubeBeam.rightNode.part_face_front.001\"]",
+          "label": "beam-front / beam-body · 矩管主梁 · 终止端节点孔接口 ↔ beam-front / beam-plate-right · 右端连接板 · rightFar扁孔螺栓接口",
+          "status": "configured",
+          "connected": true,
+          "endpoints": [
+            {
+              "path": [
+                "beam-front",
+                "beam-body"
+              ],
+              "interfaceId": "tubeBeam.rightNode.part_face_front.001",
+              "label": "beam-front / beam-body · 矩管主梁 · 终止端节点孔接口"
+            },
+            {
+              "path": [
+                "beam-front",
+                "beam-plate-right"
+              ],
+              "interfaceId": "connector.bolt.rightFar.part_face_front.001",
+              "label": "beam-front / beam-plate-right · 右端连接板 · rightFar扁孔螺栓接口"
+            }
+          ],
+          "issues": []
+        },
+        {
+          "id": "[[\"beam-front\",\"beam-body\"],\"tubeBeam.rightNode.part_face_front.002\"]",
+          "label": "beam-front / beam-body · 矩管主梁 · 终止端节点孔接口 ↔ beam-front / beam-plate-right · 右端连接板 · leftFar扁孔螺栓接口",
+          "status": "configured",
+          "connected": true,
+          "endpoints": [
+            {
+              "path": [
+                "beam-front",
+                "beam-body"
+              ],
+              "interfaceId": "tubeBeam.rightNode.part_face_front.002",
+              "label": "beam-front / beam-body · 矩管主梁 · 终止端节点孔接口"
+            },
+            {
+              "path": [
+                "beam-front",
+                "beam-plate-right"
+              ],
+              "interfaceId": "connector.bolt.leftFar.part_face_front.001",
+              "label": "beam-front / beam-plate-right · 右端连接板 · leftFar扁孔螺栓接口"
+            }
+          ],
+          "issues": []
+        },
+        {
+          "id": "[[\"beam-rear\",\"beam-body\"],\"tubeBeam.leftNode.part_face_front.001\"]",
+          "label": "beam-rear / beam-body · 矩管主梁 · 起始端节点孔接口 ↔ beam-rear / beam-plate-left · 左端连接板 · leftFar扁孔螺栓接口",
+          "status": "configured",
+          "connected": true,
+          "endpoints": [
+            {
+              "path": [
+                "beam-rear",
+                "beam-body"
+              ],
+              "interfaceId": "tubeBeam.leftNode.part_face_front.001",
+              "label": "beam-rear / beam-body · 矩管主梁 · 起始端节点孔接口"
+            },
+            {
+              "path": [
+                "beam-rear",
+                "beam-plate-left"
+              ],
+              "interfaceId": "connector.bolt.leftFar.part_face_front.001",
+              "label": "beam-rear / beam-plate-left · 左端连接板 · leftFar扁孔螺栓接口"
+            }
+          ],
+          "issues": []
+        },
+        {
+          "id": "[[\"beam-rear\",\"beam-body\"],\"tubeBeam.leftNode.part_face_front.002\"]",
+          "label": "beam-rear / beam-body · 矩管主梁 · 起始端节点孔接口 ↔ beam-rear / beam-plate-left · 左端连接板 · rightFar扁孔螺栓接口",
+          "status": "configured",
+          "connected": true,
+          "endpoints": [
+            {
+              "path": [
+                "beam-rear",
+                "beam-body"
+              ],
+              "interfaceId": "tubeBeam.leftNode.part_face_front.002",
+              "label": "beam-rear / beam-body · 矩管主梁 · 起始端节点孔接口"
+            },
+            {
+              "path": [
+                "beam-rear",
+                "beam-plate-left"
+              ],
+              "interfaceId": "connector.bolt.rightFar.part_face_front.001",
+              "label": "beam-rear / beam-plate-left · 左端连接板 · rightFar扁孔螺栓接口"
+            }
+          ],
+          "issues": []
+        },
+        {
+          "id": "[[\"beam-rear\",\"beam-body\"],\"tubeBeam.rightNode.part_face_front.001\"]",
+          "label": "beam-rear / beam-body · 矩管主梁 · 终止端节点孔接口 ↔ beam-rear / beam-plate-right · 右端连接板 · rightFar扁孔螺栓接口",
+          "status": "configured",
+          "connected": true,
+          "endpoints": [
+            {
+              "path": [
+                "beam-rear",
+                "beam-body"
+              ],
+              "interfaceId": "tubeBeam.rightNode.part_face_front.001",
+              "label": "beam-rear / beam-body · 矩管主梁 · 终止端节点孔接口"
+            },
+            {
+              "path": [
+                "beam-rear",
+                "beam-plate-right"
+              ],
+              "interfaceId": "connector.bolt.rightFar.part_face_front.001",
+              "label": "beam-rear / beam-plate-right · 右端连接板 · rightFar扁孔螺栓接口"
+            }
+          ],
+          "issues": []
+        },
+        {
+          "id": "[[\"beam-rear\",\"beam-body\"],\"tubeBeam.rightNode.part_face_front.002\"]",
+          "label": "beam-rear / beam-body · 矩管主梁 · 终止端节点孔接口 ↔ beam-rear / beam-plate-right · 右端连接板 · leftFar扁孔螺栓接口",
+          "status": "configured",
+          "connected": true,
+          "endpoints": [
+            {
+              "path": [
+                "beam-rear",
+                "beam-body"
+              ],
+              "interfaceId": "tubeBeam.rightNode.part_face_front.002",
+              "label": "beam-rear / beam-body · 矩管主梁 · 终止端节点孔接口"
+            },
+            {
+              "path": [
+                "beam-rear",
+                "beam-plate-right"
+              ],
+              "interfaceId": "connector.bolt.leftFar.part_face_front.001",
+              "label": "beam-rear / beam-plate-right · 右端连接板 · leftFar扁孔螺栓接口"
+            }
+          ],
+          "issues": []
+        },
+        {
+          "id": "[[\"beam-front\",\"beam-body\"],\"tubeBeam.seat.1\"]",
+          "label": "beam-front / beam-body · 矩管主梁 · 跨梁承托位置1 ↔ beam-front · 前横梁组件 · 跨梁承托位置1 ↔ hook-1-front · 跨梁1前挂钩 · 主梁顶面搭接",
+          "status": "configured",
+          "connected": true,
+          "endpoints": [
+            {
+              "path": [
+                "beam-front",
+                "beam-body"
+              ],
+              "interfaceId": "tubeBeam.seat.1",
+              "label": "beam-front / beam-body · 矩管主梁 · 跨梁承托位置1"
+            },
+            {
+              "path": [
+                "beam-front"
+              ],
+              "interfaceId": "tubeBeam.seat.1",
+              "label": "beam-front · 前横梁组件 · 跨梁承托位置1"
+            },
+            {
+              "path": [
+                "hook-1-front"
+              ],
+              "interfaceId": "clip.beamSeat",
+              "label": "hook-1-front · 跨梁1前挂钩 · 主梁顶面搭接"
+            }
+          ],
+          "issues": []
+        },
+        {
+          "id": "[[\"cross-1\"],\"beam.end.end\"]",
+          "label": "cross-1 · 承托跨梁1 · 末端焊接定位 ↔ hook-1-front · 跨梁1前挂钩 · 跨梁端部焊接基准",
+          "status": "not-required",
+          "connected": true,
+          "endpoints": [
+            {
+              "path": [
+                "cross-1"
+              ],
+              "interfaceId": "beam.end.end",
+              "label": "cross-1 · 承托跨梁1 · 末端焊接定位"
+            },
+            {
+              "path": [
+                "hook-1-front"
+              ],
+              "interfaceId": "clip.weldSide",
+              "label": "hook-1-front · 跨梁1前挂钩 · 跨梁端部焊接基准"
+            }
+          ],
+          "issues": []
+        },
+        {
+          "id": "[[\"beam-rear\",\"beam-body\"],\"tubeBeam.seat.5\"]",
+          "label": "beam-rear / beam-body · 矩管主梁 · 跨梁承托位置5 ↔ beam-rear · 后横梁组件 · 跨梁承托位置5 ↔ hook-1-rear · 跨梁1后挂钩 · 主梁顶面搭接",
+          "status": "configured",
+          "connected": true,
+          "endpoints": [
+            {
+              "path": [
+                "beam-rear",
+                "beam-body"
+              ],
+              "interfaceId": "tubeBeam.seat.5",
+              "label": "beam-rear / beam-body · 矩管主梁 · 跨梁承托位置5"
+            },
+            {
+              "path": [
+                "beam-rear"
+              ],
+              "interfaceId": "tubeBeam.seat.5",
+              "label": "beam-rear · 后横梁组件 · 跨梁承托位置5"
+            },
+            {
+              "path": [
+                "hook-1-rear"
+              ],
+              "interfaceId": "clip.beamSeat",
+              "label": "hook-1-rear · 跨梁1后挂钩 · 主梁顶面搭接"
+            }
+          ],
+          "issues": []
+        },
+        {
+          "id": "[[\"cross-1\"],\"beam.end.start\"]",
+          "label": "cross-1 · 承托跨梁1 · 起端焊接定位 ↔ hook-1-rear · 跨梁1后挂钩 · 跨梁端部焊接基准",
+          "status": "not-required",
+          "connected": true,
+          "endpoints": [
+            {
+              "path": [
+                "cross-1"
+              ],
+              "interfaceId": "beam.end.start",
+              "label": "cross-1 · 承托跨梁1 · 起端焊接定位"
+            },
+            {
+              "path": [
+                "hook-1-rear"
+              ],
+              "interfaceId": "clip.weldSide",
+              "label": "hook-1-rear · 跨梁1后挂钩 · 跨梁端部焊接基准"
+            }
+          ],
+          "issues": []
+        },
+        {
+          "id": "[[\"beam-front\",\"beam-body\"],\"tubeBeam.seat.2\"]",
+          "label": "beam-front / beam-body · 矩管主梁 · 跨梁承托位置2 ↔ beam-front · 前横梁组件 · 跨梁承托位置2 ↔ hook-2-front · 跨梁2前挂钩 · 主梁顶面搭接",
+          "status": "configured",
+          "connected": true,
+          "endpoints": [
+            {
+              "path": [
+                "beam-front",
+                "beam-body"
+              ],
+              "interfaceId": "tubeBeam.seat.2",
+              "label": "beam-front / beam-body · 矩管主梁 · 跨梁承托位置2"
+            },
+            {
+              "path": [
+                "beam-front"
+              ],
+              "interfaceId": "tubeBeam.seat.2",
+              "label": "beam-front · 前横梁组件 · 跨梁承托位置2"
+            },
+            {
+              "path": [
+                "hook-2-front"
+              ],
+              "interfaceId": "clip.beamSeat",
+              "label": "hook-2-front · 跨梁2前挂钩 · 主梁顶面搭接"
+            }
+          ],
+          "issues": []
+        },
+        {
+          "id": "[[\"cross-2\"],\"beam.end.end\"]",
+          "label": "cross-2 · 承托跨梁2 · 末端焊接定位 ↔ hook-2-front · 跨梁2前挂钩 · 跨梁端部焊接基准",
+          "status": "not-required",
+          "connected": true,
+          "endpoints": [
+            {
+              "path": [
+                "cross-2"
+              ],
+              "interfaceId": "beam.end.end",
+              "label": "cross-2 · 承托跨梁2 · 末端焊接定位"
+            },
+            {
+              "path": [
+                "hook-2-front"
+              ],
+              "interfaceId": "clip.weldSide",
+              "label": "hook-2-front · 跨梁2前挂钩 · 跨梁端部焊接基准"
+            }
+          ],
+          "issues": []
+        },
+        {
+          "id": "[[\"beam-rear\",\"beam-body\"],\"tubeBeam.seat.4\"]",
+          "label": "beam-rear / beam-body · 矩管主梁 · 跨梁承托位置4 ↔ beam-rear · 后横梁组件 · 跨梁承托位置4 ↔ hook-2-rear · 跨梁2后挂钩 · 主梁顶面搭接",
+          "status": "configured",
+          "connected": true,
+          "endpoints": [
+            {
+              "path": [
+                "beam-rear",
+                "beam-body"
+              ],
+              "interfaceId": "tubeBeam.seat.4",
+              "label": "beam-rear / beam-body · 矩管主梁 · 跨梁承托位置4"
+            },
+            {
+              "path": [
+                "beam-rear"
+              ],
+              "interfaceId": "tubeBeam.seat.4",
+              "label": "beam-rear · 后横梁组件 · 跨梁承托位置4"
+            },
+            {
+              "path": [
+                "hook-2-rear"
+              ],
+              "interfaceId": "clip.beamSeat",
+              "label": "hook-2-rear · 跨梁2后挂钩 · 主梁顶面搭接"
+            }
+          ],
+          "issues": []
+        },
+        {
+          "id": "[[\"cross-2\"],\"beam.end.start\"]",
+          "label": "cross-2 · 承托跨梁2 · 起端焊接定位 ↔ hook-2-rear · 跨梁2后挂钩 · 跨梁端部焊接基准",
+          "status": "not-required",
+          "connected": true,
+          "endpoints": [
+            {
+              "path": [
+                "cross-2"
+              ],
+              "interfaceId": "beam.end.start",
+              "label": "cross-2 · 承托跨梁2 · 起端焊接定位"
+            },
+            {
+              "path": [
+                "hook-2-rear"
+              ],
+              "interfaceId": "clip.weldSide",
+              "label": "hook-2-rear · 跨梁2后挂钩 · 跨梁端部焊接基准"
+            }
+          ],
+          "issues": []
+        },
+        {
+          "id": "[[\"beam-front\",\"beam-body\"],\"tubeBeam.seat.3\"]",
+          "label": "beam-front / beam-body · 矩管主梁 · 跨梁承托位置3 ↔ beam-front · 前横梁组件 · 跨梁承托位置3 ↔ hook-3-front · 跨梁3前挂钩 · 主梁顶面搭接",
+          "status": "configured",
+          "connected": true,
+          "endpoints": [
+            {
+              "path": [
+                "beam-front",
+                "beam-body"
+              ],
+              "interfaceId": "tubeBeam.seat.3",
+              "label": "beam-front / beam-body · 矩管主梁 · 跨梁承托位置3"
+            },
+            {
+              "path": [
+                "beam-front"
+              ],
+              "interfaceId": "tubeBeam.seat.3",
+              "label": "beam-front · 前横梁组件 · 跨梁承托位置3"
+            },
+            {
+              "path": [
+                "hook-3-front"
+              ],
+              "interfaceId": "clip.beamSeat",
+              "label": "hook-3-front · 跨梁3前挂钩 · 主梁顶面搭接"
+            }
+          ],
+          "issues": []
+        },
+        {
+          "id": "[[\"cross-3\"],\"beam.end.end\"]",
+          "label": "cross-3 · 承托跨梁3 · 末端焊接定位 ↔ hook-3-front · 跨梁3前挂钩 · 跨梁端部焊接基准",
+          "status": "not-required",
+          "connected": true,
+          "endpoints": [
+            {
+              "path": [
+                "cross-3"
+              ],
+              "interfaceId": "beam.end.end",
+              "label": "cross-3 · 承托跨梁3 · 末端焊接定位"
+            },
+            {
+              "path": [
+                "hook-3-front"
+              ],
+              "interfaceId": "clip.weldSide",
+              "label": "hook-3-front · 跨梁3前挂钩 · 跨梁端部焊接基准"
+            }
+          ],
+          "issues": []
+        },
+        {
+          "id": "[[\"beam-rear\",\"beam-body\"],\"tubeBeam.seat.3\"]",
+          "label": "beam-rear / beam-body · 矩管主梁 · 跨梁承托位置3 ↔ beam-rear · 后横梁组件 · 跨梁承托位置3 ↔ hook-3-rear · 跨梁3后挂钩 · 主梁顶面搭接",
+          "status": "configured",
+          "connected": true,
+          "endpoints": [
+            {
+              "path": [
+                "beam-rear",
+                "beam-body"
+              ],
+              "interfaceId": "tubeBeam.seat.3",
+              "label": "beam-rear / beam-body · 矩管主梁 · 跨梁承托位置3"
+            },
+            {
+              "path": [
+                "beam-rear"
+              ],
+              "interfaceId": "tubeBeam.seat.3",
+              "label": "beam-rear · 后横梁组件 · 跨梁承托位置3"
+            },
+            {
+              "path": [
+                "hook-3-rear"
+              ],
+              "interfaceId": "clip.beamSeat",
+              "label": "hook-3-rear · 跨梁3后挂钩 · 主梁顶面搭接"
+            }
+          ],
+          "issues": []
+        },
+        {
+          "id": "[[\"cross-3\"],\"beam.end.start\"]",
+          "label": "cross-3 · 承托跨梁3 · 起端焊接定位 ↔ hook-3-rear · 跨梁3后挂钩 · 跨梁端部焊接基准",
+          "status": "not-required",
+          "connected": true,
+          "endpoints": [
+            {
+              "path": [
+                "cross-3"
+              ],
+              "interfaceId": "beam.end.start",
+              "label": "cross-3 · 承托跨梁3 · 起端焊接定位"
+            },
+            {
+              "path": [
+                "hook-3-rear"
+              ],
+              "interfaceId": "clip.weldSide",
+              "label": "hook-3-rear · 跨梁3后挂钩 · 跨梁端部焊接基准"
+            }
+          ],
+          "issues": []
+        },
+        {
+          "id": "[[\"beam-front\",\"beam-body\"],\"tubeBeam.seat.4\"]",
+          "label": "beam-front / beam-body · 矩管主梁 · 跨梁承托位置4 ↔ beam-front · 前横梁组件 · 跨梁承托位置4 ↔ hook-4-front · 跨梁4前挂钩 · 主梁顶面搭接",
+          "status": "configured",
+          "connected": true,
+          "endpoints": [
+            {
+              "path": [
+                "beam-front",
+                "beam-body"
+              ],
+              "interfaceId": "tubeBeam.seat.4",
+              "label": "beam-front / beam-body · 矩管主梁 · 跨梁承托位置4"
+            },
+            {
+              "path": [
+                "beam-front"
+              ],
+              "interfaceId": "tubeBeam.seat.4",
+              "label": "beam-front · 前横梁组件 · 跨梁承托位置4"
+            },
+            {
+              "path": [
+                "hook-4-front"
+              ],
+              "interfaceId": "clip.beamSeat",
+              "label": "hook-4-front · 跨梁4前挂钩 · 主梁顶面搭接"
+            }
+          ],
+          "issues": []
+        },
+        {
+          "id": "[[\"cross-4\"],\"beam.end.end\"]",
+          "label": "cross-4 · 承托跨梁4 · 末端焊接定位 ↔ hook-4-front · 跨梁4前挂钩 · 跨梁端部焊接基准",
+          "status": "not-required",
+          "connected": true,
+          "endpoints": [
+            {
+              "path": [
+                "cross-4"
+              ],
+              "interfaceId": "beam.end.end",
+              "label": "cross-4 · 承托跨梁4 · 末端焊接定位"
+            },
+            {
+              "path": [
+                "hook-4-front"
+              ],
+              "interfaceId": "clip.weldSide",
+              "label": "hook-4-front · 跨梁4前挂钩 · 跨梁端部焊接基准"
+            }
+          ],
+          "issues": []
+        },
+        {
+          "id": "[[\"beam-rear\",\"beam-body\"],\"tubeBeam.seat.2\"]",
+          "label": "beam-rear / beam-body · 矩管主梁 · 跨梁承托位置2 ↔ beam-rear · 后横梁组件 · 跨梁承托位置2 ↔ hook-4-rear · 跨梁4后挂钩 · 主梁顶面搭接",
+          "status": "configured",
+          "connected": true,
+          "endpoints": [
+            {
+              "path": [
+                "beam-rear",
+                "beam-body"
+              ],
+              "interfaceId": "tubeBeam.seat.2",
+              "label": "beam-rear / beam-body · 矩管主梁 · 跨梁承托位置2"
+            },
+            {
+              "path": [
+                "beam-rear"
+              ],
+              "interfaceId": "tubeBeam.seat.2",
+              "label": "beam-rear · 后横梁组件 · 跨梁承托位置2"
+            },
+            {
+              "path": [
+                "hook-4-rear"
+              ],
+              "interfaceId": "clip.beamSeat",
+              "label": "hook-4-rear · 跨梁4后挂钩 · 主梁顶面搭接"
+            }
+          ],
+          "issues": []
+        },
+        {
+          "id": "[[\"cross-4\"],\"beam.end.start\"]",
+          "label": "cross-4 · 承托跨梁4 · 起端焊接定位 ↔ hook-4-rear · 跨梁4后挂钩 · 跨梁端部焊接基准",
+          "status": "not-required",
+          "connected": true,
+          "endpoints": [
+            {
+              "path": [
+                "cross-4"
+              ],
+              "interfaceId": "beam.end.start",
+              "label": "cross-4 · 承托跨梁4 · 起端焊接定位"
+            },
+            {
+              "path": [
+                "hook-4-rear"
+              ],
+              "interfaceId": "clip.weldSide",
+              "label": "hook-4-rear · 跨梁4后挂钩 · 跨梁端部焊接基准"
+            }
+          ],
+          "issues": []
+        },
+        {
+          "id": "[[\"beam-front\",\"beam-body\"],\"tubeBeam.seat.5\"]",
+          "label": "beam-front / beam-body · 矩管主梁 · 跨梁承托位置5 ↔ beam-front · 前横梁组件 · 跨梁承托位置5 ↔ hook-5-front · 跨梁5前挂钩 · 主梁顶面搭接",
+          "status": "configured",
+          "connected": true,
+          "endpoints": [
+            {
+              "path": [
+                "beam-front",
+                "beam-body"
+              ],
+              "interfaceId": "tubeBeam.seat.5",
+              "label": "beam-front / beam-body · 矩管主梁 · 跨梁承托位置5"
+            },
+            {
+              "path": [
+                "beam-front"
+              ],
+              "interfaceId": "tubeBeam.seat.5",
+              "label": "beam-front · 前横梁组件 · 跨梁承托位置5"
+            },
+            {
+              "path": [
+                "hook-5-front"
+              ],
+              "interfaceId": "clip.beamSeat",
+              "label": "hook-5-front · 跨梁5前挂钩 · 主梁顶面搭接"
+            }
+          ],
+          "issues": []
+        },
+        {
+          "id": "[[\"cross-5\"],\"beam.end.end\"]",
+          "label": "cross-5 · 承托跨梁5 · 末端焊接定位 ↔ hook-5-front · 跨梁5前挂钩 · 跨梁端部焊接基准",
+          "status": "not-required",
+          "connected": true,
+          "endpoints": [
+            {
+              "path": [
+                "cross-5"
+              ],
+              "interfaceId": "beam.end.end",
+              "label": "cross-5 · 承托跨梁5 · 末端焊接定位"
+            },
+            {
+              "path": [
+                "hook-5-front"
+              ],
+              "interfaceId": "clip.weldSide",
+              "label": "hook-5-front · 跨梁5前挂钩 · 跨梁端部焊接基准"
+            }
+          ],
+          "issues": []
+        },
+        {
+          "id": "[[\"beam-rear\",\"beam-body\"],\"tubeBeam.seat.1\"]",
+          "label": "beam-rear / beam-body · 矩管主梁 · 跨梁承托位置1 ↔ beam-rear · 后横梁组件 · 跨梁承托位置1 ↔ hook-5-rear · 跨梁5后挂钩 · 主梁顶面搭接",
+          "status": "configured",
+          "connected": true,
+          "endpoints": [
+            {
+              "path": [
+                "beam-rear",
+                "beam-body"
+              ],
+              "interfaceId": "tubeBeam.seat.1",
+              "label": "beam-rear / beam-body · 矩管主梁 · 跨梁承托位置1"
+            },
+            {
+              "path": [
+                "beam-rear"
+              ],
+              "interfaceId": "tubeBeam.seat.1",
+              "label": "beam-rear · 后横梁组件 · 跨梁承托位置1"
+            },
+            {
+              "path": [
+                "hook-5-rear"
+              ],
+              "interfaceId": "clip.beamSeat",
+              "label": "hook-5-rear · 跨梁5后挂钩 · 主梁顶面搭接"
+            }
+          ],
+          "issues": []
+        },
+        {
+          "id": "[[\"cross-5\"],\"beam.end.start\"]",
+          "label": "cross-5 · 承托跨梁5 · 起端焊接定位 ↔ hook-5-rear · 跨梁5后挂钩 · 跨梁端部焊接基准",
+          "status": "not-required",
+          "connected": true,
+          "endpoints": [
+            {
+              "path": [
+                "cross-5"
+              ],
+              "interfaceId": "beam.end.start",
+              "label": "cross-5 · 承托跨梁5 · 起端焊接定位"
+            },
+            {
+              "path": [
+                "hook-5-rear"
+              ],
+              "interfaceId": "clip.weldSide",
+              "label": "hook-5-rear · 跨梁5后挂钩 · 跨梁端部焊接基准"
+            }
+          ],
+          "issues": []
+        },
+        {
+          "id": "[[\"cross-5\"],\"beam.support\"]",
+          "label": "rib-1 · 层板1底部加强筋 · 梁体支撑基准 ↔ panel-1 · 钢层板1 · 层板下表面 ↔ cross-1 · 承托跨梁1 · 梁体支撑基准 ↔ cross-2 · 承托跨梁2 · 梁体支撑基准 ↔ rib-2 · 层板2底部加强筋 · 梁体支撑基准 ↔ panel-2 · 钢层板2 · 层板下表面 ↔ cross-3 · 承托跨梁3 · 梁体支撑基准 ↔ rib-3 · 层板3底部加强筋 · 梁体支撑基准 ↔ panel-3 · 钢层板3 · 层板下表面 ↔ cross-4 · 承托跨梁4 · 梁体支撑基准 ↔ rib-4 · 层板4底部加强筋 · 梁体支撑基准 ↔ panel-4 · 钢层板4 · 层板下表面 ↔ cross-5 · 承托跨梁5 · 梁体支撑基准",
+          "status": "not-required",
+          "connected": true,
+          "endpoints": [
+            {
+              "path": [
+                "rib-1"
+              ],
+              "interfaceId": "beam.support",
+              "label": "rib-1 · 层板1底部加强筋 · 梁体支撑基准"
+            },
+            {
+              "path": [
+                "panel-1"
+              ],
+              "interfaceId": "deck.underside",
+              "label": "panel-1 · 钢层板1 · 层板下表面"
+            },
+            {
+              "path": [
+                "cross-1"
+              ],
+              "interfaceId": "beam.support",
+              "label": "cross-1 · 承托跨梁1 · 梁体支撑基准"
+            },
+            {
+              "path": [
+                "cross-2"
+              ],
+              "interfaceId": "beam.support",
+              "label": "cross-2 · 承托跨梁2 · 梁体支撑基准"
+            },
+            {
+              "path": [
+                "rib-2"
+              ],
+              "interfaceId": "beam.support",
+              "label": "rib-2 · 层板2底部加强筋 · 梁体支撑基准"
+            },
+            {
+              "path": [
+                "panel-2"
+              ],
+              "interfaceId": "deck.underside",
+              "label": "panel-2 · 钢层板2 · 层板下表面"
+            },
+            {
+              "path": [
+                "cross-3"
+              ],
+              "interfaceId": "beam.support",
+              "label": "cross-3 · 承托跨梁3 · 梁体支撑基准"
+            },
+            {
+              "path": [
+                "rib-3"
+              ],
+              "interfaceId": "beam.support",
+              "label": "rib-3 · 层板3底部加强筋 · 梁体支撑基准"
+            },
+            {
+              "path": [
+                "panel-3"
+              ],
+              "interfaceId": "deck.underside",
+              "label": "panel-3 · 钢层板3 · 层板下表面"
+            },
+            {
+              "path": [
+                "cross-4"
+              ],
+              "interfaceId": "beam.support",
+              "label": "cross-4 · 承托跨梁4 · 梁体支撑基准"
+            },
+            {
+              "path": [
+                "rib-4"
+              ],
+              "interfaceId": "beam.support",
+              "label": "rib-4 · 层板4底部加强筋 · 梁体支撑基准"
+            },
+            {
+              "path": [
+                "panel-4"
+              ],
+              "interfaceId": "deck.underside",
+              "label": "panel-4 · 钢层板4 · 层板下表面"
+            },
+            {
+              "path": [
+                "cross-5"
+              ],
+              "interfaceId": "beam.support",
+              "label": "cross-5 · 承托跨梁5 · 梁体支撑基准"
+            }
+          ],
+          "issues": []
+        },
+        {
+          "id": "[[\"panel-1\"],\"deck.edge.right\"]",
+          "label": "panel-1 · 钢层板1 · 层板侧边right ↔ panel-2 · 钢层板2 · 层板侧边left",
+          "status": "not-required",
+          "connected": true,
+          "endpoints": [
+            {
+              "path": [
+                "panel-1"
+              ],
+              "interfaceId": "deck.edge.right",
+              "label": "panel-1 · 钢层板1 · 层板侧边right"
+            },
+            {
+              "path": [
+                "panel-2"
+              ],
+              "interfaceId": "deck.edge.left",
+              "label": "panel-2 · 钢层板2 · 层板侧边left"
+            }
+          ],
+          "issues": []
+        },
+        {
+          "id": "[[\"panel-2\"],\"deck.edge.right\"]",
+          "label": "panel-2 · 钢层板2 · 层板侧边right ↔ panel-3 · 钢层板3 · 层板侧边left",
+          "status": "not-required",
+          "connected": true,
+          "endpoints": [
+            {
+              "path": [
+                "panel-2"
+              ],
+              "interfaceId": "deck.edge.right",
+              "label": "panel-2 · 钢层板2 · 层板侧边right"
+            },
+            {
+              "path": [
+                "panel-3"
+              ],
+              "interfaceId": "deck.edge.left",
+              "label": "panel-3 · 钢层板3 · 层板侧边left"
+            }
+          ],
+          "issues": []
+        },
+        {
+          "id": "[[\"panel-3\"],\"deck.edge.right\"]",
+          "label": "panel-3 · 钢层板3 · 层板侧边right ↔ panel-4 · 钢层板4 · 层板侧边left",
+          "status": "not-required",
+          "connected": true,
+          "endpoints": [
+            {
+              "path": [
+                "panel-3"
+              ],
+              "interfaceId": "deck.edge.right",
+              "label": "panel-3 · 钢层板3 · 层板侧边right"
+            },
+            {
+              "path": [
+                "panel-4"
+              ],
+              "interfaceId": "deck.edge.left",
+              "label": "panel-4 · 钢层板4 · 层板侧边left"
+            }
+          ],
+          "issues": []
+        },
+        {
+          "id": "[[\"beam-front\",\"beam-body\"],\"tubeBeam.datum\"]",
+          "label": "beam-front / beam-body · 矩管主梁 · 矩管截面与长度基准 ↔ beam-front · 前横梁组件 · 矩管截面与长度基准 ↔ panel-1 · 钢层板1 · 层板侧边left ↔ stop-left · 左侧限位挡条 · 层板上表面 ↔ stop-front · 前限位挡条 · 板件端面start ↔ stop-rear · 后限位挡条 · 板件端面start",
+          "status": "not-required",
+          "connected": true,
+          "endpoints": [
+            {
+              "path": [
+                "beam-front",
+                "beam-body"
+              ],
+              "interfaceId": "tubeBeam.datum",
+              "label": "beam-front / beam-body · 矩管主梁 · 矩管截面与长度基准"
+            },
+            {
+              "path": [
+                "beam-front"
+              ],
+              "interfaceId": "tubeBeam.datum",
+              "label": "beam-front · 前横梁组件 · 矩管截面与长度基准"
+            },
+            {
+              "path": [
+                "panel-1"
+              ],
+              "interfaceId": "deck.edge.left",
+              "label": "panel-1 · 钢层板1 · 层板侧边left"
+            },
+            {
+              "path": [
+                "stop-left"
+              ],
+              "interfaceId": "deck.upper",
+              "label": "stop-left · 左侧限位挡条 · 层板上表面"
+            },
+            {
+              "path": [
+                "stop-front"
+              ],
+              "interfaceId": "deck.end.start",
+              "label": "stop-front · 前限位挡条 · 板件端面start"
+            },
+            {
+              "path": [
+                "stop-rear"
+              ],
+              "interfaceId": "deck.end.start",
+              "label": "stop-rear · 后限位挡条 · 板件端面start"
+            }
+          ],
+          "issues": []
+        },
+        {
+          "id": "[[\"beam-front\",\"beam-body\"],\"tubeBeam.spanEnd\"]",
+          "label": "beam-front / beam-body · 矩管主梁 · 主梁末端 ↔ beam-front · 前横梁组件 · 主梁末端 ↔ panel-4 · 钢层板4 · 层板侧边right ↔ stop-right · 右侧限位挡条 · 层板上表面 ↔ stop-front · 前限位挡条 · 板件端面end ↔ stop-rear · 后限位挡条 · 板件端面end",
+          "status": "not-required",
+          "connected": true,
+          "endpoints": [
+            {
+              "path": [
+                "beam-front",
+                "beam-body"
+              ],
+              "interfaceId": "tubeBeam.spanEnd",
+              "label": "beam-front / beam-body · 矩管主梁 · 主梁末端"
+            },
+            {
+              "path": [
+                "beam-front"
+              ],
+              "interfaceId": "tubeBeam.spanEnd",
+              "label": "beam-front · 前横梁组件 · 主梁末端"
+            },
+            {
+              "path": [
+                "panel-4"
+              ],
+              "interfaceId": "deck.edge.right",
+              "label": "panel-4 · 钢层板4 · 层板侧边right"
+            },
+            {
+              "path": [
+                "stop-right"
+              ],
+              "interfaceId": "deck.upper",
+              "label": "stop-right · 右侧限位挡条 · 层板上表面"
+            },
+            {
+              "path": [
+                "stop-front"
+              ],
+              "interfaceId": "deck.end.end",
+              "label": "stop-front · 前限位挡条 · 板件端面end"
+            },
+            {
+              "path": [
+                "stop-rear"
+              ],
+              "interfaceId": "deck.end.end",
+              "label": "stop-rear · 后限位挡条 · 板件端面end"
+            }
+          ],
+          "issues": []
+        },
+        {
+          "id": "[[\"panel-4\"],\"deck.end.end\"]",
+          "label": "panel-1 · 钢层板1 · 板件端面end ↔ stop-front · 前限位挡条 · 层板下表面 ↔ panel-2 · 钢层板2 · 板件端面end ↔ panel-3 · 钢层板3 · 板件端面end ↔ panel-4 · 钢层板4 · 板件端面end",
+          "status": "not-required",
+          "connected": true,
+          "endpoints": [
+            {
+              "path": [
+                "panel-1"
+              ],
+              "interfaceId": "deck.end.end",
+              "label": "panel-1 · 钢层板1 · 板件端面end"
+            },
+            {
+              "path": [
+                "stop-front"
+              ],
+              "interfaceId": "deck.underside",
+              "label": "stop-front · 前限位挡条 · 层板下表面"
+            },
+            {
+              "path": [
+                "panel-2"
+              ],
+              "interfaceId": "deck.end.end",
+              "label": "panel-2 · 钢层板2 · 板件端面end"
+            },
+            {
+              "path": [
+                "panel-3"
+              ],
+              "interfaceId": "deck.end.end",
+              "label": "panel-3 · 钢层板3 · 板件端面end"
+            },
+            {
+              "path": [
+                "panel-4"
+              ],
+              "interfaceId": "deck.end.end",
+              "label": "panel-4 · 钢层板4 · 板件端面end"
+            }
+          ],
+          "issues": []
+        },
+        {
+          "id": "[[\"panel-4\"],\"deck.end.start\"]",
+          "label": "panel-1 · 钢层板1 · 板件端面start ↔ stop-rear · 后限位挡条 · 层板上表面 ↔ panel-2 · 钢层板2 · 板件端面start ↔ panel-3 · 钢层板3 · 板件端面start ↔ panel-4 · 钢层板4 · 板件端面start",
+          "status": "not-required",
+          "connected": true,
+          "endpoints": [
+            {
+              "path": [
+                "panel-1"
+              ],
+              "interfaceId": "deck.end.start",
+              "label": "panel-1 · 钢层板1 · 板件端面start"
+            },
+            {
+              "path": [
+                "stop-rear"
+              ],
+              "interfaceId": "deck.upper",
+              "label": "stop-rear · 后限位挡条 · 层板上表面"
+            },
+            {
+              "path": [
+                "panel-2"
+              ],
+              "interfaceId": "deck.end.start",
+              "label": "panel-2 · 钢层板2 · 板件端面start"
+            },
+            {
+              "path": [
+                "panel-3"
+              ],
+              "interfaceId": "deck.end.start",
+              "label": "panel-3 · 钢层板3 · 板件端面start"
+            },
+            {
+              "path": [
+                "panel-4"
+              ],
+              "interfaceId": "deck.end.start",
+              "label": "panel-4 · 钢层板4 · 板件端面start"
+            }
+          ],
+          "issues": []
+        }
+      ]
+    },
+    "status": "geometry_verified",
+    "geometryVerified": true,
+    "issues": [],
+    "requiredNextStep": "当前保存尺寸的几何已验证；仍须针对用户要求支持的调整方向试算，不能承诺任意尺寸或工程承载通过。",
+    "verificationScope": "当前保存尺寸；参数范围内的其他尺寸及工程规则不由此检查证明。",
+    "deliveryReady": true,
+    "qualification": {
+      "jobId": "6e03fc05-b1ca-4344-ab36-532ac0570221",
+      "revision": 4,
+      "inputHash": "56e7fb73e388a5c67f0243ffc62114a792a67234a34b35c836c13c46312eb22c",
+      "configHash": "e7db32b70e4ff51a9c0058fa2d76e8d20437643e7561dddc22e23bfc71c0107f",
+      "policyVersion": "authoring-qualification-6",
+      "status": "passed",
+      "message": "制作验收通过，已保存原尺寸及联动关系，可发布",
+      "cases": [
+        {
+          "label": "原尺寸联动与修复复验",
+          "dimensions": [
+            2520.0,
+            1114.0,
+            125.00000000000006
+          ],
+          "status": "passed"
+        },
+        {
+          "label": "X缩小",
+          "dimensions": [
+            2280.0,
+            1114.0,
+            125.00000000000006
+          ],
+          "status": "passed",
+          "attempts": 1,
+          "actualDimensions": [
+            2280.000071933394,
+            1114.0,
+            125.00000000000006
+          ],
+          "verification": {
+            "dimensionToleranceMm": 0.1,
+            "positionToleranceMm": 0.05,
+            "angleToleranceDegrees": 0.1,
+            "cadValid": true,
+            "leafCount": 33,
+            "targetDimensions": [
+              2280.0,
+              1114.0,
+              125.00000000000006
+            ],
+            "dimensionErrors": [
+              7.193339388322784e-05,
+              0.0,
+              0.0
+            ],
+            "maximumNormalizedResidual": 0.0007193339388322784
+          }
+        },
+        {
+          "label": "X放大",
+          "dimensions": [
+            2760.0,
+            1114.0,
+            125.00000000000006
+          ],
+          "status": "passed",
+          "attempts": 1,
+          "actualDimensions": [
+            2759.999929701094,
+            1114.0,
+            125.00000000000006
+          ],
+          "verification": {
+            "dimensionToleranceMm": 0.1,
+            "positionToleranceMm": 0.05,
+            "angleToleranceDegrees": 0.1,
+            "cadValid": true,
+            "leafCount": 33,
+            "targetDimensions": [
+              2760.0,
+              1114.0,
+              125.00000000000006
+            ],
+            "dimensionErrors": [
+              -7.029890593912569e-05,
+              0.0,
+              0.0
+            ],
+            "maximumNormalizedResidual": 0.0007029890593912569
+          }
+        }
+      ],
+      "automaticRecoveries": 0,
+      "detail": "",
+      "axes": [
+        0
+      ],
+      "nominalDimensions": [
+        2520.0,
+        1114.0,
+        125.00000000000006
+      ],
+      "minimumDimensions": [
+        2280.0,
+        1114.0,
+        125.00000000000006
+      ],
+      "maximumDimensions": [
+        2760.0,
+        1114.0,
+        125.00000000000006
+      ],
+      "rangeIsExplicit": true,
+      "scope": "测试点通过不代表区间内任意尺寸均可实现；新尺寸仍需真实CAD预览。",
+      "nominalRepairCount": 4,
+      "sourceRevision": 3,
+      "draftId": "31020233-96dd-4751-a012-7b5f9f642bbc",
+      "config": {
+        "axes": [
+          0
+        ],
+        "minimumDimensions": [
+          2280.0,
+          1114.0,
+          125.00000000000006
+        ],
+        "maximumDimensions": [
+          2760.0,
+          1114.0,
+          125.00000000000006
+        ],
+        "targets": []
+      },
+      "hardwareSelection": {
+        "ruleVersion": "hardware-selection-v2",
+        "total": 36,
+        "configured": 18,
+        "notRequired": 18,
+        "pending": 0,
+        "complete": true
+      },
+      "deliveryReady": true
+    }
+  }
+}

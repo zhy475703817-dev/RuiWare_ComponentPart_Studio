@@ -3,6 +3,7 @@ import re
 
 from .models import ComponentAction, ComponentDocument, InterfaceSource, TypedAction
 from .interface_compatibility import assess_interface_compatibility
+from .hardware_selection import audit_hardware_selection
 from .brace_policy import brace_rule_conflicts, valid_interface_pattern, built_in_brace_issues, column_frame_members
 
 PRESET_INTERFACE_TYPE_IDS = {
@@ -468,6 +469,9 @@ def apply_action(document: ComponentDocument, action: TypedAction) -> ComponentD
         if interface is None:
             raise ComponentError(404, "COMPONENT_ITEM_NOT_FOUND")
         hardware = action.hardware.model_dump(exclude_unset=True)
+        for field in ("scenarioId", "note"):
+            if isinstance(hardware.get(field), str):
+                hardware[field] = hardware[field].strip()
         if hardware.get("mode") == "manual" and not hardware.get("items"):
             raise ComponentError(422, "INVALID_INTERFACE_HARDWARE")
         hardware["items"] = [{**item, "name": item["name"].strip(), "specification": item["specification"].strip()} for item in hardware.get("items", [])]
@@ -636,6 +640,7 @@ def apply_action(document: ComponentDocument, action: TypedAction) -> ComponentD
 
 
 def validate_component(document: ComponentDocument, *, code_unique: bool = True) -> list[dict]:
+    hardware = audit_hardware_selection(document.model_dump(by_alias=True))
     members, mates = document.assembly.members, document.assembly.mates
     member_ids = {member.id for member in members}
     parameter_ids = {parameter.id for parameter in document.parameters}
@@ -728,6 +733,8 @@ def validate_component(document: ComponentDocument, *, code_unique: bool = True)
         *([check("brace.rules", "撑杆生成规则", all(_brace_rule_error(document, rule) is None for rule in document.braceGenerationRules)
                  and not brace_rule_conflicts(document.model_dump(by_alias=True)), "撑杆规则引用无效成员、参数、单位或撑杆接口，或多条规则重复使用同一撑杆原型")] if document.braceGenerationRules else []),
         check("slots", "槽位引用", len({slot.id for slot in document.slots}) == len(document.slots) and all(slot_valid(slot) for slot in document.slots), "槽位缺少有效基准接口、占用接口不兼容，或必填槽位尚未分配"),
+        {"id": "hardware.selection", "label": "连接五金选型", "status": "pass" if hardware["complete"] else "pending",
+         "message": f"已检查 {hardware['total']} 个已连接节点，五金配置已明确" if hardware["complete"] else f"{hardware['pending']} 个已连接节点五金待确认；请在接口阶段查看选型清单"},
         {"id": "assembly.solve", "label": "几何联动检查", "status": "pass" if document.geometryDesign and document.geometryDesign.verified else "pending", "message": "实际外形及已配置几何约束通过" if document.geometryDesign and document.geometryDesign.verified else "请在参数阶段试算并应用几何联动；当前未验证"},
         {"id": "rules.execution", "label": "工程规则执行", "status": "pending", "message": "当前仅保存规则说明，尚未接入规则执行"},
     ]

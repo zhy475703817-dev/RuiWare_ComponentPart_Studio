@@ -309,6 +309,13 @@ async function readReconstructionInfo(selected: PublishedTemplate, signal: Abort
       const rawHardware = Array.isArray(item.hardware.items) ? item.hardware.items : [];
       if (rawHardware.length > 50 || rawHardware.some(entry => !record(entry) || typeof entry.name !== "string" || !entry.name.trim() || entry.name.length > 80 || typeof entry.specification !== "string" || entry.specification.length > 120 || typeof entry.quantity !== "number" || !Number.isInteger(entry.quantity) || entry.quantity < 1 || entry.quantity > 10000)) throw new Error("零件接口五金配置无效。");
       parsed.hardware = { mode: item.hardware.mode, items: rawHardware.map(entry => ({ ...(typeof (entry as Record<string, unknown>).category === "string" ? { category: (entry as Record<string, unknown>).category as string } : {}), name: (entry as Record<string, unknown>).name as string, specification: (entry as Record<string, unknown>).specification as string, quantity: (entry as Record<string, unknown>).quantity as number })) };
+      for (const field of ["scenarioId", "note"] as const) {
+        const value = item.hardware[field];
+        if (value !== undefined && value !== null) {
+          if (typeof value !== "string" || value.length > (field === "note" ? 500 : 80)) throw new Error("零件接口五金选型信息无效。");
+          parsed.hardware[field] = value;
+        }
+      }
     }
     if (item.referenceFrame !== undefined && item.referenceFrame !== null) {
       if (!record(item.referenceFrame) || !["x", "y", "z", "-x", "-y", "-z"].includes(String(item.referenceFrame.axis)) ||

@@ -1,13 +1,23 @@
-import type { ComponentMember, GeometryDesign, GeometryEndpoint, HardwareItem, InterfaceHardware, Mate, PartInterface } from "./component";
+import type { ComponentMember, GeometryDesign, HardwareItem, InterfaceHardware, Mate, PartInterface } from "./component";
+
+import { collectHardwareNodes } from "./hardwareNodes.ts";
 
 export type HardwareUsageLine = { category: string; name: string; specification: string; quantity: number };
 
 export function inferHardwareCategory(name: string): string {
   if (/螺栓|bolt/i.test(name)) return "螺栓";
+  if (/螺钉|screw/i.test(name)) return "螺钉";
   if (/螺柱|stud/i.test(name)) return "螺柱";
   if (/螺母|nut/i.test(name)) return "螺母";
   if (/垫圈|垫片|washer/i.test(name)) return "垫圈";
   if (/销|pin/i.test(name)) return "销";
+  if (/铆钉|rivet/i.test(name)) return "铆钉";
+  if (/轴承|bearing/i.test(name)) return "轴承";
+  if (/轴套|bushing/i.test(name)) return "轴套";
+  if (/挡圈|retaining.?ring|circlip/i.test(name)) return "挡圈";
+  if (/卡扣|clip/i.test(name)) return "卡扣件";
+  if (/导轨限位/i.test(name)) return "导轨附件";
+  if (/^键$|平键|shaft.?key/i.test(name)) return "键";
   return "其他";
 }
 
@@ -47,60 +57,10 @@ function hardwareFor(item: PartInterface): HardwareUsageLine[] {
 }
 
 export function summarizeHardwareUsage(members: ComponentMember[], mates: Mate[], geometryDesign?: GeometryDesign | null): HardwareUsageLine[] {
-  const parents = new Map<string, string>();
-  const endpoints = new Map<string, Map<PartInterface, number>>();
-  const root = (key: string): string => {
-    const parent = parents.get(key)!;
-    if (parent === key) return key;
-    const result = root(parent);
-    parents.set(key, result);
-    return result;
-  };
-  // Exported component ports and their underlying part interface are one physical endpoint.
-  const resolve = (scope: ComponentMember[], endpoint: GeometryEndpoint, prefix: string[]): { key: string; item: PartInterface; depth: number } | undefined => {
-    const [id, ...remaining] = endpoint.path;
-    const member = scope.find(value => value.id === id);
-    if (!member || endpoint.interfaceId.startsWith("@")) return;
-    const path = [...prefix, member.id];
-    if (remaining.length) return member.instanceDocument ? resolve(member.instanceDocument.assembly.members, { ...endpoint, path: remaining }, path) : undefined;
-    const item = member.interfaces.find(value => value.id === endpoint.interfaceId);
-    if (!item) return;
-    const nested = member.instanceDocument;
-    const port = nested?.ports.find(value => value.id === endpoint.interfaceId);
-    const inner = nested && port ? resolve(nested.assembly.members, { path: [port.source.memberId], interfaceId: port.source.interfaceId }, path) : undefined;
-    return { key: inner?.key ?? JSON.stringify([path, endpoint.interfaceId]), item, depth: path.length };
-  };
-  const collect = (scope: ComponentMember[], connections: Mate[], geometry: GeometryDesign | null | undefined, prefix: string[]) => {
-    const connect = (a: GeometryEndpoint, b: GeometryEndpoint) => {
-      const from = resolve(scope, a, prefix), to = resolve(scope, b, prefix);
-      // Geometric support faces and stale endpoints are not fastening nodes.
-      if (!from || !to || from.key === to.key) return;
-      for (const endpoint of [from, to]) {
-        if (!parents.has(endpoint.key)) parents.set(endpoint.key, endpoint.key);
-        if (!endpoints.has(endpoint.key)) endpoints.set(endpoint.key, new Map());
-        endpoints.get(endpoint.key)!.set(endpoint.item, endpoint.depth);
-      }
-      parents.set(root(to.key), root(from.key));
-    };
-    for (const mate of connections) connect({ path: [mate.from.memberId], interfaceId: mate.from.interfaceId }, { path: [mate.to.memberId], interfaceId: mate.to.interfaceId });
-    for (const relation of geometry?.relations ?? []) connect(relation.a, relation.b);
-    for (const member of scope) {
-      const nested = member.instanceDocument;
-      if (nested) collect(nested.assembly.members, nested.assembly.mates, nested.geometryDesign, [...prefix, member.id]);
-    }
-  };
-  collect(members, mates, geometryDesign, []);
-  const nodes = new Map<string, PartInterface[]>();
-  for (const [key, definitions] of endpoints) {
-    const node = root(key);
-    if (!nodes.has(node)) nodes.set(node, []);
-    // An edited outer port takes precedence over its inherited inner definition.
-    const configured = [...definitions].filter(([item]) => item.hardware && item.hardware.mode !== "auto");
-    const shallowest = Math.min(...configured.map(([, depth]) => depth));
-    nodes.get(node)!.push(...(configured.length ? configured.filter(([, depth]) => depth === shallowest).map(([item]) => item) : [...definitions.keys()]));
-  }
+  const { nodes } = collectHardwareNodes(members, mates, geometryDesign);
   const totals = new Map<string, HardwareUsageLine>();
-  for (const interfaces of nodes.values()) {
+  for (const node of nodes) {
+    const interfaces = node.declarations.map(endpoint => endpoint.item);
     // A saved kit replaces generic recommendations for the whole shared node.
     const manual = interfaces.filter(item => item.hardware?.mode === "manual");
     // Pick one complete automatic kit; a generic opposite hole must not add a second kit.

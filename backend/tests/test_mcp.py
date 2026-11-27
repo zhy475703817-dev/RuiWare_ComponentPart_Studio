@@ -82,6 +82,24 @@ class MCPTests(unittest.TestCase):
         with TestClient(create_app(dist_dir=None), base_url="http://127.0.0.1:8020", client=("203.0.113.8", 12345)) as client:
             self.assertEqual(self.rpc(client, "tools/list").status_code, 403)
 
+    def test_hardware_presets_and_selection_save_without_interface_dimensions(self):
+        from backend.tests.test_hardware_selection import document
+        with self.client() as client:
+            presets = self.call(client, 'component_get_hardware_input_presets', {})['structuredContent']
+            self.assertFalse(presets['interfaceDimensionChecks'])
+            self.assertEqual(len(presets['families']), 14)
+            rules = self.call(client, 'component_get_hardware_selection_rules', {})['structuredContent']
+            self.assertEqual(len(rules['scenarios']), 25)
+            draft = client.post('/api/component-drafts', json={'document': document().model_dump(by_alias=True)}).json()
+            hardware = {'mode': 'manual', 'scenarioId': 'bolt-into-thread', 'items': [
+                {'category': '螺栓', 'name': '六角螺栓', 'specification': 'M7×0.75 × 37.5 mm', 'quantity': 2}]}
+            result = self.call(client, 'component_set_interface_hardware', {'draftId': draft['draftId'],
+                'expectedRevision': draft['document']['revision'], 'memberId': 'a', 'interfaceId': 'i', 'hardware': hardware})
+            self.assertFalse(result.get('isError'), result)
+            self.assertTrue(result['structuredContent']['hardwareSelection']['complete'])
+            current = client.get('/api/component-drafts/' + draft['draftId']).json()
+            self.assertEqual(current['document']['assembly']['members'][0]['interfaces'][0]['hardware'], hardware)
+
     def test_ai_creation_policy_is_delivered_on_initialize_and_draft_operations(self):
         from backend.tests.test_components import member
 
@@ -92,7 +110,8 @@ class MCPTests(unittest.TestCase):
             self.assertIn("选型、装配和参数配置时提前解决", initialized["instructions"])
             self.assertNotIn("几何重建和正式发布尚未接入", initialized["instructions"])
             policy = self.call(client, "component_get_authoring_requirements", {})["structuredContent"]
-            self.assertEqual(len(policy["rules"]), 7)
+            self.assertEqual(len(policy["rules"]), 8)
+            self.assertIn('hardware', {rule['stage'] for rule in policy['rules']})
             self.assertIn('column-frame', {rule['stage'] for rule in policy['rules']})
             document = client.post("/api/component-drafts", json={}).json()["document"]
             document["assembly"]["members"] = [member("left"), member("beam")]

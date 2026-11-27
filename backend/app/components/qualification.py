@@ -49,8 +49,10 @@ class QualificationJobs:
         return self.public(job)
 
     def public(self, job):
+        selection = self.repository.qualification(job["draftId"])
         return {**deepcopy(job["report"]), "draftId": job["draftId"], "config": job["config"],
-                "deliveryReady": job["report"]["status"] == "passed"}
+                "hardwareSelection": selection.get("hardwareSelection"),
+                "deliveryReady": job["report"]["status"] == "passed" and selection["deliveryReady"]}
 
     def status(self, draft_id):
         saved = self.repository.qualification(draft_id)

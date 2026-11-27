@@ -3,7 +3,7 @@ from typing import Annotated
 from mcp.types import CallToolResult, ToolAnnotations
 from pydantic import Field
 
-from ..components.models import BraceGenerationRule, ComponentAction, ComponentDocument, DefinitionPatch, MemberPatch
+from ..components.models import BraceGenerationRule, ComponentAction, ComponentDocument, DefinitionPatch, MemberPatch, InterfaceHardware
 from ..components.resize_jobs import ResizeRequest, ResizeApplyRequest, ResizeJobs
 from .authoring import POLICY_VERSION, authoring_report, requirements
 from ..components.qualification_policy import QualificationConfig
@@ -109,6 +109,25 @@ def register(mcp, app, invoke):
     async def component_get_draft(draftId: str) -> CallToolResult:
         """读取草稿、基础检查及authoring制作检查；取得revision，先解决可预防的接口、联动和参数问题。"""
         return await invoke(lambda: with_authoring(app.state.drafts.get(draftId)))
+
+    @mcp.tool(annotations=write, structured_output=False)
+    async def component_set_interface_hardware(draftId: str, expectedRevision: Revision, memberId: str,
+                                              interfaceId: str, hardware: InterfaceHardware) -> CallToolResult:
+        """保存真实接口五金选型：选择scenarioId、填写实际类别/规格/数量；无需额外五金需note说明依据。自动推荐和占位规格不算完成。返回hardwareSelection逐节点结果；保存中间状态不会伪造通过。"""
+        return await edit(draftId, expectedRevision, {"type": "interface.hardware.set", "memberId": memberId,
+                          "interfaceId": interfaceId, "hardware": hardware.model_dump(exclude_unset=True)})
+
+    @mcp.tool(annotations=readonly, structured_output=False)
+    async def component_get_hardware_selection_rules() -> CallToolResult:
+        """读取五金选型场景、必需类别、条件附件及无需五金的说明要求。场景全部可选，不检查接口尺寸适用性。"""
+        from ..components.hardware_selection import RULES
+        return await invoke(lambda: RULES)
+
+    @mcp.tool(annotations=readonly, structured_output=False)
+    async def component_get_hardware_input_presets() -> CallToolResult:
+        """读取市售五金类型与常用螺纹/长度/型号输入预设。仅用于填写，可自定义，不读取接口尺寸、不检查适用性；不可自动猜定用户未指定的规格。"""
+        from ..components.hardware_selection import INPUT_PRESETS
+        return await invoke(lambda: INPUT_PRESETS)
 
     @mcp.tool(annotations=write, structured_output=False)
     async def component_update_definition(draftId: str, expectedRevision: Revision, patch: DefinitionPatch) -> CallToolResult:

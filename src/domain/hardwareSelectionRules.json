@@ -1,0 +1,560 @@
+{
+  "version": "hardware-selection-v2",
+  "scope": "connected",
+  "requirement": "所有已连接的物理节点（含几何连接与子组件内部连接）必须明确是否需要五金；需要时填写类别、规格和数量，无需时选择对应场景并说明原因。未完成不得发布或标记交付完成。闲置及未连接的预留/对外接口不强制配置。",
+  "interfaceDimensionChecks": false,
+  "statuses": {
+    "configured": "已指定五金",
+    "not-required": "明确无需额外五金",
+    "pending": "待确认"
+  },
+  "placeholderPattern": "待定|待确认|待填写|未指定|按配合尺寸|按实际|实际.*规格|按图|\\{[^}]*\\}|\\bTODO\\b|\\bTBD\\b",
+  "scenarios": [
+    {
+      "id": "bolt-through",
+      "label": "穿透螺栓＋独立螺母",
+      "mode": "manual",
+      "connectionTypeIds": [
+        "bolt.male.v1",
+        "bolt.female.v1",
+        "pin.v1",
+        "hole.v1",
+        "plane.contact.v1"
+      ],
+      "requiredCategories": [
+        "螺栓",
+        "螺母"
+      ],
+      "optionalCategories": [
+        "垫圈",
+        "锁紧件"
+      ],
+      "condition": "真实结构为穿透连接；垫圈与防松件按设计添加。",
+      "requiresNote": false,
+      "items": [
+        {
+          "category": "螺栓",
+          "name": "六角螺栓",
+          "specification": "",
+          "quantity": 1
+        },
+        {
+          "category": "螺母",
+          "name": "六角螺母",
+          "specification": "",
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "id": "bolt-into-thread",
+      "label": "螺栓拧入已有螺纹孔",
+      "mode": "manual",
+      "connectionTypeIds": [
+        "bolt.male.v1",
+        "bolt.female.v1",
+        "threaded.stud.v1",
+        "threaded.hole.v1",
+        "plane.contact.v1"
+      ],
+      "requiredCategories": [
+        "螺栓"
+      ],
+      "optionalCategories": [
+        "垫圈",
+        "锁紧件"
+      ],
+      "condition": "螺纹孔已在本体内，不额外增加螺母。",
+      "requiresNote": false,
+      "items": [
+        {
+          "category": "螺栓",
+          "name": "六角螺栓",
+          "specification": "",
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "id": "screw-into-thread",
+      "label": "螺钉拧入已有螺纹孔",
+      "mode": "manual",
+      "connectionTypeIds": [
+        "bolt.male.v1",
+        "bolt.female.v1",
+        "threaded.stud.v1",
+        "threaded.hole.v1",
+        "plane.contact.v1"
+      ],
+      "requiredCategories": [
+        "螺钉"
+      ],
+      "optionalCategories": [
+        "垫圈",
+        "锁紧件"
+      ],
+      "condition": "实际使用螺钉；不默认使用螺柱或螺母。",
+      "requiresNote": false,
+      "items": [
+        {
+          "category": "螺钉",
+          "name": "螺钉",
+          "specification": "",
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "id": "stud-separate",
+      "label": "独立螺柱＋螺母",
+      "mode": "manual",
+      "connectionTypeIds": [
+        "threaded.stud.v1",
+        "threaded.hole.v1"
+      ],
+      "requiredCategories": [
+        "螺柱",
+        "螺母"
+      ],
+      "optionalCategories": [
+        "垫圈",
+        "锁紧件"
+      ],
+      "condition": "螺柱需独立采购，数量按真实节点确定。",
+      "requiresNote": false,
+      "items": [
+        {
+          "category": "螺柱",
+          "name": "螺柱",
+          "specification": "",
+          "quantity": 1
+        },
+        {
+          "category": "螺母",
+          "name": "六角螺母",
+          "specification": "",
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "id": "stud-integral",
+      "label": "本体已有螺柱，仅配螺母",
+      "mode": "manual",
+      "connectionTypeIds": [
+        "threaded.stud.v1",
+        "threaded.hole.v1"
+      ],
+      "requiredCategories": [
+        "螺母"
+      ],
+      "optionalCategories": [
+        "垫圈",
+        "锁紧件"
+      ],
+      "condition": "螺柱属于零件本体，不重复计入。",
+      "requiresNote": false,
+      "items": [
+        {
+          "category": "螺母",
+          "name": "六角螺母",
+          "specification": "",
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "id": "thread-direct",
+      "label": "两本体螺纹直接旋合",
+      "mode": "none",
+      "connectionTypeIds": [
+        "threaded.stud.v1",
+        "threaded.hole.v1"
+      ],
+      "requiredCategories": [],
+      "optionalCategories": [],
+      "condition": "公端与母端均已包含在本体中；写明无需额外件的依据。",
+      "requiresNote": true,
+      "items": []
+    },
+    {
+      "id": "pin-separate",
+      "label": "独立定位销",
+      "mode": "manual",
+      "connectionTypeIds": [
+        "pin.v1",
+        "hole.v1"
+      ],
+      "requiredCategories": [
+        "销"
+      ],
+      "optionalCategories": [
+        "挡圈",
+        "垫圈"
+      ],
+      "condition": "实际需插入独立销；填写真实直径、长度和配合规格。",
+      "requiresNote": false,
+      "items": [
+        {
+          "category": "销",
+          "name": "定位销",
+          "specification": "",
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "id": "pin-integral",
+      "label": "本体已有定位销",
+      "mode": "none",
+      "connectionTypeIds": [
+        "pin.v1",
+        "hole.v1"
+      ],
+      "requiredCategories": [],
+      "optionalCategories": [],
+      "condition": "销已在本体中，无额外独立件；写明来源。",
+      "requiresNote": true,
+      "items": []
+    },
+    {
+      "id": "weld-only",
+      "label": "焊接且无需额外连接件",
+      "mode": "none",
+      "connectionTypeIds": [
+        "weld.surface.v1"
+      ],
+      "requiredCategories": [],
+      "optionalCategories": [],
+      "condition": "焊缝/焊材另记工艺要求，说明是否还需独立连接板等。",
+      "requiresNote": true,
+      "items": []
+    },
+    {
+      "id": "snap-integral",
+      "label": "本体卡钩与卡槽直接扣合",
+      "mode": "none",
+      "connectionTypeIds": [
+        "snap.hook.v1",
+        "snap.slot.v1"
+      ],
+      "requiredCategories": [],
+      "optionalCategories": [],
+      "condition": "卡扣结构属于本体；说明不需独立卡扣或紧固件。",
+      "requiresNote": true,
+      "items": []
+    },
+    {
+      "id": "snap-separate",
+      "label": "独立卡扣件",
+      "mode": "manual",
+      "connectionTypeIds": [
+        "snap.hook.v1",
+        "snap.slot.v1"
+      ],
+      "requiredCategories": [
+        "卡扣件"
+      ],
+      "optionalCategories": [
+        "螺钉",
+        "垫圈"
+      ],
+      "condition": "使用独立卡扣；实际需安装螺钉时一并填入清单。",
+      "requiresNote": false,
+      "items": [
+        {
+          "category": "卡扣件",
+          "name": "卡扣件",
+          "specification": "",
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "id": "rail-slide",
+      "label": "导轨与槽直接滑动配合",
+      "mode": "none",
+      "connectionTypeIds": [
+        "rail.v1",
+        "rail.slot.v1"
+      ],
+      "requiredCategories": [],
+      "optionalCategories": [],
+      "condition": "仅此滑动接口不需额外件；安装、限位节点另行配置。",
+      "requiresNote": true,
+      "items": []
+    },
+    {
+      "id": "rail-fastening",
+      "label": "槽内螺栓＋槽螺母紧固",
+      "mode": "manual",
+      "connectionTypeIds": [
+        "rail.v1",
+        "rail.slot.v1"
+      ],
+      "requiredCategories": [
+        "螺栓",
+        "螺母"
+      ],
+      "optionalCategories": [
+        "垫圈",
+        "连接件"
+      ],
+      "condition": "核对槽系统，明确 T 型/滑块螺母名称与型号。",
+      "requiresNote": false,
+      "items": [
+        {
+          "category": "螺栓",
+          "name": "六角螺栓",
+          "specification": "",
+          "quantity": 1
+        },
+        {
+          "category": "螺母",
+          "name": "六角螺母",
+          "specification": "",
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "id": "rail-stop",
+      "label": "独立导轨限位件",
+      "mode": "manual",
+      "connectionTypeIds": [
+        "rail.v1",
+        "rail.slot.v1"
+      ],
+      "requiredCategories": [
+        "导轨附件"
+      ],
+      "optionalCategories": [
+        "螺栓",
+        "螺钉",
+        "螺母",
+        "垫圈"
+      ],
+      "condition": "明确限位件型号，并补齐实际所需安装紧固件。",
+      "requiresNote": false,
+      "items": [
+        {
+          "category": "导轨附件",
+          "name": "导轨限位件",
+          "specification": "",
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "id": "plane-contact",
+      "label": "单纯面贴合/支承",
+      "mode": "none",
+      "connectionTypeIds": [
+        "plane.contact.v1"
+      ],
+      "requiredCategories": [],
+      "optionalCategories": [],
+      "condition": "该接口仅贴合或支承；若需紧固必须选择相应紧固方案。",
+      "requiresNote": true,
+      "items": []
+    },
+    {
+      "id": "plane-glued",
+      "label": "胶接且无需额外机械连接件",
+      "mode": "none",
+      "connectionTypeIds": [
+        "plane.contact.v1"
+      ],
+      "requiredCategories": [],
+      "optionalCategories": [],
+      "condition": "胶种与用量另记工艺要求；说明无需机械紧固件。",
+      "requiresNote": true,
+      "items": []
+    },
+    {
+      "id": "shaft-direct",
+      "label": "轴与孔直接配合",
+      "mode": "none",
+      "connectionTypeIds": [
+        "shaft.v1",
+        "bore.v1"
+      ],
+      "requiredCategories": [],
+      "optionalCategories": [],
+      "condition": "仅在没有额外轴承、轴套、键或挡圈时使用，说明依据。",
+      "requiresNote": true,
+      "items": []
+    },
+    {
+      "id": "shaft-bearing",
+      "label": "轴承支承",
+      "mode": "manual",
+      "connectionTypeIds": [
+        "shaft.v1",
+        "bore.v1"
+      ],
+      "requiredCategories": [
+        "轴承"
+      ],
+      "optionalCategories": [
+        "挡圈",
+        "轴套",
+        "垫圈",
+        "密封件"
+      ],
+      "condition": "轴承未作为装配成员计入；补齐真实轴向定位与密封附件。",
+      "requiresNote": false,
+      "items": [
+        {
+          "category": "轴承",
+          "name": "轴承",
+          "specification": "",
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "id": "shaft-bushing",
+      "label": "轴套支承",
+      "mode": "manual",
+      "connectionTypeIds": [
+        "shaft.v1",
+        "bore.v1"
+      ],
+      "requiredCategories": [
+        "轴套"
+      ],
+      "optionalCategories": [
+        "挡圈",
+        "垫圈"
+      ],
+      "condition": "使用独立轴套；按设计添加轴向定位附件。",
+      "requiresNote": false,
+      "items": [
+        {
+          "category": "轴套",
+          "name": "轴套",
+          "specification": "",
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "id": "shaft-key",
+      "label": "键连接",
+      "mode": "manual",
+      "connectionTypeIds": [
+        "shaft.v1",
+        "bore.v1"
+      ],
+      "requiredCategories": [
+        "键"
+      ],
+      "optionalCategories": [
+        "挡圈",
+        "轴承",
+        "轴套"
+      ],
+      "condition": "真实轴与配合件有匹配键槽；补齐实际支承附件。",
+      "requiresNote": false,
+      "items": [
+        {
+          "category": "键",
+          "name": "键",
+          "specification": "",
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "id": "shaft-ring",
+      "label": "独立挡圈定位",
+      "mode": "manual",
+      "connectionTypeIds": [
+        "shaft.v1",
+        "bore.v1"
+      ],
+      "requiredCategories": [
+        "挡圈"
+      ],
+      "optionalCategories": [
+        "垫圈",
+        "轴承",
+        "轴套"
+      ],
+      "condition": "实际有配套挡圈槽，确定轴用/孔用型号及数量。",
+      "requiresNote": false,
+      "items": [
+        {
+          "category": "挡圈",
+          "name": "挡圈",
+          "specification": "",
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "id": "rivet",
+      "label": "铆接",
+      "mode": "manual",
+      "connectionTypeIds": [
+        "*"
+      ],
+      "requiredCategories": [
+        "铆钉"
+      ],
+      "optionalCategories": [
+        "垫圈"
+      ],
+      "condition": "明确实际铆钉种类与夹持范围；非铆接接口不得套用。",
+      "requiresNote": true,
+      "items": [
+        {
+          "category": "铆钉",
+          "name": "铆钉",
+          "specification": "",
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "id": "included-in-member",
+      "label": "所需五金已包含在本体或装配成员",
+      "mode": "none",
+      "connectionTypeIds": [
+        "*"
+      ],
+      "requiredCategories": [],
+      "optionalCategories": [],
+      "condition": "写明已有成员/零件和涵盖的五金，不重复追加。",
+      "requiresNote": true,
+      "items": []
+    },
+    {
+      "id": "custom-required",
+      "label": "经核对的自定义五金清单",
+      "mode": "manual",
+      "connectionTypeIds": [
+        "*"
+      ],
+      "requiredCategories": [],
+      "optionalCategories": [],
+      "condition": "说明连接机制，填写完整类别、名称、规格和数量。",
+      "requiresNote": true,
+      "items": []
+    },
+    {
+      "id": "custom-none",
+      "label": "经核对确实无需额外五金",
+      "mode": "none",
+      "connectionTypeIds": [
+        "*"
+      ],
+      "requiredCategories": [],
+      "optionalCategories": [],
+      "condition": "必须说明为何无需额外五金；未识别或未配置不构成依据。",
+      "requiresNote": true,
+      "items": []
+    }
+  ]
+}

@@ -1,0 +1,925 @@
+{
+  "format": "ruiware-interface-hardware-reference",
+  "formatVersion": 1,
+  "generatedOn": "2026-11-26",
+  "sourceRevision": "73a6740",
+  "title": "组件平台接口连接类型与五金配置目录",
+  "purpose": "选配参考目录；通过配套脚本提取并生成现有 ActionRequest。目录本身不是 ComponentDocument，不可整体提交草稿创建接口。",
+  "sources": [
+    "src/domain/interfaceTypes.ts",
+    "src/stages/DefinitionStage.tsx",
+    "src/stages/InterfacesStage.tsx",
+    "src/domain/hardware.ts",
+    "src/domain/interfaceCompatibility.ts",
+    "backend/app/components/models.py",
+    "backend/app/components/service.py"
+  ],
+  "nativeContract": {
+    "hardwarePath": "assembly.members[].interfaces[].hardware",
+    "exportHardwarePath": "stages.assembly.members[].interfaces[].hardware",
+    "actionType": "interface.hardware.set",
+    "requestPath": "POST /api/component-drafts/{draftId}/actions",
+    "requestKeys": [
+      "expectedRevision",
+      "action"
+    ],
+    "actionKeys": [
+      "type",
+      "memberId",
+      "interfaceId",
+      "hardware"
+    ],
+    "modes": [
+      {
+        "value": "auto",
+        "label": "自动识别与推荐"
+      },
+      {
+        "value": "manual",
+        "label": "手动指定"
+      },
+      {
+        "value": "none",
+        "label": "不使用额外五金"
+      }
+    ],
+    "limits": {
+      "maxItems": 50,
+      "maxCategoryLength": 80,
+      "maxNameLength": 80,
+      "maxSpecificationLength": 120,
+      "minQuantity": 1,
+      "maxQuantity": 10000,
+      "integerQuantity": true,
+      "maxScenarioIdLength": 80,
+      "maxNoteLength": 500
+    },
+    "inferredCategories": [
+      "螺栓",
+      "螺钉",
+      "螺柱",
+      "螺母",
+      "垫圈",
+      "销",
+      "铆钉",
+      "轴承",
+      "轴套",
+      "挡圈",
+      "卡扣件",
+      "导轨附件",
+      "键",
+      "其他"
+    ],
+    "selectionFields": {
+      "scenarioId": "实际场景 ID；全部类型均可选",
+      "note": "配置说明；无需额外五金/自定义场景必须填写"
+    }
+  },
+  "automaticExampleContext": {
+    "interfaceSize": {
+      "diameter": 8,
+      "unit": "mm"
+    },
+    "connectionMethod": null,
+    "mating": null,
+    "note": "仅用于复现代码显示；不是选型推荐或采购规格。"
+  },
+  "interfaceTypes": [
+    {
+      "connectionTypeId": "bolt.male.v1",
+      "label": "螺栓连接公口",
+      "connectableTypeIds": [
+        "bolt.female.v1"
+      ],
+      "automaticHardwareAtDiameter8": [
+        {
+          "category": "螺栓",
+          "name": "六角螺栓",
+          "specification": "M8 × 长度待定",
+          "quantity": 1
+        },
+        {
+          "category": "螺母",
+          "name": "六角螺母",
+          "specification": "M8",
+          "quantity": 1
+        },
+        {
+          "category": "垫圈",
+          "name": "平垫圈",
+          "specification": "M8",
+          "quantity": 2
+        }
+      ],
+      "profileIds": [
+        "auto",
+        "bolt-kit",
+        "none"
+      ],
+      "note": "自动套件不区分本体已有螺栓与额外五金；实际不需要螺母/垫圈时手动调整。"
+    },
+    {
+      "connectionTypeId": "bolt.female.v1",
+      "label": "螺栓连接母口",
+      "connectableTypeIds": [
+        "bolt.male.v1"
+      ],
+      "automaticHardwareAtDiameter8": [
+        {
+          "category": "螺栓",
+          "name": "六角螺栓",
+          "specification": "M8 × 长度待定",
+          "quantity": 1
+        },
+        {
+          "category": "螺母",
+          "name": "六角螺母",
+          "specification": "M8",
+          "quantity": 1
+        },
+        {
+          "category": "垫圈",
+          "name": "平垫圈",
+          "specification": "M8",
+          "quantity": 2
+        }
+      ],
+      "profileIds": [
+        "auto",
+        "bolt-kit",
+        "screw-into-thread",
+        "none"
+      ],
+      "note": "此类型标签不能证明它是通孔或螺纹孔；按真实结构选择套件。"
+    },
+    {
+      "connectionTypeId": "threaded.stud.v1",
+      "label": "螺纹公端 / 螺柱",
+      "connectableTypeIds": [
+        "threaded.hole.v1"
+      ],
+      "automaticHardwareAtDiameter8": [
+        {
+          "category": "螺柱",
+          "name": "螺柱",
+          "specification": "M8 × 长度待定",
+          "quantity": 1
+        },
+        {
+          "category": "螺母",
+          "name": "六角螺母",
+          "specification": "M8",
+          "quantity": 1
+        },
+        {
+          "category": "垫圈",
+          "name": "平垫圈",
+          "specification": "M8",
+          "quantity": 2
+        }
+      ],
+      "profileIds": [
+        "auto",
+        "stud-kit",
+        "none"
+      ],
+      "note": "一体螺柱不应再计一支采购螺柱；实际附件使用手动清单。"
+    },
+    {
+      "connectionTypeId": "threaded.hole.v1",
+      "label": "螺纹母端 / 螺纹孔",
+      "connectableTypeIds": [
+        "threaded.stud.v1"
+      ],
+      "automaticHardwareAtDiameter8": [
+        {
+          "category": "螺柱",
+          "name": "螺柱",
+          "specification": "M8 × 长度待定",
+          "quantity": 1
+        },
+        {
+          "category": "螺母",
+          "name": "六角螺母",
+          "specification": "M8",
+          "quantity": 1
+        },
+        {
+          "category": "垫圈",
+          "name": "平垫圈",
+          "specification": "M8",
+          "quantity": 2
+        }
+      ],
+      "profileIds": [
+        "auto",
+        "screw-into-thread",
+        "stud-kit",
+        "none"
+      ],
+      "note": "当前自动推荐仍是螺柱套件；螺钉拧入螺纹孔需手动选择，不默认添加螺母。"
+    },
+    {
+      "connectionTypeId": "pin.v1",
+      "label": "定位销",
+      "connectableTypeIds": [
+        "hole.v1"
+      ],
+      "automaticHardwareAtDiameter8": [
+        {
+          "category": "销",
+          "name": "定位销",
+          "specification": "M8",
+          "quantity": 1
+        }
+      ],
+      "profileIds": [
+        "dowel-pin",
+        "auto",
+        "none"
+      ],
+      "note": "当前自动规格显示 M8 是代码格式，不表示销为螺纹件；手动填写实际销规格。一体销使用 none。"
+    },
+    {
+      "connectionTypeId": "hole.v1",
+      "label": "定位孔",
+      "connectableTypeIds": [
+        "pin.v1"
+      ],
+      "automaticHardwareAtDiameter8": [
+        {
+          "category": "销",
+          "name": "定位销",
+          "specification": "M8",
+          "quantity": 1
+        }
+      ],
+      "profileIds": [
+        "dowel-pin",
+        "auto",
+        "none"
+      ],
+      "note": "孔类型自身不证明需要独立定位销；用真实连接机制决定五金。"
+    },
+    {
+      "connectionTypeId": "weld.surface.v1",
+      "label": "焊接面",
+      "connectableTypeIds": [
+        "weld.surface.v1"
+      ],
+      "automaticHardwareAtDiameter8": [],
+      "profileIds": [
+        "none",
+        "custom-item"
+      ],
+      "note": "焊缝和焊材没有专门的用量字段；不虚构螺栓。确有独立连接件时另行配置。"
+    },
+    {
+      "connectionTypeId": "snap.hook.v1",
+      "label": "卡扣公口 / 卡钩",
+      "connectableTypeIds": [
+        "snap.slot.v1"
+      ],
+      "automaticHardwareAtDiameter8": [],
+      "profileIds": [
+        "none",
+        "snap-clip"
+      ],
+      "note": "一体卡钩不另计五金；独立卡扣件可手动指定。"
+    },
+    {
+      "connectionTypeId": "snap.slot.v1",
+      "label": "卡扣母口 / 卡槽",
+      "connectableTypeIds": [
+        "snap.hook.v1"
+      ],
+      "automaticHardwareAtDiameter8": [],
+      "profileIds": [
+        "none",
+        "snap-clip"
+      ],
+      "note": "与另一端共用的独立卡扣只按同一物理节点计数。"
+    },
+    {
+      "connectionTypeId": "rail.v1",
+      "label": "导轨",
+      "connectableTypeIds": [
+        "rail.slot.v1"
+      ],
+      "automaticHardwareAtDiameter8": [],
+      "profileIds": [
+        "none",
+        "rail-fastening",
+        "rail-stop",
+        "custom-item"
+      ],
+      "note": "滑动配合、导轨安装与型材槽紧固是不同场景；不可仅凭导轨标签自动指定 T 型螺母。"
+    },
+    {
+      "connectionTypeId": "rail.slot.v1",
+      "label": "导轨槽",
+      "connectableTypeIds": [
+        "rail.v1"
+      ],
+      "automaticHardwareAtDiameter8": [],
+      "profileIds": [
+        "none",
+        "rail-fastening",
+        "rail-stop",
+        "custom-item"
+      ],
+      "note": "槽形、紧固方式和型号需核对；本目录不推导槽尺寸。"
+    },
+    {
+      "connectionTypeId": "plane.contact.v1",
+      "label": "平面贴合面",
+      "connectableTypeIds": [
+        "plane.contact.v1"
+      ],
+      "automaticHardwareAtDiameter8": [],
+      "profileIds": [
+        "none",
+        "bolt-kit",
+        "custom-item"
+      ],
+      "note": "纯贴合不必增加五金；有额外紧固件时按实际连接配置。"
+    },
+    {
+      "connectionTypeId": "shaft.v1",
+      "label": "轴 / 轴颈",
+      "connectableTypeIds": [
+        "bore.v1"
+      ],
+      "automaticHardwareAtDiameter8": [],
+      "profileIds": [
+        "none",
+        "bearing",
+        "retaining-ring",
+        "shaft-key",
+        "bushing",
+        "custom-item"
+      ],
+      "note": "轴孔类型不自动决定轴承、挡圈、键或轴套；只选择实际存在的额外件。"
+    },
+    {
+      "connectionTypeId": "bore.v1",
+      "label": "轴孔 / 轴承孔",
+      "connectableTypeIds": [
+        "shaft.v1"
+      ],
+      "automaticHardwareAtDiameter8": [],
+      "profileIds": [
+        "none",
+        "bearing",
+        "retaining-ring",
+        "shaft-key",
+        "bushing",
+        "custom-item"
+      ],
+      "note": "轴承孔标签不能证明轴承已配置；本体/已有成员与额外采购件须分清。"
+    }
+  ],
+  "connectionForms": [
+    {
+      "mode": "preset",
+      "value": "螺栓连接",
+      "relatedInterfaceTypeIds": [
+        "bolt.male.v1",
+        "bolt.female.v1"
+      ],
+      "profileIds": [
+        "bolt-kit",
+        "auto"
+      ],
+      "note": "组件级连接说明不会自动给每个接口填写五金。"
+    },
+    {
+      "mode": "preset",
+      "value": "焊接",
+      "relatedInterfaceTypeIds": [
+        "weld.surface.v1"
+      ],
+      "profileIds": [
+        "none",
+        "custom-item"
+      ],
+      "note": "焊材消耗量记录在工艺/设计说明中；没有专用焊缝或耗材统计。"
+    },
+    {
+      "mode": "preset",
+      "value": "卡扣连接",
+      "relatedInterfaceTypeIds": [
+        "snap.hook.v1",
+        "snap.slot.v1"
+      ],
+      "profileIds": [
+        "none",
+        "snap-clip"
+      ],
+      "note": "按一体卡扣或独立卡扣区分。"
+    },
+    {
+      "mode": "preset",
+      "value": "插接",
+      "relatedInterfaceTypeIds": [
+        "pin.v1",
+        "hole.v1",
+        "shaft.v1",
+        "bore.v1"
+      ],
+      "profileIds": [
+        "none",
+        "dowel-pin",
+        "custom-item"
+      ],
+      "note": "这些是可能的接口线索，不是自动类型映射。"
+    },
+    {
+      "mode": "preset",
+      "value": "铆接",
+      "relatedInterfaceTypeIds": [],
+      "profileIds": [
+        "rivet"
+      ],
+      "note": "当前没有预设铆接接口 ID；可定义 custom:铆接公口 / custom:铆接母口，契约仍需独立校验。"
+    },
+    {
+      "mode": "preset",
+      "value": "胶接",
+      "relatedInterfaceTypeIds": [
+        "plane.contact.v1"
+      ],
+      "profileIds": [
+        "none",
+        "custom-item"
+      ],
+      "note": "当前件数统计不适用于胶用量质量/体积；胶耗量另记工艺说明。"
+    },
+    {
+      "mode": "preset",
+      "value": "型材槽连接",
+      "relatedInterfaceTypeIds": [
+        "rail.v1",
+        "rail.slot.v1"
+      ],
+      "profileIds": [
+        "rail-fastening",
+        "custom-item"
+      ],
+      "note": "仅在真实槽系统使用该紧固结构时选示例套件。"
+    },
+    {
+      "mode": "preset",
+      "value": "销钉连接",
+      "relatedInterfaceTypeIds": [
+        "pin.v1",
+        "hole.v1"
+      ],
+      "profileIds": [
+        "dowel-pin",
+        "none"
+      ],
+      "note": "销已包含在零件本体或装配成员时不重复增加。"
+    },
+    {
+      "mode": "preset",
+      "value": "插接/卡扣",
+      "relatedInterfaceTypeIds": [
+        "snap.hook.v1",
+        "snap.slot.v1",
+        "pin.v1",
+        "hole.v1"
+      ],
+      "profileIds": [
+        "none",
+        "snap-clip",
+        "dowel-pin",
+        "custom-item"
+      ],
+      "note": "组合连接逐节点配置，避免把全部候选件一并计入。"
+    },
+    {
+      "mode": "custom",
+      "value": "自定义",
+      "relatedInterfaceTypeIds": [],
+      "profileIds": [
+        "custom-item",
+        "none"
+      ],
+      "note": "未知类型保留自定义 ID 与标签，不自动推导五金或兼容契约。"
+    }
+  ],
+  "fallbacks": [
+    {
+      "match": "custom:*",
+      "label": "自定义接口类型",
+      "profileIds": [
+        "custom-item",
+        "none",
+        "auto"
+      ],
+      "policy": "保留真实自定义 ID。类型目录最多 500 条；名称最多 80 字符；ID 最多 120 字符。未知类型不等于无五金。"
+    },
+    {
+      "match": null,
+      "label": "未分类",
+      "profileIds": [
+        "custom-item",
+        "none",
+        "auto"
+      ],
+      "policy": "先核对真实连接机制；auto 仍可能依据接口 connectionMethod 命中现有推荐规则。"
+    },
+    {
+      "match": "unknown-nonempty-id",
+      "label": "外部或未来接口类型",
+      "profileIds": [
+        "custom-item",
+        "none",
+        "auto"
+      ],
+      "policy": "保留原 ID，显式选择方案，不伪造已知类型。"
+    }
+  ],
+  "geometryCarriers": [
+    "plane",
+    "axis",
+    "point"
+  ],
+  "compatibility": {
+    "ruleVersion": "interface-compatibility-v1",
+    "implementedFamilies": [
+      "plane-contact",
+      "coaxial-fit",
+      "pin-hole"
+    ],
+    "note": "显示类型、默认可连接列表和五金配置不能替代 mating 契约校验；不得为通过校验伪造 family。"
+  },
+  "profiles": [
+    {
+      "id": "auto",
+      "label": "使用平台现有自动推荐",
+      "condition": "仅需复现当前识别结果；不是完整的采购规格。",
+      "hardware": {
+        "mode": "auto",
+        "items": []
+      },
+      "parameters": []
+    },
+    {
+      "id": "none",
+      "label": "不使用额外五金",
+      "condition": "已确认该连接无额外五金，或本体/成员中已经包含该件，不重复计数。",
+      "hardware": {
+        "mode": "none",
+        "items": []
+      },
+      "parameters": []
+    },
+    {
+      "id": "bolt-kit",
+      "label": "螺栓、螺母和平垫圈示例套件",
+      "condition": "确实需要独立穿透螺栓和螺母的连接；数量按一个共用节点的示例配置。",
+      "hardware": {
+        "mode": "manual",
+        "items": [
+          {
+            "category": "螺栓",
+            "name": "六角螺栓",
+            "specification": "{boltSpec}",
+            "quantity": 1
+          },
+          {
+            "category": "螺母",
+            "name": "六角螺母",
+            "specification": "{nutSpec}",
+            "quantity": 1
+          },
+          {
+            "category": "垫圈",
+            "name": "平垫圈",
+            "specification": "{washerSpec}",
+            "quantity": 2
+          }
+        ]
+      },
+      "parameters": [
+        "boltSpec",
+        "nutSpec",
+        "washerSpec"
+      ]
+    },
+    {
+      "id": "stud-kit",
+      "label": "螺柱、螺母和平垫圈示例套件",
+      "condition": "需要独立螺柱的连接；若螺柱已是零件本体，不重复增加。",
+      "hardware": {
+        "mode": "manual",
+        "items": [
+          {
+            "category": "螺柱",
+            "name": "螺柱",
+            "specification": "{studSpec}",
+            "quantity": 1
+          },
+          {
+            "category": "螺母",
+            "name": "六角螺母",
+            "specification": "{nutSpec}",
+            "quantity": 1
+          },
+          {
+            "category": "垫圈",
+            "name": "平垫圈",
+            "specification": "{washerSpec}",
+            "quantity": 2
+          }
+        ]
+      },
+      "parameters": [
+        "studSpec",
+        "nutSpec",
+        "washerSpec"
+      ]
+    },
+    {
+      "id": "screw-into-thread",
+      "label": "螺纹孔用螺钉和平垫圈示例套件",
+      "condition": "实际为螺钉拧入螺纹孔，且需要垫圈；不额外假定存在螺母。",
+      "hardware": {
+        "mode": "manual",
+        "items": [
+          {
+            "category": "螺钉",
+            "name": "螺钉",
+            "specification": "{screwSpec}",
+            "quantity": 1
+          },
+          {
+            "category": "垫圈",
+            "name": "平垫圈",
+            "specification": "{washerSpec}",
+            "quantity": 1
+          }
+        ]
+      },
+      "parameters": [
+        "screwSpec",
+        "washerSpec"
+      ]
+    },
+    {
+      "id": "dowel-pin",
+      "label": "独立定位销",
+      "condition": "连接需要额外定位销；规格自行填写直径、长度和实际配合信息。",
+      "hardware": {
+        "mode": "manual",
+        "items": [
+          {
+            "category": "销",
+            "name": "定位销",
+            "specification": "{pinSpec}",
+            "quantity": 1
+          }
+        ]
+      },
+      "parameters": [
+        "pinSpec"
+      ]
+    },
+    {
+      "id": "snap-clip",
+      "label": "独立卡扣件",
+      "condition": "卡扣为额外独立采购件；一体成型的卡钩/卡槽使用 none。",
+      "hardware": {
+        "mode": "manual",
+        "items": [
+          {
+            "category": "卡扣件",
+            "name": "卡扣件",
+            "specification": "{clipSpec}",
+            "quantity": 1
+          }
+        ]
+      },
+      "parameters": [
+        "clipSpec"
+      ]
+    },
+    {
+      "id": "rail-fastening",
+      "label": "型材槽紧固示例套件",
+      "condition": "实际槽结构使用螺栓、T 型螺母与垫圈；滑动轨道配合不自动采用此套件。",
+      "hardware": {
+        "mode": "manual",
+        "items": [
+          {
+            "category": "螺栓",
+            "name": "连接螺栓",
+            "specification": "{boltSpec}",
+            "quantity": 1
+          },
+          {
+            "category": "螺母",
+            "name": "T 型螺母",
+            "specification": "{slotNutSpec}",
+            "quantity": 1
+          },
+          {
+            "category": "垫圈",
+            "name": "平垫圈",
+            "specification": "{washerSpec}",
+            "quantity": 1
+          }
+        ]
+      },
+      "parameters": [
+        "boltSpec",
+        "slotNutSpec",
+        "washerSpec"
+      ]
+    },
+    {
+      "id": "rail-stop",
+      "label": "独立导轨限位件",
+      "condition": "实际需要额外导轨限位件；紧固附件按真实清单另行补充。",
+      "hardware": {
+        "mode": "manual",
+        "items": [
+          {
+            "category": "导轨附件",
+            "name": "导轨限位件",
+            "specification": "{stopSpec}",
+            "quantity": 1
+          }
+        ]
+      },
+      "parameters": [
+        "stopSpec"
+      ]
+    },
+    {
+      "id": "bearing",
+      "label": "独立轴承",
+      "condition": "实际需要额外轴承，且轴承尚未作为装配成员计入。",
+      "hardware": {
+        "mode": "manual",
+        "items": [
+          {
+            "category": "轴承",
+            "name": "轴承",
+            "specification": "{bearingSpec}",
+            "quantity": 1
+          }
+        ]
+      },
+      "parameters": [
+        "bearingSpec"
+      ]
+    },
+    {
+      "id": "retaining-ring",
+      "label": "独立挡圈",
+      "condition": "实际结构有配套挡圈位置，且需要额外挡圈。",
+      "hardware": {
+        "mode": "manual",
+        "items": [
+          {
+            "category": "挡圈",
+            "name": "挡圈",
+            "specification": "{ringSpec}",
+            "quantity": 1
+          }
+        ]
+      },
+      "parameters": [
+        "ringSpec"
+      ]
+    },
+    {
+      "id": "shaft-key",
+      "label": "独立键",
+      "condition": "实际轴和配合件具有匹配键槽，且需要独立键。",
+      "hardware": {
+        "mode": "manual",
+        "items": [
+          {
+            "category": "键",
+            "name": "键",
+            "specification": "{keySpec}",
+            "quantity": 1
+          }
+        ]
+      },
+      "parameters": [
+        "keySpec"
+      ]
+    },
+    {
+      "id": "bushing",
+      "label": "独立轴套",
+      "condition": "实际需要额外轴套，且未作为装配成员计入。",
+      "hardware": {
+        "mode": "manual",
+        "items": [
+          {
+            "category": "轴套",
+            "name": "轴套",
+            "specification": "{bushingSpec}",
+            "quantity": 1
+          }
+        ]
+      },
+      "parameters": [
+        "bushingSpec"
+      ]
+    },
+    {
+      "id": "rivet",
+      "label": "独立铆钉",
+      "condition": "铆接连接；具体铆钉种类、规格及节点用量必须按真实结构填写。",
+      "hardware": {
+        "mode": "manual",
+        "items": [
+          {
+            "category": "铆钉",
+            "name": "铆钉",
+            "specification": "{rivetSpec}",
+            "quantity": 1
+          }
+        ]
+      },
+      "parameters": [
+        "rivetSpec"
+      ]
+    },
+    {
+      "id": "custom-item",
+      "label": "自定义五金件",
+      "condition": "未分类、未知类型或需补充的独立五金；可在生成请求后增加实际清单行。",
+      "hardware": {
+        "mode": "manual",
+        "items": [
+          {
+            "category": "{category}",
+            "name": "{name}",
+            "specification": "{specification}",
+            "quantity": 1
+          }
+        ]
+      },
+      "parameters": [
+        "category",
+        "name",
+        "specification"
+      ]
+    }
+  ],
+  "selectionPolicy": {
+    "automaticSelection": false,
+    "manualProfileParametersRequired": true,
+    "quantityBasis": "每个共用连接节点的示例数量，按真实设计调整；不是每个接口各追加一套。",
+    "mergeProfiles": "若同一节点需要多个方案的件，在一个 manual.items 清单中合并；连续提交会替换整个硬件配置。",
+    "doNotInfer": [
+      "不从孔径自动推算采购螺纹规格",
+      "不从类型名称自动生成承载、公差或兼容性结论",
+      "不把焊材/胶消耗量伪装为整数件数",
+      "不重复添加已属于零件本体或成员的五金"
+    ]
+  },
+  "usageRules": {
+    "connectionSources": [
+      "assembly.mates",
+      "geometryDesign.relations",
+      "instanceDocument 内的连接（递归）"
+    ],
+    "nodePriority": [
+      "manual",
+      "none",
+      "auto"
+    ],
+    "rowIdentity": [
+      "category",
+      "name",
+      "specification"
+    ],
+    "withinOneInterface": "同一清单同键数量相加",
+    "acrossSharedEndpoints": "同一连接节点不同接口的同键数量取最大值",
+    "acrossIndependentNodes": "独立节点同键数量相加",
+    "excluded": "未连接接口、@ 开头的支承/几何辅助接口、失效端点不会形成额外五金节点"
+  },
+  "sourceRevisionNote": "73a6740 为起始代码基线；运行时规则见 runtimeContract，当前工作区已接入界面与 MCP。",
+  "runtimeContract": {
+    "scenarios": "src/domain/hardwareSelectionRules.json",
+    "inputPresets": "src/domain/hardwareInputPresets.json",
+    "interfaceDimensionChecks": false,
+    "scenarioTypeFiltering": false,
+    "mcpTools": [
+      "component_get_hardware_selection_rules",
+      "component_get_hardware_input_presets",
+      "component_set_interface_hardware"
+    ],
+    "completionScope": "只强制检查已连接节点的填写完整性及共用节点声明一致性；需要五金必须设置，无需须说明，不校验接口尺寸适用性。",
+    "scope": "connected"
+  }
+}

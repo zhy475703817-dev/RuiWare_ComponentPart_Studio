@@ -1,10 +1,12 @@
 """Creation-time guidance for agents; never invent geometry or change a draft."""
 from ..components.resize_solver import fingerprint
 from ..components.brace_policy import brace_rule_conflicts, built_in_brace_issues
+from ..components.hardware_selection import audit_hardware_selection
 
 
-POLICY_VERSION = "2026-11-20.3"
+POLICY_VERSION = "2026-11-26.2"
 AUTHORING_RULES = (
+    ("hardware", "所有已连接接口（含几何连接和子组件内部连接）需要五金时必须设置五金场景、类别、规格和数量；无需五金必须明确场景并说明原因。共用节点仅计一次，未连接的预留接口不强制配置。未完成不得发布或标记交付完成。使用component_get_hardware_selection_rules和component_get_hardware_input_presets读取规则与输入预设，通过component_set_interface_hardware保存。尺寸只作设置值，允许自定义，不依据接口尺寸检查适用性；缺少用户确定的规格须保留待填写，不自动猜定。"),
     ("column-frame", "每个柱片模板必须在制作时自带可执行的横撑、斜撑自动补齐规则，不需要用户额外提出。读取真实立柱孔列及撑杆端口，用component_set_brace_generation_rule保存规则，绑定两根立柱的高度驱动，覆盖全部立柱与撑杆。撑杆保持原规格、长度，增高新增实例，缩短移除多余实例。制作时完成开启自动补齐的原尺寸、增高、缩短验收；缺规则、漏成员或缺高度绑定的模板不得交付或发布。用户使用时只需选择自动补齐和目标高度，不得要求其临时找AI配置。旧模板也在制作阶段升级，无法依据真实接口确定时保留为未完成草稿，不能虚构规则或擅自删除用户成员。"),
     ("selection", "选型时读取固定发布版本的真实接口、几何来源和参数定义，确认预期调整方向有可用的驱动参数。缺少接口或可调参数时先补齐来源模板或选择合适模板，不得虚构接口、参数或修改发布版本的限制。"),
     ("assembly", "摆放成员时同步建立真实的贴合、同轴、重合或有依据的保留偏移关系；逐一处理未连接零件。多层组件必须检查内部叶子零件和对外端口映射，不能只摆放外观或填写文字连接说明。"),
@@ -56,7 +58,7 @@ def authoring_report(draft, history=None):
         issues.append({"code": code, "status": status, "path": list(path), "message": message})
 
     for check in draft.get("checks", []):
-        if check["status"] == "fail":
+        if check["status"] == "fail" and check["id"] != "hardware.selection":
             issue("AUTHORING_DATA_INVALID", check["message"], [check["id"]], "fail")
 
     # Check nested copies as well as top-level members. Endpoint aliases resolve
@@ -154,7 +156,11 @@ def authoring_report(draft, history=None):
         issues = [item for item in issues if item["status"] == "fail"]
     else:
         issue("AUTHORING_GEOMETRY_UNVERIFIED", "制作中先读取实际尺寸并完成原尺寸联动试算；交付前还需试调要求支持的方向，保存授权的最终尺寸并复验。")
-    return {"policyVersion": POLICY_VERSION, "revision": document["revision"],
+    hardware = audit_hardware_selection(document)
+    for entry in hardware["entries"]:
+        for detail in entry["issues"]:
+            issue("HARDWARE_" + detail["code"], f"{entry['label']}：{detail['message']}", (), "fail")
+    return {"policyVersion": POLICY_VERSION, "revision": document["revision"], "hardwareSelection": hardware,
             "status": "needs_attention" if any(item["status"] == "fail" for item in issues) else "pending" if issues else "geometry_verified",
             "geometryVerified": verified, "issues": issues,
             "requiredNextStep": "修复上述制作检查项，继续实际CAD试算；遵循component_get_authoring_requirements。" if issues else "当前保存尺寸的几何已验证；仍须针对用户要求支持的调整方向试算，不能承诺任意尺寸或工程承载通过。",

@@ -4,6 +4,7 @@ import { effectiveParameterBounds } from "./parameterMetrics.ts";
 import { isValidComponentCode } from "./componentCode.ts";
 import { assessInterfaceCompatibility } from "./interfaceCompatibility.ts";
 import { columnFrameMembers, hasBuiltInBraces } from "./bracePolicy.ts";
+import { auditHardwareSelection } from "./hardwareSelection.ts";
 
 export type ValidationCheck = { id: string; label: string; status: "pass" | "fail" | "pending"; message: string };
 
@@ -46,6 +47,7 @@ function braceRulesValid(document: ComponentDocument): boolean {
 
 export function validateComponent(document: ComponentDocument, codeUnique = true): ValidationCheck[] {
   const { members, mates } = document.assembly;
+  const hardware = auditHardwareSelection(members, mates, document.geometryDesign, document.ports);
   const memberIds = new Set(members.map(member => member.id));
   const parameterIds = new Set(document.parameters.map(parameter => parameter.id));
   const occupiedInterfaces = new Set<string>();
@@ -107,6 +109,8 @@ export function validateComponent(document: ComponentDocument, codeUnique = true
     ...(columnFrameMembers(document) ? [check("brace.builtin", "柱片内置补齐", hasBuiltInBraces(document), "柱片模板须在制作时内置完整补齐规则、覆盖立柱和撑杆并绑定高度；完成增高、缩短验收后交付")] : []),
     ...(document.braceGenerationRules?.length ? [check("brace.rules", "撑杆生成规则", braceRulesValid(document), "撑杆规则引用无效成员、参数、单位或撑杆接口，或多条规则重复使用同一撑杆原型")] : []),
     check("slots", "槽位引用", slotsValid, "槽位缺少有效基准接口、占用接口不兼容，或必填槽位尚未分配"),
+    { id: "hardware.selection", label: "连接五金选型", status: hardware.complete ? "pass" : "pending",
+      message: hardware.complete ? `已检查 ${hardware.total} 个已连接节点，五金配置已明确` : `${hardware.pending} 个已连接节点五金待确认；请在接口阶段查看选型清单` },
     { id: "assembly.solve", label: "几何联动检查", status: document.geometryDesign?.verified ? "pass" : "pending", message: document.geometryDesign?.verified ? "实际外形及已配置几何约束通过" : "请在参数阶段试算并应用几何联动；当前未验证" },
     { id: "rules.execution", label: "工程规则执行", status: "pending", message: "当前仅保存规则说明，尚未接入规则执行" },
   ];

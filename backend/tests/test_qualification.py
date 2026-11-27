@@ -17,7 +17,17 @@ from backend.app.components.models import ComponentAction, ComponentDocument
 from backend.app.components.qualification_policy import QualificationConfig, continuation_dimensions, digest, scenario_plan
 from backend.app.components.resize_solver import ResizeFailure
 from backend.app.components.repository import DraftRepository
-from backend.tests.test_geometry_resize import BoxProvider, document
+from backend.tests.test_geometry_resize import BoxProvider, document as geometry_document
+
+
+def document(members=None):
+    """Geometry qualification fixture with explicitly completed hardware declarations."""
+    data = geometry_document(members)
+    for member in data['assembly']['members']:
+        for item in member['interfaces']:
+            item['hardware'] = {'mode': 'none', 'scenarioId': 'plane-contact', 'items': [],
+                                'note': '测试夹具仅作几何接触，无额外五金'}
+    return data
 
 
 class QualificationTests(unittest.TestCase):
@@ -208,7 +218,11 @@ class QualificationTests(unittest.TestCase):
         source['assembly']['members'][0]['interfaces'][0]['hardware'] = hardware
         source['assembly']['members'][0]['planarMovement'] = True
         self.create(source)
-        self.assertTrue(self.wait()['deliveryReady'])
+        result = self.wait()
+        self.assertEqual(result['status'], 'passed', result)
+        # This fixture has a reserved port only, with no connection to require a kit.
+        self.assertTrue(result['deliveryReady'])
+        self.assertTrue(result['hardwareSelection']['complete'])
         saved = self.client.get(self.base).json()['document']['assembly']['members'][0]
         self.assertEqual(saved['interfaces'][0]['hardware'], hardware)
         self.assertTrue(saved['planarMovement'])
