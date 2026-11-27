@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
 import test from 'node:test';
-import { fetchAvailableTemplates, fetchPublishedTemplates, fetchReusableTemplates, formatLibraryError, parsePublishedTemplates, readCachedLibrary } from '../src/library/publishedLibrary.ts';
+import { classifyPublishedTemplate, fetchAvailableTemplates, fetchPublishedTemplates, fetchReusableTemplates, formatLibraryError, parsePublishedTemplates, parseStoredClassifications, parseStoredPublicationKeys, pendingPublishedTemplates, readCachedLibrary } from '../src/library/publishedLibrary.ts';
 import { componentPublicationMember } from '../src/library/componentPublications.ts';
 import { createComponentDocument } from '../src/domain/component.ts';
 
@@ -51,6 +51,26 @@ test('保留不同发布版本并按发布时间排序', () => {
   }], count: 2 });
   assert.deepEqual(items.map(item => [item.publicationId, item.version]), [['version-2', 2], ['version-1', 1]]);
   assert.deepEqual(parsePublishedTemplates({ items: [], count: 0 }), []);
+});
+
+test('发布库给零部件生成可见的待确认分类，并安全读取本机筛选记录', () => {
+  assert.deepEqual(classifyPublishedTemplate({ ...publication, name: '货架Ω型冲孔立柱' }), {
+    category: 'load-bearing', categoryLabel: '承载骨架', characteristic: 'Ω 型材',
+  });
+  assert.deepEqual(classifyPublishedTemplate({ ...publication, name: '货架四孔锚固底板' }), {
+    category: 'foundation', categoryLabel: '基础与调节', characteristic: '板件',
+  });
+  assert.deepEqual(classifyPublishedTemplate({ ...publication, name: '未知试制件', code: 'RW-UNKNOWN-001' }), {
+    category: 'accessory', categoryLabel: '功能附件', characteristic: '未标注',
+  });
+  assert.deepEqual(parseStoredPublicationKeys('["part:a","part:a",42,"part:b"]'), ['part:a', 'part:b']);
+  assert.deepEqual(parseStoredPublicationKeys('not-json'), []);
+  assert.deepEqual(parseStoredPublicationKeys(JSON.stringify(['x'.repeat(257)])), []);
+  assert.deepEqual(parseStoredClassifications('{"part:a":"connector","part:b":"invalid","too-long":"surface"}'), { 'part:a': 'connector', 'too-long': 'surface' });
+  assert.deepEqual(parseStoredClassifications('[]'), {});
+  const newPart = { ...publication, publicationId: 'new-part' };
+  const component = { ...publication, publicationId: 'new-component', templateKind: 'component' };
+  assert.deepEqual(pendingPublishedTemplates([publication, newPart, component], { 'part:version-1': 'load-bearing' }).map(item => item.publicationId), ['new-part']);
 });
 
 test('拒绝缺失、重复或无效的发布元数据', () => {
