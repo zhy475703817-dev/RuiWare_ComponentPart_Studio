@@ -211,6 +211,12 @@ class MCPAuthoringWorkflowTests(unittest.TestCase):
         self.assertEqual(job['status'], 'ready', job)
         draft = self.call('component_resize_apply', draftId=draft['draftId'], request={
             'expectedRevision': draft['document']['revision'], 'jobId': job['jobId'], 'checksum': job['result']['checksum']})
+        self.assertFalse(draft['hardwareSelection']['complete'])
+        # This fixture preserves spacing between separate members, without a fastened joint.
+        draft = self.edit(draft, 'component_set_interface_hardware', memberId=a['id'], interfaceId=endpoint,
+            hardware={'mode': 'none', 'scenarioId': 'custom-none', 'items': [],
+                'note': 'Geometry-only fixture: the members remain 40 mm apart with no physical fastening.'})
+        self.assertTrue(draft['hardwareSelection']['complete'])
         self.call('component_configure_authoring', draftId=draft['draftId'], expectedRevision=draft['document']['revision'],
             config={'axes': [2]})
         draft, report = self.finish(draft)
