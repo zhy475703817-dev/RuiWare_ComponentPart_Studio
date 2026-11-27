@@ -1,5 +1,6 @@
 """Shared component releases. SQLite snapshots are retries, never the public library."""
 from functools import wraps
+import base64
 import hashlib
 from io import BytesIO
 import json
@@ -10,7 +11,8 @@ from pydantic import ValidationError
 from ..config import MinioSettings
 from ..library import LibraryError, PublishedTemplate
 from ..published_storage import PublishedStorage
-from .models import ComponentDocument
+from .models import ComponentDocument, EvidenceFile
+from .qualification_policy import digest
 from .repository import DraftRepository
 from .service import ComponentError
 
@@ -101,15 +103,56 @@ class ComponentPublications:
                 manifest = json.loads(archive.read("manifest.json"))
                 document = ComponentDocument.model_validate_json(archive.read("component.json")).model_dump(by_alias=True)
                 checks = json.loads(archive.read("checks.json"))
+                qualification = None
+                if "qualification.json" in archive.namelist():
+                    if archive.getinfo("qualification.json").file_size > 8 * 1024 * 1024:
+                        raise ValueError("oversized qualification")
+                    qualification = json.loads(archive.read("qualification.json"))
+                    if not isinstance(qualification, dict):
+                        raise ValueError("invalid qualification")
+                evidence = []
+                if "evidence.json" in archive.namelist():
+                    if archive.getinfo("evidence.json").file_size > 22 * 1024 * 1024:
+                        raise ValueError("oversized evidence")
+                    evidence = json.loads(archive.read("evidence.json"))
+                    if not isinstance(evidence, list) or len(evidence) > 10:
+                        raise ValueError("invalid evidence")
+                    evidence = [EvidenceFile.model_validate(item).model_dump() for item in evidence]
+                    if len({item['id'] for item in evidence}) != len(evidence):
+                        raise ValueError("duplicate evidence")
+                    for item in evidence:
+                        prefix = f"data:{item['mediaType']};base64,"
+                        if not isinstance(item['dataUrl'], str) or not item['dataUrl'].startswith(prefix):
+                            raise ValueError("missing evidence content")
+                        content = base64.b64decode(item['dataUrl'][len(prefix):], validate=True)
+                        if len(content) != item['size'] or hashlib.sha256(content).hexdigest() != item['sha256']:
+                            raise ValueError("evidence hash mismatch")
+                    if sum(item['size'] for item in evidence) > 15 * 1024 * 1024:
+                        raise ValueError("oversized evidence")
+                    if [{**item, 'dataUrl': None} for item in evidence] != document['definition']['evidenceFiles']:
+                        raise ValueError("evidence metadata mismatch")
                 if manifest.get("schemaVersion") not in ("component-package-1.0", "component-package-1.1") or manifest.get("templateKind") != "component":
                     raise ValueError("unsupported package")
                 if any(manifest.get(key) != metadata[key] for key in ("publicationId", "templateId", "version")):
                     raise ValueError("package identity mismatch")
-                if not isinstance(checks, list):
+                if not isinstance(checks, list) or any(not isinstance(check, dict) for check in checks):
                     raise ValueError("invalid checks")
+                if qualification and not isinstance(qualification.get('cases', []), list):
+                    raise ValueError("invalid qualification cases")
         except (BadZipFile, KeyError, ValueError, TypeError, RuntimeError, ValidationError):
             raise ComponentError(502, "REMOTE_STORAGE_INTEGRITY_ERROR") from None
-        return {**ComponentPublications._public(metadata), "document": document, "checks": checks}
+        attachments_complete = len(evidence) == len(document['definition']['evidenceFiles'])
+        qualified = bool(qualification and qualification.get('deliveryReady') is True
+            and qualification.get('status') == 'passed' and qualification.get('revision') == document['revision']
+            and qualification.get('inputHash') == digest(document) and qualification.get('configHash') == digest(qualification.get('config'))
+            and qualification.get('cases') and all(isinstance(c, dict) and c.get('status') == 'passed' for c in qualification['cases'])
+            and not any(check.get('status') == 'fail' for check in checks))
+        return {**ComponentPublications._public(metadata), "document": document, "checks": checks,
+                "qualification": qualification, "evidenceFiles": evidence,
+                "readiness": {"templateStatus": "qualified" if qualified and attachments_complete else "unverified",
+                              "attachmentsComplete": attachments_complete,
+                              "engineeringStatus": "incomplete" if any(c['status'] != 'pass' for c in checks) else "ready",
+                              "scope": qualification.get('scope', '') if qualification else ''}}
 
     def _dependencies(self, document: dict):
         for member in document["assembly"]["members"]:

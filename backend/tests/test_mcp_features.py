@@ -96,6 +96,10 @@ class MCPFeatureTests(unittest.TestCase):
             self.assertFalse(any(binding['id'] == 'custom-binding' for binding in draft['document']['bindings']))
 
     def test_publication_search_details_and_download_share_rest_results(self):
+        # This test isolates storage discovery; the real certificate/CAD
+        # workflow is exercised without this stub in test_mcp_authoring_workflow.
+        from backend.tests.storage_helpers import qualified_storage_fixture
+        qualified_storage_fixture(self)
         settings = Settings(draft_db=Path(os.environ['COMPONENT_DRAFT_DB']), minio=MinioSettings(
             endpoint='minio.test', access_key='access', secret_key='secret', prefix='publishers/test'))
         storage = MemoryMinio()

@@ -22,6 +22,8 @@ AUTHORING_INSTRUCTIONS = (
     + "\n斜撑起点上移后，可用高度须扣除真实起点偏移，不能沿用横撑分格数；不同孔列依据真实CAD坐标确定偏移，逐个核对交替斜撑的实际两端孔位及顶部余量。分步恢复仅使用所有撑杆规则共同允许的中间高度，最终目标和使用范围保持用户指定值；相邻合法高度之间没有中间分格时，不得强行试算非法高度或改写目标。"
     + "\n几何联动中的柱片调整窗口提供自动补齐选择与高度增减。规则enabled默认true；用户明确关闭后使用普通几何联动，保留现有撑杆数量和规则配置。resize请求autoFillBraces可在预览中切换全部根规则，应用后保存选择；不得为绕过失败而自行关闭自动补齐。"
     + "\n调用component_get_authoring_requirements可重新读取完整要求。创建、读取、编辑和验证草稿返回authoring制作检查。"
+    "选型优先使用component_get_template_authoring_info读取公开参数范围及当前展开接口，无需包内STL；"
+    "默认草稿尺寸只是示例，须按用户要求与真实来源配置参数、范围和绑定。"
     "编辑后平台自动排队执行制作验收；制作完成必须调用component_finish_authoring并轮询component_authoring_status，"
     "只有当前修订deliveryReady=true才可标记完成。component_configure_authoring用于声明用户要求的使用范围，不能删除失败测试或缩小需求来绕过验收。"
     "几何验证使用component_resize_preview（expectedRevision；inspectOnly=true读取实际尺寸，"
@@ -39,7 +41,18 @@ def requirements():
                 "mates": "正式装配连接；须检查来源配合契约、所选连接关系和接口容量。旧规则默认使用此模式。",
             },
             "verificationTools": ["component_finish_authoring", "component_authoring_status", "component_configure_authoring", "component_resize_preview", "component_resize_status", "component_validate_draft"],
-            "draftsMayBeIncomplete": True}
+            "draftsMayBeIncomplete": True,
+            "workflow": [
+                {"stage": "selection", "tools": ["component_search_templates", "component_get_template_authoring_info"]},
+                {"stage": "definition", "tools": ["component_create_draft", "component_update_definition", "component_apply_actions"],
+                 "requirement": "新草稿的默认尺寸为示例；根据真实零件公开参数定义建立组件参数与绑定，不能把示例范围当作用户设计要求。"},
+                {"stage": "assembly", "tools": ["component_add_template_member", "component_connect_interfaces", "component_inherit_interface", "component_set_binding", "component_set_brace_generation_rule"]},
+                {"stage": "qualification", "tools": ["component_configure_authoring", "component_finish_authoring", "component_authoring_status", "component_cancel_authoring"]},
+                {"stage": "delivery", "tools": ["component_publish_draft", "component_get_publication", "component_add_template_member"]},
+            ],
+            "completionCriteria": {"draft": "当前修订authoring.deliveryReady=true，且声明的用户使用范围已验收。",
+                "publication": "readiness.templateStatus=qualified，attachmentsComplete=true，可下载并重新作为子组件引用。",
+                "engineering": "规则说明不执行；承载、焊缝、紧固件强度等未实现工程验算须另行验证。"}}
 
 
 def authoring_report(draft, history=None):

@@ -5,7 +5,7 @@ from pydantic import Field
 
 from ..components.models import BraceGenerationRule, ComponentAction, ComponentDocument, DefinitionPatch, MemberPatch
 from ..components.resize_jobs import ResizeRequest, ResizeApplyRequest, ResizeJobs
-from .authoring import POLICY_VERSION, authoring_report, requirements
+from .authoring import POLICY_VERSION, requirements
 from ..components.qualification_policy import QualificationConfig
 
 
@@ -17,11 +17,12 @@ def register(mcp, app, invoke):
     readonly = ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False)
     write = ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False)
 
-    def with_authoring(draft):
-        history = app.state.drafts.resize_history(draft["draftId"])
-        qualification = app.state.drafts.qualification(draft["draftId"])
-        return {**draft, "authoring": {**authoring_report(draft, history), "deliveryReady": qualification["deliveryReady"],
-                                      "qualification": qualification}}
+    @mcp.tool(annotations=write, structured_output=False)
+    async def component_cancel_authoring(draftId: str) -> CallToolResult:
+        """暂停排队或运行中的自动制作验收，保留草稿；未通过时不能发布。继续制作后使用finish_authoring(retry=true)重试。"""
+        async def cancel():
+            return app.state.qualification_jobs.cancel(draftId)
+        return await invoke(cancel)
 
     @mcp.tool(annotations=write, structured_output=False)
     async def component_finish_authoring(draftId: str, expectedRevision: Revision, retry: bool = False) -> CallToolResult:
@@ -45,9 +46,7 @@ def register(mcp, app, invoke):
         return await invoke(lambda: app.state.drafts.configure_qualification(draftId, expectedRevision, config.model_dump()))
 
     async def edit(draft_id, revision, action):
-        def update():
-            return with_authoring(app.state.drafts.update(draft_id, revision, ComponentAction.validate_python(action), actor="agent"))
-        return await invoke(update)
+        return await invoke(app.state.drafts.update, draft_id, revision, ComponentAction.validate_python(action), actor="agent")
 
     @mcp.tool(annotations=readonly, structured_output=False)
     async def component_get_authoring_requirements() -> CallToolResult:
@@ -59,9 +58,13 @@ def register(mcp, app, invoke):
         """检查本组件服务和已实现能力；不表示上游发布库可用。"""
         return await invoke(lambda: {"status": "ok", "service": "component-template-api", "sharedDrafts": True,
                                     "libraryConfigured": app.state.settings.minio.read_configured or bool(app.state.settings.api_key.strip()),
+                                    "publicationStorageConfigured": app.state.settings.minio.configured,
                                     "componentPublications": True, "assemblyEditing": True,
                                     "atomicActions": True, "libraryMaintenance": True,
                                     "geometryResize": True, "geometryPreviewRequiresApply": True,
+                                    "templateAuthoringInfo": True, "authoringQualification": True,
+                                    "publicationRequiresQualification": True, "publicationEvidence": True,
+                                    "engineeringVerification": "not_implemented",
                                     "authoringPolicyVersion": POLICY_VERSION, "authoringRequirementsTool": "component_get_authoring_requirements",
                                     "pending": ["rules.execution"]})
 
@@ -90,17 +93,17 @@ def register(mcp, app, invoke):
     @mcp.tool(annotations=write, structured_output=False)
     async def component_resize_apply(draftId: str, request: ResizeApplyRequest) -> CallToolResult:
         """明确确认预览后，按revision、jobId、checksum原子应用几何结果。"""
-        return await invoke(lambda: with_authoring(app.state.resize_jobs.apply(draftId, request, actor="agent")))
+        return await invoke(app.state.resize_jobs.apply, draftId, request, actor="agent")
 
     @mcp.tool(annotations=write, structured_output=False)
     async def component_resize_undo(draftId: str, request: ResizeApplyRequest) -> CallToolResult:
         """恢复上次应用前的完整组件；草稿后来被修改时拒绝覆盖。"""
-        return await invoke(lambda: with_authoring(app.state.resize_jobs.undo(draftId, request, actor="agent")))
+        return await invoke(app.state.resize_jobs.undo, draftId, request, actor="agent")
 
     @mcp.tool(annotations=write, structured_output=False)
     async def component_create_draft(name: str = "", document: ComponentDocument | None = None) -> CallToolResult:
         """按默认AI制作要求创建草稿；先读取真实模板接口和参数，装配时同步建立关系。柱片模板必须在制作时保存内置撑杆补齐规则及高度绑定，不等使用时配置。返回authoring早期检查项，需在制作中修复。允许保存中间草稿，不表示完成验收。"""
-        return await invoke(lambda: with_authoring(app.state.drafts.create(name=name or None, document=document)))
+        return await invoke(app.state.drafts.create, name=name or None, document=document)
 
     @mcp.tool(annotations=readonly, structured_output=False)
     async def component_list_drafts() -> CallToolResult:
@@ -110,7 +113,7 @@ def register(mcp, app, invoke):
     @mcp.tool(annotations=readonly, structured_output=False)
     async def component_get_draft(draftId: str) -> CallToolResult:
         """读取草稿、基础检查及authoring制作检查；取得revision，先解决可预防的接口、联动和参数问题。"""
-        return await invoke(lambda: with_authoring(app.state.drafts.get(draftId)))
+        return await invoke(app.state.drafts.get, draftId)
 
     @mcp.tool(annotations=write, structured_output=False)
     async def component_update_definition(draftId: str, expectedRevision: Revision, patch: DefinitionPatch) -> CallToolResult:
@@ -165,8 +168,8 @@ def register(mcp, app, invoke):
     async def component_validate_draft(draftId: str) -> CallToolResult:
         """制作过程中和交付前验证草稿；返回基础checks及authoring早期问题。pending不算通过，自填verified不算CAD证据；按要求试调并修复后交付。"""
         def validate():
-            draft = with_authoring(app.state.drafts.get(draftId))
-            return {"draftId": draftId, "revision": draft["document"]["revision"], "checks": draft["checks"], "authoring": draft["authoring"]}
+            draft = app.state.drafts.get(draftId)
+            return {**draft, "revision": draft["document"]["revision"]}
         return await invoke(validate)
 
     @mcp.tool(annotations=readonly, structured_output=False)

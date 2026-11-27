@@ -84,7 +84,9 @@ FastAPI 提供 `/api/health`、`/api/published-templates`、兼容 STL 预览接
 
 MCP `/mcp` 与 REST 共用 `DraftRepository`、HTTP 客户端和预览缓存，MCP 会话管理器由 FastAPI lifespan 启停。预览通过显式 `client/settings/cache` 参数复用，不依赖虚构的 HTTP Request。MCP 工具不会模拟浏览器点击，模型返回固定发布哈希的绝对下载 URL。详见 [MCP 接入](MCP.md)。
 
-MCP 当前提供 59 个工具，按草稿、完整编辑动作、装配、发布库和维护拆分注册。原子批量动作、CAD 自动放置/对齐都复用后端动作验证，并在一次 SQLite 事务中保存一个修订。几何应用/撤销也接收服务入口指定的 actor；MCP 统一记为 agent，REST 记为 user，网页差异和用户优先合并覆盖两类路径。清理工具复用 REST 业务处理与原有备份/引用/审计保护，并把 HTTP 失败及部分清理失败映射为结构化 MCP 错误。
+MCP 当前提供 66 个工具，按草稿、完整编辑动作、装配、发布库和维护拆分注册。原子批量动作、CAD 自动放置/对齐都复用后端动作验证，并在一次 SQLite 事务中保存一个修订。几何应用/撤销也接收服务入口指定的 actor；MCP 统一记为 agent，REST 记为 user，网页差异和用户优先合并覆盖两类路径。MCP 统一入口为所有草稿编辑结果附加当前修订制作检查，选型工具复用参数重建接口，不依赖旧 STL。清理工具复用 REST 业务处理与原有备份/引用/审计保护，并把 HTTP 失败及部分清理失败映射为结构化 MCP 错误。
+
+发布门槛由当前修订的自动制作验收证据控制；包内 qualification.json 绑定文档及配置哈希。发布回读同时返回 qualification、参考附件和 readiness，区分模板可复用与工程验算完成。参考附件经同一事务校验后打包到可选 evidence.json，旧包缺附件或证据仍可读取但不会宣称交付齐全。完整 MCP 制作、验收、发布和嵌套复用通过真实 CAD 集成测试，见 docs/MCP.md 的 Agent 工作流。
 
 `serializeComponent(document)` 保留 `component-1.0` 的 `name`、`stages.definition`、`stages.assembly`、`stages.ports`、参数值、规则及验证主体结构。增加修订、完整版本引用、结构化引用、参数定义、槽位和绑定。旧连接字符串仍导出，新增读取方应使用 `fromRef/toRef` 以避免含点号标识的歧义。旧接口的 `sourceMemberId/sourceInterfaceId` 字段保留。
 

@@ -163,7 +163,10 @@ class DraftRepository:
             data = document.model_dump(by_alias=True)
             output = BytesIO()
             with ZipFile(output, "w") as package:
-                for name, value in (("manifest.json", manifest), ("component.json", data), ("checks.json", checks), ("qualification.json", qualification)):
+                documents = [("manifest.json", manifest), ("component.json", data), ("checks.json", checks), ("qualification.json", qualification)]
+                if document.definition.evidenceFiles:
+                    documents.append(("evidence.json", self._portable_evidence(connection, draft_id, document)))
+                for name, value in documents:
                     info = ZipInfo(name)
                     info.compress_type = ZIP_DEFLATED
                     package.writestr(info, json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8"))
@@ -402,6 +405,19 @@ class DraftRepository:
             stored = self.get_evidence(draft_id, evidence["id"])
             evidence["dataUrl"] = f"data:{stored['mediaType']};base64,{base64.b64encode(stored['content']).decode('ascii')}"
         return result
+
+    @staticmethod
+    def _portable_evidence(connection, draft_id, document):
+        files = []
+        for item in document.definition.evidenceFiles:
+            row = connection.execute("SELECT content FROM component_draft_evidence WHERE draft_id=? AND id=?", (draft_id, item.id)).fetchone()
+            if row is None:
+                raise ComponentError(422, "EVIDENCE_CONTENT_MISSING")
+            content = bytes(row[0])
+            if len(content) != item.size or hashlib.sha256(content).hexdigest() != item.sha256:
+                raise ComponentError(422, "INVALID_EVIDENCE")
+            files.append({**item.model_dump(), "dataUrl": f"data:{item.mediaType};base64,{base64.b64encode(content).decode('ascii')}"})
+        return files
 
     @staticmethod
     def _store_embedded_evidence(connection, draft_id: str, document: ComponentDocument) -> ComponentDocument:

@@ -1,13 +1,16 @@
 import asyncio
+import json
 from typing import Annotated, Literal
 from datetime import datetime
 
 from mcp.types import CallToolResult, ToolAnnotations
 from pydantic import Field
+from fastapi import Request, Response
 
 from ..library import read_published_library
 from ..preview import read_preview, read_publication, SHA256
 from ..components.service import ComponentError
+from ..components.models import ParameterValue
 
 
 def register(mcp, app, invoke):
@@ -16,6 +19,14 @@ def register(mcp, app, invoke):
 
     def absolute_download(body):
         return {**body, "downloadUrl": app.state.settings.public_base_url.rstrip("/") + body["downloadUrl"]}
+
+    @mcp.tool(annotations=readonly, structured_output=False)
+    async def component_get_template_authoring_info(publicationId: str, sha256: Annotated[str, Field(pattern=SHA256)],
+        parameters: Annotated[dict[str, ParameterValue], Field(max_length=64)] | None = None) -> CallToolResult:
+        """选型与装配前读取固定发布版本的公开可调参数、范围、离散规格、原始契约及当前参数下展开的真实接口和诊断。不依赖包内STL，不修改草稿；无效或受保护参数拒绝使用。"""
+        from ..reconstruction import reconstruction_info
+        return await invoke(reconstruction_info, publicationId, Request({"type": "http", "app": app}), Response(),
+                            sha256, json.dumps(parameters or {}, ensure_ascii=False, allow_nan=False))
 
     @mcp.tool(annotations=readonly, structured_output=False)
     async def component_search_templates(query: str = "", limit: Annotated[int, Field(strict=True, ge=1, le=100)] = 20,
@@ -63,7 +74,7 @@ def register(mcp, app, invoke):
     @mcp.tool(annotations=readonly, structured_output=False)
     async def component_get_publication(publicationId: str,
         sha256: Annotated[str, Field(pattern=r"^(?:[a-fA-F0-9]{64})?$")] = "") -> CallToolResult:
-        """读取已发布组件文档、检查和绝对下载地址；可固定SHA-256校验版本。"""
+        """读取已发布组件文档、基础检查、qualification验收证据、readiness及随包参考附件和绝对下载地址；可固定SHA-256。旧包缺证据时标为unverified，工程检查未通过不代表模板不可复用。"""
         def get():
             body = app.state.publications.detail(publicationId)
             if sha256 and body["sha256"].lower() != sha256.lower():
@@ -74,14 +85,14 @@ def register(mcp, app, invoke):
     @mcp.tool(annotations=publish, structured_output=False)
     async def component_publish_draft(draftId: str,
         expectedRevision: Annotated[int, Field(strict=True, ge=1, le=9007199254740991)]) -> CallToolResult:
-        """将指定修订正式发布到共享存储；创建独立发布版本，并返回包下载地址。"""
+        """当前修订制作验收通过后正式发布到共享存储；返回独立版本、qualification、readiness、随包附件及下载地址。未验收草稿拒绝发布；模板可复用和实物工程验算是不同状态。"""
         def publish_draft():
             return absolute_download(app.state.publications.publish(draftId, expectedRevision))
         return await invoke(publish_draft)
 
     @mcp.tool(annotations=readonly, structured_output=False)
     async def component_get_template_preview(publicationId: str, sha256: Annotated[str, Field(pattern=SHA256)]) -> CallToolResult:
-        """AI选型时先读取固定发布版本的真实参数和接口契约，确认可调范围及连接来源再装配；返回STL预览地址，不加入装配，不代表CAD联动已验证。"""
+        """旧式包内或固定STL预览，返回模型地址，不加入装配。制作选型优先用component_get_template_authoring_info读取当前参数和展开接口；本工具依赖预览STL，不代表CAD联动已验证。"""
         async def get():
             cached = await read_preview(app.state.http, app.state.settings, app.state.preview_cache, publicationId, sha256,
                                         storage=getattr(app.state, "published_storage", None),
