@@ -49,30 +49,77 @@
 
 ## 工具
 
-工具提供中文说明和 JSON 输入 schema，返回文本及 `structuredContent`。读取和修改工具有相应的只读/破坏性提示。删除成员标记为破坏性操作。
+当前注册 **59 个工具**，提供中文说明和 JSON 输入 schema，返回文本及 `structuredContent`。读取和修改工具有相应的只读/破坏性提示。删除、批量动作和包含自动清理的发布库同步标记为破坏性操作。草稿编辑携带 `expectedRevision`；后台任务、发布库维护等按各自 schema 调用。
 
 | 工具 | 功能 |
 | --- | --- |
 | `component_get_status` | 查看本服务和未接入能力，不请求上游 |
-| `component_search_templates` | 按名称/编码搜索发布版本；`query`、`limit`、`offset` |
+| `component_search_templates` | 按名称/编码搜索发布版本；`query`、`limit`、`offset`，`templateKind` 为 `part`（默认）、`component` 或 `all` |
 | `component_get_template` | 按 `publicationId` 读取发布元数据，可用 `sha256` 固定版本 |
 | `component_get_template_preview` | 必须提供 `publicationId`、`sha256`，校验包和 STL，返回参数、原始接口和绝对模型地址 |
 | `component_create_draft` | 新建持久化草稿；未提供组件编码时自动分配唯一 `CMP-NNNN` 编码；可设 `name`（省略或空字符串使用默认/文档名称），也可提供符合工具 schema 的内部 `ComponentDocument` |
 | `component_list_drafts` | 列出草稿编号、名称、修订号和更新时间 |
 | `component_get_draft` | 读取草稿及基础验证结果 |
-| `component_update_definition` | 通过 `patch: {name?, code?, category?, description?}` 修改指定定义字段，未提供的字段保留 |
-| `component_set_parameter` | 修改已有组件参数，`null` 表示未填写 |
+| `component_update_definition` | 修改名称、编码、类型、说明、项目编码、负责人、组织、标签、连接形式和设计约束等定义字段，未提供的字段保留 |
+| `component_set_parameter` | 修改已有组件参数，`null` 表示未填写；按参数及绑定成员的有效范围约束数值，几何模式部分尺寸必须走联动 |
 | `component_update_rule` | 修改已有规则的说明文字，不执行表达式 |
-| `component_update_member` | 通过 `patch: {role?, position?, rotation?, parameterValues?}` 修改已有成员，不重建几何 |
+| `component_update_member` | 修改已有成员角色、位置、旋转、平面移动、参数覆盖和接口数据，不触发 CAD 试算 |
 | `component_remove_member` | 删除成员，清理连接、继承接口、绑定，并清空槽位占用 |
 | `component_add_mate` | 用明确的成员/接口标识记录贴合、同轴或重合关系，不进行求解 |
 | `component_inherit_interface` | 将已有成员接口继承为组件对外接口 |
 | `component_validate_draft` | 返回对应修订号的 `pass / fail / pending` 检查 |
-| `component_export_draft` | 返回兼容 `component-1.0` 的 JSON，不代表正式发布 |
+| `component_export_draft` | 返回 `component-1.0` 或几何模式的 `component-1.1` JSON，不代表正式发布 |
+| `component_apply_actions` | 按完整动作 schema 原子执行 1～100 个动作；成功只增加一次修订，失败全部回滚 |
+| `component_add_member` | 将已有的完整成员数据加入草稿 |
+| `component_add_template_member` | 用 `publicationId + sha256` 从发布库创建零部件/子组件成员；读取参数、真实接口和类型目录，省略位置时按实际 CAD 自动放置 |
+| `component_copy_member` | 复制为独立实例并沿 X 平移 40 mm，保留原参数，不创建自动绑定或复制外部连接 |
+| `component_ground_member` | 按旋转后的真实 CAD 最低点贴地；已有连接组整体平移 |
+| `component_connect_interfaces` | 校验配合契约及占用，按真实 CAD 接口中心和法向自动对齐、记录连接；目标连接组整体变换并原子保存 |
+| `component_remove_mate` | 删除连接，保留接口和成员位置 |
+| `component_add_slot` | 新增空槽位，可指定基准接口 |
+| `component_update_slot` | 修改槽位名称、必填性、基准和占用 |
+| `component_remove_slot` | 删除槽位，保留装配成员 |
+| `component_rename_interface` | 重命名组件对外接口 |
+| `component_remove_interface` | 取消对外接口，保留成员原始接口 |
+| `component_set_interface_type` | 设置或清空成员接口类型，可同时声明自定义类型和允许连接类型 |
+| `component_set_interface_connectable_types` | 设置成员接口允许连接的类型列表 |
+| `component_merge_interface_types` | 合并自定义接口类型目录，冲突时拒绝覆盖 |
+| `component_add_parameter` | 新增组件参数定义及初始值 |
+| `component_remove_parameter` | 删除参数及关联绑定、阵列 |
+| `component_set_binding` | 设置成员参数绑定；`null` 移除 |
+| `component_add_pattern` | 新增成员阵列，复用数量和间距参数 |
+| `component_remove_pattern` | 删除阵列定义，保留原成员 |
+| `component_add_rule` | 新增规则说明，不执行表达式 |
+| `component_remove_rule` | 删除规则说明 |
+| `component_resize_preview` | 启动真实 CAD 读取/试算，返回任务编号，不修改草稿 |
+| `component_resize_status` | 读取任务状态、候选方案、预览与校验值 |
+| `component_resize_cancel` | 取消试算，保留当前草稿 |
+| `component_resize_apply` | 明确确认后用修订、任务号及 checksum 原子应用试算 |
+| `component_resize_undo` | 恢复上次应用前状态，后来有编辑时拒绝覆盖 |
+| `component_get_resize_history` | 读取当前可撤销任务的编号、checksum 和修订，后端重启后仍可用 |
+| `component_list_publications` | 列出共享组件发布版本 |
+| `component_get_publication` | 读取已发布组件文档、检查及绝对包下载地址，可校验 sha256 |
+| `component_publish_draft` | 按草稿修订正式发布到共享存储，返回独立发布版本及下载地址 |
+| `component_get_library` | 只读缓存列表、同步进度及错误，不触发同步或清理 |
+| `component_sync_library` | 启动与网页相同的后台同步，包含符合条件的旧包自动备份清理 |
+| `component_apply_library` | 将后台准备好的待应用列表切换为活动列表 |
+| `component_preview_library_cleanup` | 扫描清理候选、占用与引用，保存 24 小时有效的 scanId，不删除包 |
+| `component_cleanup_library` | 按 scanId 和已确认 publicationIds 复核、备份并清理，保留全部原有保护 |
+| `component_list_backups` | 列出清理备份及到期时间 |
+| `component_get_backup` | 校验备份并返回元数据、SHA-256 和绝对下载地址 |
+| `component_restore_backup` | 恢复清理备份，拒绝覆盖不同内容 |
+| `component_delete_backup` | 删除已到期备份，未到期时拒绝 |
+| `component_get_cleanup_audit` | 读取清理、恢复和备份删除的审计记录 |
+| `component_get_references` | 读取本机共享引用登记状态 |
+| `component_sync_references` | 立即同步草稿与发布快照的共享引用登记 |
 
-发布库搜索直接扫描配置的 MinIO 读取目录内全部零部件发布记录，`coverage` 返回 `source: "minio"`、实际 `fetched` 和 `completeLibrary: true`，完整范围指当前账号可读的配置目录。旧 HTTP 模式仍仅覆盖最近最多 **1000** 条，返回 `source: "legacy-http"`、`upstreamLimit: 1000` 和 `completeLibrary: false`。`count` 是当前来源范围内的匹配数。模型地址可供客户端另行下载；工具不会返回大型 STL 文本，也不会直接操控网页相机。
+发布库搜索按 `templateKind` 扫描配置的 MinIO 读取目录，`coverage` 返回 `source: "minio"`、实际 `fetched` 和 `completeLibrary: true`，完整范围指当前账号可读的配置目录及发布列表规则。旧 HTTP 模式仅支持零部件，仍覆盖最近最多 **1000** 条，返回 `source: "legacy-http"`、`upstreamLimit: 1000` 和 `completeLibrary: false`；组件和全部搜索需要 MinIO。`count` 是当前来源范围内的匹配数。模型及包地址可供客户端另行下载；工具不会返回大型 STL 文本，也不会直接操控网页相机。
 
-工程文档的内部结构是 `definition / assembly / ports / ...`，导出的兼容格式则是 `name / stages / ...`。两者用途不同；`component_create_draft(document=...)` 接收前者，不能直接传入导出文件。导入只保存已有工程数据，不会下载并转换零部件为装配成员。
+工程文档的内部结构是 `definition / assembly / ports / ...`，导出的兼容格式则是 `name / stages / ...`。两者用途不同；`component_create_draft(document=...)` 接收前者，不能直接传入导出文件。导入只保存已有工程数据；需要从发布库转换成员时，使用 `component_add_template_member`。
+
+`component_add_mate` 只记录关系；`component_connect_interfaces` 才进行真实接口自动对齐。后者要求两端都有明确 CAD 定位来源；缺失、歧义或已在同一个连接组时返回错误，不按接口名称或显示标记猜测几何。几何试算的多解需先选择方案，再以返回的 `jobId + checksum + expectedRevision` 显式应用。试算和装配计算期间有其他编辑时，过期结果不会覆盖草稿。
+
+正式发布与 JSON 导出独立。发布后可用组件发布工具立即读取；网页发布库沿用后台同步和“更新列表”流程。`component_sync_library` 可能自动清理旧包，且相应工具标记为破坏性；仅查询状态请使用 `component_get_library`。清理、恢复、备份过期限制、共享引用复核及审计均复用 REST 原流程；HTTP 错误和部分清理失败会返回 `isError: true` 及结构化错误结果。
 
 ## 使用示例
 
@@ -95,13 +142,15 @@
 4. 成功响应包含同一个 `draftId`、更新后的 `document` 和 `checks`；下次写入使用返回的新修订号。
 5. 调用 `component_validate_draft` 检查；调用 `component_export_draft` 导出。
 
-参数值可以暂时超出范围并保存，基础验证会显示失败，便于保留编辑中的草稿。空草稿缺少成员和对外接口会失败。装配求解及规则执行始终为 `pending`，不会被计为通过。
+普通数值参数按当前参数范围及绑定成员的有效范围约束，整数绑定按整数处理。几何模式下受约束的尺寸修改会要求使用几何联动。空草稿缺少成员和对外接口会失败。几何联动检查仅在真实 CAD 试算并应用验证结果后通过，其他情况下为 `pending`；规则执行仍为 `pending`。
 
 ## 网页同步
 
-网页自动打开本机上次使用的草稿；没有草稿时创建一份。草稿编号保存在浏览器本地，实际内容存于后端 SQLite。网页不提供草稿分享链接或草稿切换面板；Agent 通过 MCP 的 `component_list_drafts`、`component_get_draft` 和修改工具定位并编辑草稿，网页自动同步更新。刷新页面和重启后端不会丢失已保存内容。
+网页自动打开链接 `?draft=` 指定的草稿或本机上次使用的草稿；没有草稿时创建一份。草稿编号保存在 URL 与浏览器本地，实际内容存于后端 SQLite。定义阶段可选择组件；Agent 通过 MCP 的 `component_list_drafts`、`component_get_draft` 和修改工具定位并编辑草稿，网页自动同步当前草稿。刷新页面和重启后端不会丢失已保存内容。
 
 网页可见时每两秒读取最新状态，窗口重新聚焦时也会读取。编辑期间立即显示本地输入、串行保存；未保存操作不会被轮询覆盖。同步检查成功后显示后端验证结果；保存期间显示的是本地预检查。
+
+普通编辑、批量编辑、装配操作及几何应用/撤销均在同一事务记录 `actor: "agent"` 和字段差异；REST 网页编辑保持 `actor: "user"`。批量编辑与自动对齐每次只创建一个修订，失败不留下部分连接或变换。来源由服务入口指定，客户端不能伪造。
 
 网页手动编辑优先。Agent 先保存而网页仍基于旧修订提交时，后端仅在全部中间修订均有完整记录且均来自 Agent 时，将网页提交的动作应用于最新草稿：同一字段以用户值为准，其他字段保留 Agent 修改。用户先保存时，过期的 MCP 写入仍返回 `REVISION_CONFLICT`，`isError` 为 true，`structuredContent.error.current` 携带最新草稿。Agent 不得自动换用最新修订覆盖用户输入；重新读取后应核对并由用户决定。用户优先针对并发旧修订编辑，不会永久锁定用户曾改过的字段。
 

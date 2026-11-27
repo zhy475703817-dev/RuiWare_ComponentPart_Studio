@@ -22,7 +22,9 @@ def register(mcp, app, invoke):
     async def component_get_status() -> CallToolResult:
         """检查本组件服务和已实现能力；不表示上游发布库可用。"""
         return await invoke(lambda: {"status": "ok", "service": "component-template-api", "sharedDrafts": True,
-                                    "libraryConfigured": bool(app.state.settings.api_key.strip()),
+                                    "libraryConfigured": app.state.settings.minio.read_configured or bool(app.state.settings.api_key.strip()),
+                                    "componentPublications": True, "assemblyEditing": True,
+                                    "atomicActions": True, "libraryMaintenance": True,
                                     "geometryResize": True, "geometryPreviewRequiresApply": True,
                                     "pending": ["rules.execution"]})
 
@@ -51,12 +53,12 @@ def register(mcp, app, invoke):
     @mcp.tool(annotations=write, structured_output=False)
     async def component_resize_apply(draftId: str, request: ResizeApplyRequest) -> CallToolResult:
         """明确确认预览后，按revision、jobId、checksum原子应用几何结果。"""
-        return await invoke(app.state.resize_jobs.apply, draftId, request)
+        return await invoke(app.state.resize_jobs.apply, draftId, request, actor="agent")
 
     @mcp.tool(annotations=write, structured_output=False)
     async def component_resize_undo(draftId: str, request: ResizeApplyRequest) -> CallToolResult:
         """恢复上次应用前的完整组件；草稿后来被修改时拒绝覆盖。"""
-        return await invoke(app.state.resize_jobs.undo, draftId, request)
+        return await invoke(app.state.resize_jobs.undo, draftId, request, actor="agent")
 
     @mcp.tool(annotations=write, structured_output=False)
     async def component_create_draft(name: str = "", document: ComponentDocument | None = None) -> CallToolResult:
@@ -81,7 +83,7 @@ def register(mcp, app, invoke):
     @mcp.tool(annotations=write, structured_output=False)
     async def component_set_parameter(draftId: str, expectedRevision: Revision, parameterId: str,
                                       value: FiniteValue | None) -> CallToolResult:
-        """设置已有组件参数值（null 表示未填写）；范围问题由验证报告，不会触发几何重建。"""
+        """设置已有组件参数值（null表示未填写）；按参数及绑定成员范围约束，整数绑定按整数处理。不会触发CAD重建，几何模式部分尺寸必须走几何联动。"""
         return await edit(draftId, expectedRevision, {"type": "parameter.value", "id": parameterId, "value": value})
 
     @mcp.tool(annotations=write, structured_output=False)

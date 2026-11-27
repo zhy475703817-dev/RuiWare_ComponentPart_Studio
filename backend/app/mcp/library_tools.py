@@ -1,5 +1,5 @@
 import asyncio
-from typing import Annotated
+from typing import Annotated, Literal
 from datetime import datetime
 
 from mcp.types import CallToolResult, ToolAnnotations
@@ -7,22 +7,30 @@ from pydantic import Field
 
 from ..library import read_published_library
 from ..preview import read_preview, read_publication, SHA256
+from ..components.service import ComponentError
 
 
 def register(mcp, app, invoke):
     readonly = ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=True)
+    publish = ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=True)
+
+    def absolute_download(body):
+        return {**body, "downloadUrl": app.state.settings.public_base_url.rstrip("/") + body["downloadUrl"]}
 
     @mcp.tool(annotations=readonly, structured_output=False)
     async def component_search_templates(query: str = "", limit: Annotated[int, Field(strict=True, ge=1, le=100)] = 20,
-                                         offset: Annotated[int, Field(strict=True, ge=0)] = 0) -> CallToolResult:
-        """按名称或编码搜索已发布零部件版本；offset 为当前发布库范围内的分页偏移。"""
+                                         offset: Annotated[int, Field(strict=True, ge=0)] = 0,
+                                         templateKind: Literal["part", "component", "all"] = "part") -> CallToolResult:
+        """按名称或编码搜索发布版本；templateKind选择零部件、组件或全部，默认零部件。"""
         async def search():
             storage = getattr(app.state, "published_storage", None)
             if storage is not None and storage.client is not None:
-                records = await asyncio.to_thread(storage.records, "part")
+                records = await asyncio.to_thread(storage.records, None if templateKind == "all" else templateKind)
                 library_items = [record.publication for record in records]
                 coverage = {"source": "minio", "fetched": len(library_items), "completeLibrary": True}
             else:
+                if templateKind != "part":
+                    raise ComponentError(503, "REMOTE_STORAGE_NOT_CONFIGURED")
                 library = await read_published_library(app.state.http, app.state.settings)
                 library_items = library.items
                 coverage = {"source": "legacy-http", "upstreamLimit": 1000,
@@ -46,6 +54,30 @@ def register(mcp, app, invoke):
             record = await read_publication(app.state.http, app.state.settings, publicationId, sha256 or None)
             return record.model_dump()
         return await invoke(get)
+
+    @mcp.tool(annotations=readonly, structured_output=False)
+    async def component_list_publications() -> CallToolResult:
+        """列出共享发布库中的组件版本；零部件用component_search_templates。"""
+        return await invoke(app.state.publications.list)
+
+    @mcp.tool(annotations=readonly, structured_output=False)
+    async def component_get_publication(publicationId: str,
+        sha256: Annotated[str, Field(pattern=r"^(?:[a-fA-F0-9]{64})?$")] = "") -> CallToolResult:
+        """读取已发布组件文档、检查和绝对下载地址；可固定SHA-256校验版本。"""
+        def get():
+            body = app.state.publications.detail(publicationId)
+            if sha256 and body["sha256"].lower() != sha256.lower():
+                raise ComponentError(409, "PUBLICATION_HASH_MISMATCH")
+            return absolute_download(body)
+        return await invoke(get)
+
+    @mcp.tool(annotations=publish, structured_output=False)
+    async def component_publish_draft(draftId: str,
+        expectedRevision: Annotated[int, Field(strict=True, ge=1, le=9007199254740991)]) -> CallToolResult:
+        """将指定修订正式发布到共享存储；创建独立发布版本，并返回包下载地址。"""
+        def publish_draft():
+            return absolute_download(app.state.publications.publish(draftId, expectedRevision))
+        return await invoke(publish_draft)
 
     @mcp.tool(annotations=readonly, structured_output=False)
     async def component_get_template_preview(publicationId: str, sha256: Annotated[str, Field(pattern=SHA256)]) -> CallToolResult:

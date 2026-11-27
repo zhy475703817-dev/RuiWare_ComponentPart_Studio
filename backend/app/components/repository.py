@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from contextlib import closing
 import base64
 from datetime import datetime, timezone
@@ -166,11 +168,13 @@ class DraftRepository:
             ))
             return {**metadata, "document": data, "checks": checks}
 
-    def update(self, draft_id: str, expected_revision: int, action: TypedAction, *, actor: str = "user") -> dict:
+    def update(self, draft_id: str, expected_revision: int, action: TypedAction | list[TypedAction], *, actor: str = "user") -> dict:
         if actor not in ("user", "agent"):
             raise ValueError("Unknown edit source")
         expected_revision = TypeAdapter(Revision).validate_python(expected_revision)
-        action = ComponentAction.validate_python(action)
+        actions = [ComponentAction.validate_python(item) for item in (action if isinstance(action, list) else [action])]
+        if not 1 <= len(actions) <= 100:
+            raise ComponentError(422, "INVALID_ACTION_BATCH")
         with closing(self._connect()) as connection, connection:
             connection.execute("BEGIN IMMEDIATE")
             document = self._read(connection, draft_id)
@@ -180,12 +184,16 @@ class DraftRepository:
                     SUM(CASE WHEN actor = 'agent' THEN 1 ELSE 0 END) AS agents
                     FROM component_draft_changes WHERE draft_id = ? AND revision > ? AND revision <= ?""",
                     (draft_id, expected_revision, document.revision)).fetchone()
-                reconciled = (actor == "user" and action.type != "reset" and expected_revision < document.revision
+                reconciled = (actor == "user" and all(item.type != "reset" for item in actions) and expected_revision < document.revision
                               and history["total"] == history["agents"] == document.revision - expected_revision)
                 if not reconciled:
                     raise ComponentError(409, "REVISION_CONFLICT", self._envelope(connection, draft_id, document, expected_revision))
             try:
-                updated = apply_action(document, action)
+                updated = document
+                for item in actions:
+                    updated = apply_action(updated, item)
+                if updated.revision != document.revision:
+                    updated = updated.model_copy(update={"revision": document.revision + 1})
             except ComponentError as error:
                 if reconciled:
                     code = "EDIT_TARGET_REMOVED" if error.code in ("COMPONENT_ITEM_NOT_FOUND", "INVALID_REFERENCE") else "EDIT_STRUCTURE_CONFLICT"
@@ -207,8 +215,10 @@ class DraftRepository:
             result["reconciled"] = reconciled
             return result
 
-    def replace_geometry(self, draft_id: str, expected_revision: int, candidate: dict, *, history: dict | None = None) -> dict:
+    def replace_geometry(self, draft_id: str, expected_revision: int, candidate: dict, *, history: dict | None = None, actor: str = "user") -> dict:
         """Apply only server-computed results, with strict compare-and-swap."""
+        if actor not in ("user", "agent"):
+            raise ValueError("Unknown edit source")
         with closing(self._connect()) as connection, connection:
             connection.execute("BEGIN IMMEDIATE")
             original = self._read(connection, draft_id)
@@ -220,7 +230,7 @@ class DraftRepository:
             connection.execute("UPDATE component_drafts SET name=?, revision=?, document=?, updated_at=? WHERE id=?", (
                 updated.definition.name, updated.revision, updated.model_dump_json(by_alias=True), now, draft_id))
             changes = document_changes(original.model_dump(by_alias=True), updated.model_dump(by_alias=True))
-            connection.execute("INSERT INTO component_draft_changes VALUES (?, ?, ?, ?, ?)", (draft_id, updated.revision, "user", now, json.dumps(changes, ensure_ascii=False)))
+            connection.execute("INSERT INTO component_draft_changes VALUES (?, ?, ?, ?, ?)", (draft_id, updated.revision, actor, now, json.dumps(changes, ensure_ascii=False)))
             if history:
                 connection.execute("INSERT OR REPLACE INTO component_resize_history VALUES (?, ?, ?, ?, ?)",
                     (draft_id, history["jobId"], history["checksum"], updated.revision, original.model_dump_json(by_alias=True)))

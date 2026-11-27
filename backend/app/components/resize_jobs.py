@@ -15,6 +15,7 @@ from .models import ComponentModel, ComponentDocument, GeometryLock, GeometryRel
 from .service import ComponentError, validate_component
 from .resize_geometry import CadProvider
 from .resize_solver import ResizeSolver, ResizeFailure, fingerprint
+from .geometry_sources import load_sources
 
 
 class ResizeDesignInput(ComponentModel):
@@ -94,27 +95,7 @@ class ResizeJobs:
         try:
             async with self.semaphore:
                 if job["cancelled"]: return
-                templates, publications = {}, {}
-                from ..reconstruction import _read_template
-                async def collect(document, ancestors=()):
-                    if len(ancestors) > 16: raise ResizeFailure("组件嵌套超过16层", "RESIZE_NESTING")
-                    for member in document["assembly"]["members"]:
-                        if job["cancelled"]: raise ResizeFailure("已取消", "RESIZE_CANCELLED")
-                        reference = member["template"]
-                        identity = (reference["publicationId"], reference["sha256"])
-                        if reference.get("templateKind") == "component":
-                            if identity in ancestors: raise ResizeFailure("组件循环引用", "RESIZE_NESTING")
-                            publication = await asyncio.to_thread(self.app.state.publications.detail, reference["publicationId"])
-                            if any(publication[k] != reference[k] for k in ("templateId", "version", "sha256")):
-                                raise ResizeFailure("子组件发布版本不一致", "RESIZE_REFERENCE")
-                            publications[identity] = publication["document"]
-                            await collect(member.get("instanceDocument") or publication["document"], (*ancestors, identity))
-                        elif identity not in templates:
-                            publication, draft, material = await _read_template(request, *identity)
-                            if publication.templateId != reference["templateId"] or publication.version != reference["version"]:
-                                raise ResizeFailure("零件发布版本不一致", "RESIZE_REFERENCE")
-                            templates[identity] = draft, material
-                await collect(job["before"])
+                templates, publications = await load_sources(self.app, job["before"], lambda: job["cancelled"])
                 provider = CadProvider(templates)
                 provider.cache = self.geometry_cache
                 solver = ResizeSolver(job["before"], provider, publications, body, lambda: job["cancelled"], lambda message: job.update(message=message))
@@ -142,22 +123,22 @@ class ResizeJobs:
             job.update(status="needs_choice" if code == "RESIZE_NEEDS_CHOICE" else "failed", message=str(error) or "模型计算失败", error={"code": code, "details": getattr(error, "details", [])})
 
     @serialized
-    def apply(self, draft_id, body):
+    def apply(self, draft_id, body, *, actor="user"):
         job = self.get(draft_id, body.jobId)
         if job["status"] != "ready" or "document" not in job.get("result", {}):
             raise ComponentError(409, "RESIZE_PREVIEW_UNAVAILABLE")
         if body.expectedRevision != job["expectedRevision"] or body.checksum != job["result"]["checksum"]:
             raise ComponentError(409, "RESIZE_PREVIEW_MISMATCH")
-        result = self.app.state.drafts.replace_geometry(draft_id, body.expectedRevision, job["result"]["document"], history={"jobId": body.jobId, "checksum": body.checksum})
+        result = self.app.state.drafts.replace_geometry(draft_id, body.expectedRevision, job["result"]["document"], history={"jobId": body.jobId, "checksum": body.checksum}, actor=actor)
         job.update(status="applied", appliedRevision=result["document"]["revision"], message="几何联动已整体保存")
         return result
 
     @serialized
-    def undo(self, draft_id, body):
+    def undo(self, draft_id, body, *, actor="user"):
         job = self.get(draft_id, body.jobId)
         if job["status"] != "applied" or job.get("appliedRevision") != body.expectedRevision or body.checksum != job["result"]["checksum"]:
             raise ComponentError(409, "RESIZE_UNDO_STALE")
-        result = self.app.state.drafts.replace_geometry(draft_id, body.expectedRevision, job["before"])
+        result = self.app.state.drafts.replace_geometry(draft_id, body.expectedRevision, job["before"], actor=actor)
         job.update(status="stale", message="已恢复应用前的组件")
         return result
 

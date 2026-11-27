@@ -20,7 +20,7 @@ class ResizeApiTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.app = create_app(Settings(draft_db=Path(self.temp.name)/'test.sqlite'), dist_dir=None)
+        self.app = create_app(Settings(draft_db=Path(self.temp.name)/'test.sqlite', mcp_token='resize-test'), dist_dir=None)
         self.client = self.enterContext(TestClient(self.app))
         self.enterContext(patch('backend.app.components.resize_jobs.CadProvider', side_effect=lambda _: BoxProvider()))
         self.enterContext(patch('backend.app.reconstruction._read_template', new=AsyncMock(return_value=(SimpleNamespace(templateId='box', version=1), {}, {}))))
@@ -104,6 +104,41 @@ class ResizeApiTests(unittest.TestCase):
         self.assertEqual(self.client.post(self.base+'/resize-jobs', json={'expectedRevision': 0, 'dimensions': [10, 10, 1]}).status_code, 422)
         invalid = self.wait(self.start([10, 10, -1]))
         self.assertEqual(invalid['error']['code'], 'RESIZE_DIMENSION_INVALID')
+
+    def test_mcp_apply_and_undo_record_agent_source_and_preserve_user_priority(self):
+        def call(name, request):
+            response = self.client.post('/mcp', headers={
+                'Accept': 'application/json, text/event-stream', 'Authorization': 'Bearer resize-test', 'Host': '127.0.0.1:8020',
+            }, json={'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call', 'params': {
+                'name': name, 'arguments': {'draftId': self.draft['draftId'], 'request': request},
+            }})
+            self.assertEqual(response.status_code, 200, response.text)
+            result = response.json()['result']
+            self.assertFalse(result.get('isError'), result)
+            return result['structuredContent']
+
+        job = self.wait(self.start())
+        applied = call('component_resize_apply', self.body(job))
+        self.assertEqual(applied['changes'][-1]['actor'], 'agent')
+        revision = applied['document']['revision']
+        # Recover the undo identity after the process-local job map is gone.
+        self.app.state.resize_jobs = ResizeJobs(self.app)
+        response = self.client.post('/mcp', headers={
+            'Accept': 'application/json, text/event-stream', 'Authorization': 'Bearer resize-test', 'Host': '127.0.0.1:8020',
+        }, json={'jsonrpc': '2.0', 'id': 2, 'method': 'tools/call', 'params': {
+            'name': 'component_get_resize_history', 'arguments': {'draftId': self.draft['draftId']},
+        }})
+        history = response.json()['result']['structuredContent']['undo']
+        self.assertEqual(history, {'jobId': job['jobId'], 'checksum': job['result']['checksum'], 'revision': revision})
+        undone = call('component_resize_undo', {**self.body(job), 'expectedRevision': revision})
+        self.assertEqual(undone['changes'][-1]['actor'], 'agent')
+        # A page still on R1 can save its own field after AI geometry edits.
+        saved = self.client.post(self.base+'/actions', json={'expectedRevision': 1, 'action': {
+            'type': 'definition.patch', 'patch': {'name': '用户输入优先'},
+        }})
+        self.assertEqual(saved.status_code, 200, saved.text)
+        self.assertTrue(saved.json()['reconciled'])
+        self.assertEqual(saved.json()['document']['definition']['name'], '用户输入优先')
 
 
 if __name__ == '__main__': unittest.main()
