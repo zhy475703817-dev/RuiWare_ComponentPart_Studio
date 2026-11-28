@@ -28,8 +28,6 @@ async def invoke(function, *args, **kwargs) -> CallToolResult:
             body = await function(*args, **kwargs)
         else:
             body = await asyncio.to_thread(function, *args, **kwargs)
-        if isinstance(body, JSONResponse):
-            return tool_result(json.loads(body.body), error=body.status_code >= 400)
         return tool_result(body)
     except ComponentError as error:
         return tool_result(error.as_dict(), error=True)

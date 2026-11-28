@@ -5,10 +5,11 @@ import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from backend.app.components.resize_jobs import ResizeJobs, inspection_key
-from backend.tests.test_geometry_resize import document
+from backend.app.components.geometry_sources import load_sources
+from backend.tests.test_geometry_resize import document, member
 from backend.app.components.resize_geometry import CadProvider
 from backend.app.components.resize_solver import ResizeSolver, ResizeFailure
 from backend.app.components.qualification import QualificationJobs
@@ -68,6 +69,32 @@ class QualificationQueueTests(unittest.IsolatedAsyncioTestCase):
 
 
 class TemplateReuseTests(unittest.IsolatedAsyncioTestCase):
+    async def test_mixed_case_pins_share_sources_and_preserve_instance_documents(self):
+        nested = document([member('leaf')])
+        publication = {'templateId': 'group', 'version': 1, 'sha256': 'b'*64, 'document': nested}
+        detail = Mock(return_value=publication)
+        app = SimpleNamespace(state=SimpleNamespace(publications=SimpleNamespace(detail=detail)))
+        part = SimpleNamespace(templateId='box', version=1, sha256='a'*64)
+        outer = document([member('one'), member('two')])
+        first, second = outer['assembly']['members']
+        for instance in (first, second):
+            instance['template'].update(templateKind='component', publicationId='group', templateId='group', sha256='b'*64)
+        second['template']['sha256'] = 'B'*64
+        second['instanceDocument'] = copy.deepcopy(nested)
+        second['instanceDocument']['assembly']['members'][0]['template']['sha256'] = 'A'*64
+        original = copy.deepcopy(outer)
+        with patch('backend.app.reconstruction._read_template', new=AsyncMock(return_value=(part, {}, {}))) as read:
+            templates, publications = await load_sources(app, outer)
+            self.assertEqual(set(templates), {('box', 'a'*64)})
+            self.assertEqual(set(publications), {('group', 'b'*64)})
+            self.assertEqual(detail.call_count, 1)
+            self.assertEqual(read.await_count, 1)
+            self.assertEqual(outer, original)
+            second['instanceDocument']['assembly']['members'][0]['template']['version'] = 2
+            with self.assertRaises(ResizeFailure) as caught:
+                await load_sources(app, outer)
+            self.assertEqual(caught.exception.code, 'RESIZE_REFERENCE')
+
     async def test_concurrent_reads_share_one_load_and_failed_reads_can_retry(self):
         jobs = ResizeJobs(SimpleNamespace())
         gate = asyncio.Event()
@@ -149,6 +176,8 @@ class InspectionIdentityTests(unittest.TestCase):
             changed['assembly']['members'][0]['instanceDocument']['assembly']['members'][0][field] = value
             self.assertNotEqual(inspection_key(changed), key)
         changed = copy.deepcopy(source)
+        changed['assembly']['members'][0]['template']['sha256'] = 'A'*64
+        self.assertEqual(inspection_key(changed), key)
         changed['assembly']['members'][0]['template']['sha256'] = 'b'*64
         self.assertNotEqual(inspection_key(changed), key)
         changed = copy.deepcopy(source)

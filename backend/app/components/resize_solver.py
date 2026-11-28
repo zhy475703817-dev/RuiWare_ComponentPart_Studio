@@ -2,10 +2,8 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import replace
-import hashlib
+from dataclasses import dataclass, replace
 import itertools
-import json
 import time
 import warnings
 
@@ -14,17 +12,9 @@ from scipy.optimize import least_squares
 from scipy.spatial.transform import Rotation
 
 from .resize_geometry import GeometryFailure, exact_bounds, matrix, transformed_shape, retained_support
+from .geometry_common import ResizeFailure, fingerprint, template_key
+from .brace_generation import materialize_brace_generation_interfaces, expand_brace_generation_rules
 from .brace_policy import active_brace_rules, brace_relation_owner
-
-
-class ResizeFailure(ValueError):
-    def __init__(self, message, code="RESIZE_UNRESOLVED", details=None):
-        super().__init__(message)
-        self.code, self.details = code, details or []
-
-
-def fingerprint(value):
-    return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
 
 
 def structure_changes(before, after, prefix=()):
@@ -85,7 +75,7 @@ def flatten(document, publications, parent=None, prefix=(), ancestors=()):
         world = parent @ matrix(member["position"], member["rotation"])
         if member["template"].get("templateKind") == "component":
             reference = member["template"]
-            identity = (reference["publicationId"], reference["sha256"])
+            identity = template_key(reference)
             if identity in ancestors or len(path) > 16:
                 raise ResizeFailure("组件循环引用或嵌套超过16层", "RESIZE_NESTING")
             source = publications.get(identity)
@@ -144,6 +134,46 @@ def flatten(document, publications, parent=None, prefix=(), ancestors=()):
     return leaves, endpoints, connections, bindings
 
 
+@dataclass
+class _Measurement:
+    base_parameters: dict
+    base_transforms: dict
+    baseline: dict
+    base_frames: dict
+    base_boxes: list
+    bounds: np.ndarray
+    original_size: np.ndarray
+    target: np.ndarray
+    inspection: dict
+
+
+@dataclass
+class _Constraints:
+    locks: list
+    required: set
+    guard_occurrences: dict
+    anchor: np.ndarray
+    scale: np.ndarray
+    desired_centers: dict
+    grounded: set
+    symmetries: list
+
+
+@dataclass
+class _VariableSpace:
+    variables: list
+    x0: np.ndarray
+    lower: np.ndarray
+    upper: np.ndarray
+    discrete: list
+    seed: np.ndarray
+    influences: list
+    sensitivities: dict
+    guard_bases: dict
+    guard_probes: dict
+    guard_minimums: dict
+
+
 class ResizeSolver:
     def __init__(self, document, provider, publications, request, cancelled=lambda: False, progress=lambda message: None, inspected=None):
         self.original_document = deepcopy(document)
@@ -175,7 +205,6 @@ class ResizeSolver:
                 parameter = next((p for p in self.document["parameters"] if p["id"] == rule["heightParameterId"]), None)
                 if parameter is not None:
                     parameter["value"] = float(self.request["dimensions"][2])
-        from .brace_generation import materialize_brace_generation_interfaces, expand_brace_generation_rules
         brace_geometry = materialize_brace_generation_interfaces(self.document, self.provider)
         self.check()
         brace_relations = expand_brace_generation_rules(self.document, brace_geometry)
@@ -418,6 +447,15 @@ class ResizeSolver:
         self.relations = list(unique.values())
 
     def solve(self):
+        measurement = self._measure_baseline()
+        if self.request.get("inspectOnly"):
+            return measurement.inspection
+        constraints = self._prepare_constraints(measurement)
+        space = self._prepare_variables(measurement, constraints)
+        result = self._find_solution(measurement, constraints, space)
+        return self._build_result(measurement, constraints, space, result)
+
+    def _measure_baseline(self):
         self.progress("读取实际模型尺寸及接口")
         base_parameters = {leaf["path"]: deepcopy(leaf["member"]["parameterValues"]) for leaf in self.leaves}
         base_transforms = {leaf["path"]: leaf["world"].copy() for leaf in self.leaves}
@@ -433,10 +471,21 @@ class ResizeSolver:
         differences = [{"parameterId": pid, "saved": old_dimensions[pid]["value"], "actual": float(original_size[axis])} for axis, pid in enumerate(("componentLength", "componentWidth", "componentHeight")) if pid in old_dimensions and old_dimensions[pid]["value"] is not None and abs(old_dimensions[pid]["value"]-original_size[axis])>.1]
         inspection = {"dimensions": original_size.tolist(), "parameterDifferences": differences, "members": [{"path": list(l["path"]), "name": l["member"]["name"], "parameters": baseline[l["path"]].definitions} for l in self.leaves], "interfaces": [{"path": list(k[0]), "interfaceId": k[1]} for k in base_frames], "diagnostics": [d for g in baseline.values() for d in g.diagnostics]}
         if self.inspected: self.inspected(inspection)
-        if self.request.get("inspectOnly"): return inspection
-        self.infer(base_frames)
+        return _Measurement(base_parameters, base_transforms, baseline, base_frames, base_boxes, bounds,
+                            original_size, target, inspection)
+
+    @staticmethod
+    def _locked(locks, path, parameter=None):
+        return any(tuple(lock["path"]) == path[:len(lock["path"])] and (lock.get("parameterId") is None or lock.get("parameterId") == parameter) for lock in locks)
+
+    def _interface_failure(self, key, current):
+        message = f'{self.by_path[key[0]]["member"]["name"]}：接口 {key[1]} ' + ("在目标尺寸下不再生成" if key not in current else "来源发生改变")
+        return ResizeFailure(message, "RESIZE_INTERFACE_MISSING", [{"path": list(key[0]), "interfaceId": key[1], "message": message}])
+
+    def _prepare_constraints(self, measurement):
+        self.infer(measurement.base_frames)
         self.tolerances = {'dimensionMm': .1, 'positionMm': .05, 'angleDegrees': .1}
-        for frame in base_frames.values():
+        for frame in measurement.base_frames.values():
             for key, value in frame.get('tolerances', {}).items():
                 if key in self.tolerances and isinstance(value, (int, float)) and np.isfinite(value) and value > 0:
                     self.tolerances[key] = min(self.tolerances[key], value)
@@ -454,10 +503,8 @@ class ResizeSolver:
         for lock in locks:
             path = tuple(lock['path'])
             matching = [p for p in self.by_path if p[:len(path)] == path]
-            if not matching or lock.get('parameterId') and not any(d['id'] == lock['parameterId'] for p in matching for d in baseline[p].definitions):
+            if not matching or lock.get('parameterId') and not any(d['id'] == lock['parameterId'] for p in matching for d in measurement.baseline[p].definitions):
                 raise ResizeFailure("锁定对象或参数已失效，请重新选择", "RESIZE_LOCK_INVALID", [lock])
-        def locked(path, parameter=None):
-            return any(tuple(lock["path"]) == path[:len(lock["path"])] and (lock.get("parameterId") is None or lock.get("parameterId") == parameter) for lock in locks)
         required = {self.endpoint(r[side]) for r in self.relations for side in ("a", "b")}
         def protect_exports(doc, prefix=()):
             for port in doc["ports"]:
@@ -471,65 +518,82 @@ class ResizeSolver:
                 if member.get("instanceDocument"):
                     protect_exports(member["instanceDocument"], (*prefix, member["id"]))
         protect_exports(self.document)
-        generated = {(path, i["id"]) for path, g in baseline.items() for i in g.resolved
+        generated = {(path, i["id"]) for path, g in measurement.baseline.items() for i in g.resolved
                      if i.get("declarationMode") == "featureDerived" and i.get("sourceFeatureRuleId") and i.get("sourceFeatureId")}
-        required.update(key for key in base_frames if key not in generated or locked(key[0]))
-        def interface_failure(key, current):
-            message = f'{self.by_path[key[0]]["member"]["name"]}：接口 {key[1]} ' + ("在目标尺寸下不再生成" if key not in current else "来源发生改变")
-            return ResizeFailure(message, "RESIZE_INTERFACE_MISSING", [{"path": list(key[0]), "interfaceId": key[1], "message": message}])
-        guard_occurrences = {path: [i for i in g.resolved if (path, i["id"]) in required] for path, g in baseline.items()}
-        generation_margins = getattr(self.provider, "generation_margins", lambda reference, parameters, occurrences: {})
-        guard_bases, guard_probes, guard_minimums = {}, {}, {}
+        required.update(key for key in measurement.base_frames if key not in generated or self._locked(locks, key[0]))
+        guard_occurrences = {path: [i for i in g.resolved if (path, i["id"]) in required] for path, g in measurement.baseline.items()}
         for leaf in self.leaves:
-            if not baseline[leaf["path"]].frames and not locked(leaf["path"]):
+            if not measurement.baseline[leaf["path"]].frames and not self._locked(locks, leaf["path"]):
                 raise ResizeFailure(f'{leaf["member"]["name"]}缺少可定位的真实接口，请补充语义面来源', "RESIZE_INTERFACE_MISSING", [{"path": list(leaf["path"])}])
         connected = {self.endpoint(r[s])[0] for r in self.relations for s in ("a", "b")}
-        missing = [l for l in self.leaves if l["path"] not in connected and not locked(l["path"])]
+        missing = [l for l in self.leaves if l["path"] not in connected and not self._locked(locks, l["path"])]
         if len(self.leaves) > 1 and missing:
             raise ResizeFailure("部分零件没有可确认的联动关系，请补充接口关系或锁定这些零件", "RESIZE_NEEDS_CHOICE", [{"path": list(l["path"]), "message": l["member"]["name"] + "：尚未确定与其他零件的几何关系"} for l in missing])
-        anchor = np.array([(bounds[0, 0] + bounds[1, 0]) / 2, (bounds[0, 1] + bounds[1, 1]) / 2, bounds[0, 2]])
-        scale = target / original_size
-        desired_centers = {leaf["path"]: anchor + ((box[0] + box[1]) / 2 - anchor) * scale for leaf, box in zip(self.leaves, base_boxes)}
-        grounded = {leaf["path"] for leaf, box in zip(self.leaves, base_boxes) if abs(box[0, 2]-bounds[0, 2]) < 1e-5}
+        anchor = np.array([(measurement.bounds[0, 0] + measurement.bounds[1, 0]) / 2, (measurement.bounds[0, 1] + measurement.bounds[1, 1]) / 2, measurement.bounds[0, 2]])
+        scale = measurement.target / measurement.original_size
+        desired_centers = {leaf["path"]: anchor + ((box[0] + box[1]) / 2 - anchor) * scale for leaf, box in zip(self.leaves, measurement.base_boxes)}
+        grounded = {leaf["path"] for leaf, box in zip(self.leaves, measurement.base_boxes) if abs(box[0, 2]-measurement.bounds[0, 2]) < 1e-5}
         symmetries = []
+        templates = []
+        for leaf in self.leaves:
+            reference = leaf["member"]["template"]
+            templates.append({**reference, "sha256": template_key(reference)[1]})
         for i, a in enumerate(self.leaves):
-            ca = (base_boxes[i][0]+base_boxes[i][1])/2
+            ca = (measurement.base_boxes[i][0]+measurement.base_boxes[i][1])/2
             for j, b in enumerate(self.leaves[i+1:], i+1):
                 # Explicit locks take precedence over inferred mirror symmetry.
                 if any(tuple(lock['path']) == p[:len(lock['path'])] for lock in locks for p in (a['path'], b['path'])): continue
-                if a["member"]["template"] != b["member"]["template"] or base_parameters[a["path"]] != base_parameters[b["path"]]: continue
-                cb = (base_boxes[j][0]+base_boxes[j][1])/2
+                if templates[i] != templates[j] or measurement.base_parameters[a["path"]] != measurement.base_parameters[b["path"]]: continue
+                cb = (measurement.base_boxes[j][0]+measurement.base_boxes[j][1])/2
                 for axis in (0, 1):
                     if abs(ca[axis]-cb[axis]) < .1: continue
                     mirrored = ca.copy(); mirrored[axis] = 2*anchor[axis]-ca[axis]
-                    if np.allclose(mirrored, cb, atol=1e-5) and np.allclose(base_boxes[i][1]-base_boxes[i][0], base_boxes[j][1]-base_boxes[j][0], atol=1e-5):
+                    if np.allclose(mirrored, cb, atol=1e-5) and np.allclose(measurement.base_boxes[i][1]-measurement.base_boxes[i][0], measurement.base_boxes[j][1]-measurement.base_boxes[j][0], atol=1e-5):
                         symmetries.append((a["path"], b["path"], axis, i, j))
+        return _Constraints(locks, required, guard_occurrences, anchor, scale, desired_centers, grounded,
+                            symmetries)
+
+    @staticmethod
+    def _decode(measurement, variables, x):
+        params = deepcopy(measurement.base_parameters)
+        poses = {p: np.array([*t[:3, 3], 0., 0., 0.]) for p, t in measurement.base_transforms.items()}
+        for (path, field), value in zip(variables, x):
+            if isinstance(field, int): poses[path][field] = value
+            else: params[path][field] = float(value)
+        transforms = {}
+        for path, pose in poses.items():
+            t = np.eye(4); t[:3, :3] = Rotation.from_rotvec(pose[3:]).as_matrix() @ measurement.base_transforms[path][:3, :3]; t[:3, 3] = pose[:3]; transforms[path] = t
+        return params, transforms
+
+    def _prepare_variables(self, measurement, constraints):
+        generation_margins = getattr(self.provider, "generation_margins", lambda reference, parameters, occurrences: {})
+        guard_bases, guard_probes, guard_minimums = {}, {}, {}
         variables, x0, lower, upper, discrete = [], [], [], [], []
         influences, sensitivities = [], {}
         self.progress("识别零件尺寸对接口及外形的影响")
         self.linear_bases = {}
         for leaf in self.leaves:
             path, member = leaf["path"], leaf["member"]
-            g = baseline[path]
+            g = measurement.baseline[path]
             probe_geometry = getattr(self.provider, "probe", self.provider.evaluate)
-            linear_base = probe_geometry(member["template"], base_parameters[path])
+            linear_base = probe_geometry(member["template"], measurement.base_parameters[path])
             self.linear_bases[path] = linear_base
-            self.surrogates[path] = (g, base_parameters[path], {})
-            guard_bases[path] = generation_margins(member["template"], base_parameters[path], guard_occurrences[path])
+            self.surrogates[path] = (g, measurement.base_parameters[path], {})
+            guard_bases[path] = generation_margins(member["template"], measurement.base_parameters[path], constraints.guard_occurrences[path])
             guard_probes[path] = {}
             # A small interior margin avoids floor(count) losing an occurrence
             # through floating point roundoff at the exact generation boundary.
             guard_minimums[path] = {id: np.minimum(.01, np.maximum(0., value)) for id, value in guard_bases[path].items()}
-            t = base_transforms[path]
+            t = measurement.base_transforms[path]
             center = t[:3, :3] @ ((g.bounds[0]+g.bounds[1])/2) + t[:3, 3]
             half = np.abs(t[:3, :3]) @ ((g.bounds[1]-g.bounds[0])/2)
             self.envelope_corrections[path] = exact_bounds(g.shape, t)-np.array([center-half, center+half])
             for definition in g.definitions:
                 self.check()
                 pid = definition["id"]
-                if member["id"] in self.fixed_geometry_members or member.get("generatedBy") or definition["unit"] not in ("mm", "cm", "m", "in", "°", "deg", "rad") or definition["valueType"] not in ("number", "integer") or locked(path, pid):
+                if member["id"] in self.fixed_geometry_members or member.get("generatedBy") or definition["unit"] not in ("mm", "cm", "m", "in", "°", "deg", "rad") or definition["valueType"] not in ("number", "integer") or self._locked(constraints.locks, path, pid):
                     continue
-                value = base_parameters[path].get(pid, definition["default"])
+                value = measurement.base_parameters[path].get(pid, definition["default"])
                 low, high = definition["minimum"], definition["maximum"]
                 if low is None or high is None or low >= high:
                     continue
@@ -540,11 +604,11 @@ class ResizeSolver:
                     continue
                 try:
                     self.progress(f'识别 {member["name"]} · {definition["label"]} 的几何影响')
-                    probe = probe_geometry(member["template"], {**base_parameters[path], pid: sample})
+                    probe = probe_geometry(member["template"], {**measurement.base_parameters[path], pid: sample})
                     # Correct body-only probes by the full rebuilt baseline. Features
                     # that alter the envelope will still be checked on final CAD.
                     probe = replace(probe, bounds=g.bounds + probe.bounds-linear_base.bounds)
-                    probe_guards = generation_margins(member["template"], {**base_parameters[path], pid: sample}, guard_occurrences[path])
+                    probe_guards = generation_margins(member["template"], {**measurement.base_parameters[path], pid: sample}, constraints.guard_occurrences[path])
                 except (GeometryFailure, RuntimeError, ValueError):
                     continue
                 changed = [id for id, f in g.frames.items() if id in probe.frames and (np.linalg.norm(f["center"] - probe.frames[id]["center"]) > 1e-4 or np.linalg.norm(f["normal"] - probe.frames[id]["normal"]) > 1e-5)]
@@ -559,9 +623,9 @@ class ResizeSolver:
                 variables.append((path, pid)); x0.append(float(value)); lower.append(float(low)); upper.append(float(high))
                 if values:
                     discrete.append((len(x0) - 1, sorted(values, key=lambda v: abs(v - value))))
-            if not locked(path):
-                pose = [*base_transforms[path][:3, 3], 0., 0., 0.]
-                aligned = [int(np.argmax(np.abs(base_transforms[path][:3, axis]))) for axis in range(3) if np.max(np.abs(base_transforms[path][:3, axis])) > 1-1e-8]
+            if not self._locked(constraints.locks, path):
+                pose = [*measurement.base_transforms[path][:3, 3], 0., 0., 0.]
+                aligned = [int(np.argmax(np.abs(measurement.base_transforms[path][:3, axis]))) for axis in range(3) if np.max(np.abs(measurement.base_transforms[path][:3, axis])) > 1-1e-8]
                 for index, value in enumerate(pose):
                     if index >= 3 and (len(aligned) > 1 or len(aligned) == 1 and index-3 != aligned[0]): continue
                     variables.append((path, index)); x0.append(value); lower.append(-np.inf); upper.append(np.inf)
@@ -575,36 +639,26 @@ class ResizeSolver:
         for leaf in self.leaves:
             path = leaf["path"]
             indices = [i for i, (p, field) in enumerate(variables) if p == path and isinstance(field, str)]
-            old_extent = baseline[path].bounds[1] - baseline[path].bounds[0]
-            rotation = base_transforms[path][:3, :3]
-            new_extent = old_extent * np.linalg.norm(scale[:, None] * rotation, axis=0)
+            old_extent = measurement.baseline[path].bounds[1] - measurement.baseline[path].bounds[0]
+            rotation = measurement.base_transforms[path][:3, :3]
+            new_extent = old_extent * np.linalg.norm(constraints.scale[:, None] * rotation, axis=0)
             if indices:
                 jac = np.stack([sensitivities[variables[i]] for i in indices], axis=1)
                 delta = np.linalg.lstsq(jac, new_extent - old_extent, rcond=None)[0]
                 seed[indices] = np.clip(x0[indices] + delta, lower[indices], upper[indices])
             major = int(np.argmax(old_extent))
             axis = rotation[:, major]
-            desired_axis = scale * axis; desired_axis /= np.linalg.norm(desired_axis)
+            desired_axis = constraints.scale * axis; desired_axis /= np.linalg.norm(desired_axis)
             cross = np.cross(axis, desired_axis); norm = np.linalg.norm(cross)
             corrected = rotation if norm < 1e-10 else Rotation.from_rotvec(cross / norm * np.arctan2(norm, np.dot(axis, desired_axis))).as_matrix() @ rotation
-            center = (baseline[path].bounds[0] + baseline[path].bounds[1]) / 2
+            center = (measurement.baseline[path].bounds[0] + measurement.baseline[path].bounds[1]) / 2
             center = center + (new_extent - old_extent) / 2
-            pose = [*(desired_centers[path] - corrected @ center), *Rotation.from_matrix(corrected @ rotation.T).as_rotvec()]
+            pose = [*(constraints.desired_centers[path] - corrected @ center), *Rotation.from_matrix(corrected @ rotation.T).as_rotvec()]
             for i, (p, field) in enumerate(variables):
                 if p == path and isinstance(field, int): seed[i] = pose[field]
-        def decode(x):
-            params = deepcopy(base_parameters)
-            poses = {p: np.array([*t[:3, 3], 0., 0., 0.]) for p, t in base_transforms.items()}
-            for (path, field), value in zip(variables, x):
-                if isinstance(field, int): poses[path][field] = value
-                else: params[path][field] = float(value)
-            transforms = {}
-            for path, pose in poses.items():
-                t = np.eye(4); t[:3, :3] = Rotation.from_rotvec(pose[3:]).as_matrix() @ base_transforms[path][:3, :3]; t[:3, 3] = pose[:3]; transforms[path] = t
-            return params, transforms
         # Seed geometry-neutral parameters from the scaled connection layout.
         # In particular, do not start a shorter array with its old hole pitch.
-        seed_params, seed_transforms = decode(seed)
+        seed_params, seed_transforms = self._decode(measurement, variables, seed)
         self.approximate = True
         seed_frames = self.measure(seed_params, seed_transforms)[1]
         self.approximate = False
@@ -617,10 +671,10 @@ class ResizeSolver:
             rotation = seed_transforms[path][:3, :3]
             for id in g.frames:
                 key = (path, id)
-                if key not in required: continue
+                if key not in constraints.required: continue
                 rows.extend(np.stack([rotation @ ((probes[pid][0].frames[id]['center']-g.frames[id]['center'])/probes[pid][1])
                                       if id in probes[pid][0].frames else np.zeros(3) for pid in pids], axis=1))
-                desired = anchor + (base_frames[key]['center']-anchor)*scale
+                desired = constraints.anchor + (measurement.base_frames[key]['center']-constraints.anchor)*constraints.scale
                 wanted.extend(desired-seed_frames[key]['center'])
             guard_rows, guard_values = [], []
             for id, value in guard_bases[path].items():
@@ -637,34 +691,39 @@ class ResizeSolver:
                                     np.zeros(len(indices)), bounds=(lower[indices]-seed[indices], upper[indices]-seed[indices]),
                                     max_nfev=40, ftol=1e-9, xtol=1e-9, gtol=1e-9)
             seed[indices] += initial.x
+        return _VariableSpace(variables, x0, lower, upper, discrete, seed, influences, sensitivities,
+                              guard_bases, guard_probes, guard_minimums)
+
+    def _find_solution(self, measurement, constraints, space):
+        generation_margins = getattr(self.provider, "generation_margins", lambda reference, parameters, occurrences: {})
         last_error, failure_details = [], []
         def residual(x, verify=False):
-            params, transforms = decode(x)
+            params, transforms = self._decode(measurement, space.variables, x)
             geoms, frames, boxes, actual = self.measure(params, transforms)
             ptol = self.tolerances['positionMm']; atol = np.deg2rad(self.tolerances['angleDegrees'])
-            errors = [*((actual[1] - actual[0] - target) / self.tolerances['dimensionMm']), *((np.array([(actual[0, 0]+actual[1, 0])/2, (actual[0, 1]+actual[1, 1])/2, actual[0, 2]]) - anchor) / ptol)]
+            errors = [*((actual[1] - actual[0] - measurement.target) / self.tolerances['dimensionMm']), *((np.array([(actual[0, 0]+actual[1, 0])/2, (actual[0, 1]+actual[1, 1])/2, actual[0, 2]]) - constraints.anchor) / ptol)]
             for leaf, box in zip(self.leaves, boxes):
-                if leaf["path"] in grounded: errors.append((box[0, 2]-anchor[2])/.01)
-            for a, b, axis, i, j in symmetries:
+                if leaf["path"] in constraints.grounded: errors.append((box[0, 2]-constraints.anchor[2])/.01)
+            for a, b, axis, i, j in constraints.symmetries:
                 ca = (boxes[i][0]+boxes[i][1])/2; cb = (boxes[j][0]+boxes[j][1])/2
-                ca[axis] = 2*anchor[axis]-ca[axis]
+                ca[axis] = 2*constraints.anchor[axis]-ca[axis]
                 errors.extend((ca-cb)/.01)
                 for pid in params[a]:
                     if isinstance(params[a][pid], (int, float)) and not isinstance(params[a][pid], bool): errors.append((params[a][pid]-params[b][pid])/.01)
             # Preserve the existing coordinate-aligned structure. Diagonal members
             # may turn within their original plane, but cannot tilt out or flip.
             for path, transform in transforms.items():
-                before = base_transforms[path][:3, :3]
+                before = measurement.base_transforms[path][:3, :3]
                 after = transform[:3, :3]
                 for axis in range(3):
                     if np.max(np.abs(before[:, axis])) > 1-1e-8:
                         errors.extend((after[:, axis]-before[:, axis])/1e-5)
-                errors.append(max(0., -float(np.dot(after[:, np.argmax(baseline[path].bounds[1]-baseline[path].bounds[0])], before[:, np.argmax(baseline[path].bounds[1]-baseline[path].bounds[0])])))/0.001)
+                errors.append(max(0., -float(np.dot(after[:, np.argmax(measurement.baseline[path].bounds[1]-measurement.baseline[path].bounds[0])], before[:, np.argmax(measurement.baseline[path].bounds[1]-measurement.baseline[path].bounds[0])])))/0.001)
             for relation in self.relations:
                 a, b = self.endpoint(relation["a"]), self.endpoint(relation["b"])
                 for key in (a, b):
-                    if key not in frames or frames[key]["source"] != base_frames[key]["source"]:
-                        raise interface_failure(key, frames)
+                    if key not in frames or frames[key]["source"] != measurement.base_frames[key]["source"]:
+                        raise self._interface_failure(key, frames)
                 fa, fb = frames[a], frames[b]
                 delta = fb["center"] - fa["center"]
                 if relation["mode"] == "plane": errors.append((np.dot(delta, fa["normal"]) - relation["offset"][2]) / ptol)
@@ -687,16 +746,16 @@ class ResizeSolver:
                     distance = BRepExtrema_DistShapeShape(transformed_shape(retained_support(fa["contactShape"], geoms[a[0]].shape), transforms[a[0]]), transformed_shape(retained_support(fb["contactShape"], geoms[b[0]].shape), transforms[b[0]]))
                     if not distance.IsDone() or distance.Value() > ptol:
                         raise ResizeFailure("调整后承托或端面接触断开", "RESIZE_CONTACT_LOST", [relation])
-            for path, base_guards in guard_bases.items():
+            for path, base_guards in space.guard_bases.items():
                 if self.approximate:
                     current = {id: np.array(value, dtype=float) for id, value in base_guards.items()}
-                    for pid, derivatives in guard_probes[path].items():
+                    for pid, derivatives in space.guard_probes[path].items():
                         delta = params[path][pid]-self.surrogates[path][1][pid]
                         for id, derivative in derivatives.items(): current[id] += delta*derivative
                 else:
-                    current = generation_margins(self.by_path[path]["member"]["template"], params[path], guard_occurrences[path])
+                    current = generation_margins(self.by_path[path]["member"]["template"], params[path], constraints.guard_occurrences[path])
                 for id, value in current.items():
-                    errors.extend(np.maximum(0., guard_minimums[path][id]-value)/.001)
+                    errors.extend(np.maximum(0., space.guard_minimums[path][id]-value)/.001)
             groups = {}
             for binding in self.bindings:
                 if binding["path"] not in params: continue
@@ -714,14 +773,14 @@ class ResizeSolver:
             soft = []
             for leaf, box in zip(self.leaves, boxes):
                 p = leaf["path"]
-                soft.extend(((box[0] + box[1]) / 2 - desired_centers[p]) * 0.002)
-                for id, frame in baseline[p].frames.items():
+                soft.extend(((box[0] + box[1]) / 2 - constraints.desired_centers[p]) * 0.002)
+                for id, frame in measurement.baseline[p].frames.items():
                     key = (p, id)
                     if key in frames:
-                        desired = anchor + (base_frames[key]["center"] - anchor) * scale
-                        soft.extend((frames[key]["center"] - desired) * 0.002 / max(1, len(baseline[p].frames) ** 0.5))
-            for i, (path, field) in enumerate(variables):
-                delta = (x[i]-x0[i])/max(abs(x0[i]), 1)
+                        desired = constraints.anchor + (measurement.base_frames[key]["center"] - constraints.anchor) * constraints.scale
+                        soft.extend((frames[key]["center"] - desired) * 0.002 / max(1, len(measurement.baseline[p].frames) ** 0.5))
+            for i, (path, field) in enumerate(space.variables):
+                delta = (x[i]-space.x0[i])/max(abs(space.x0[i]), 1)
                 # Smooth L1 discourages spreading a required length change across
                 # many unrelated section and hole parameters.
                 soft.append(delta*.03 if isinstance(field, int) else delta*2/np.sqrt(np.sqrt(delta*delta+1e-8)+1e-4))
@@ -731,31 +790,31 @@ class ResizeSolver:
         # First try extending an existing boundary member while keeping its
         # interface pattern and all other parts unchanged. Increasing an upright
         # above the last hole need not spread every brace and every hole pitch.
-        direct = x0.copy()
-        if not discrete:
-            changed_axes = np.flatnonzero(np.abs(target-original_size) > 1e-6)
-            for leaf, box in zip(self.leaves, base_boxes):
-                path = leaf['path']; rotation = base_transforms[path][:3, :3]
+        direct = space.x0.copy()
+        if not space.discrete:
+            changed_axes = np.flatnonzero(np.abs(measurement.target-measurement.original_size) > 1e-6)
+            for leaf, box in zip(self.leaves, measurement.base_boxes):
+                path = leaf['path']; rotation = measurement.base_transforms[path][:3, :3]
                 columns, indices = [], []
-                for i, (p, pid) in enumerate(variables):
+                for i, (p, pid) in enumerate(space.variables):
                     if p != path or not isinstance(pid, str): continue
-                    derivative = np.abs(rotation) @ sensitivities[(p, pid)]
-                    if any(abs(box[0, axis]-bounds[0, axis]) < .01 and abs(box[1, axis]-bounds[1, axis]) < .01 and abs(derivative[axis]) > 1e-6 and np.linalg.norm(np.delete(derivative, axis)) < 1e-6 for axis in changed_axes):
+                    derivative = np.abs(rotation) @ space.sensitivities[(p, pid)]
+                    if any(abs(box[0, axis]-measurement.bounds[0, axis]) < .01 and abs(box[1, axis]-measurement.bounds[1, axis]) < .01 and abs(derivative[axis]) > 1e-6 and np.linalg.norm(np.delete(derivative, axis)) < 1e-6 for axis in changed_axes):
                         columns.append(derivative); indices.append(i)
                 if indices:
-                    direct[indices] = np.clip(x0[indices]+np.linalg.lstsq(np.stack(columns, axis=1), target-original_size, rcond=None)[0], lower[indices], upper[indices])
-            if np.any(np.abs(direct-x0) > 1e-6):
+                    direct[indices] = np.clip(space.x0[indices]+np.linalg.lstsq(np.stack(columns, axis=1), measurement.target-measurement.original_size, rcond=None)[0], space.lower[indices], space.upper[indices])
+            if np.any(np.abs(direct-space.x0) > 1e-6):
                 try:
                     result = residual(direct, True)
-                    if np.max(np.abs(result[0])) <= 1: accepted.append((float(np.linalg.norm((direct-x0)/np.maximum(np.abs(x0), 1))), result))
+                    if np.max(np.abs(result[0])) <= 1: accepted.append((float(np.linalg.norm((direct-space.x0)/np.maximum(np.abs(space.x0), 1))), result))
                 except ResizeFailure as error:
                     if error.code in ('RESIZE_CANCELLED', 'RESIZE_TIMEOUT'): raise
                 except (GeometryFailure, ValueError, RuntimeError): pass
-        combinations = itertools.product(*[values for _, values in discrete]) if discrete else [()]
+        combinations = itertools.product(*[values for _, values in space.discrete]) if space.discrete else [()]
         if accepted: combinations = []
         for combination in combinations:
-            trial = seed.copy()
-            fixed = {index: value for (index, _), value in zip(discrete, combination)}
+            trial = space.seed.copy()
+            fixed = {index: value for (index, _), value in zip(space.discrete, combination)}
             for index, value in fixed.items(): trial[index] = value
             active = [i for i in range(len(trial)) if i not in fixed]
             def expand(z):
@@ -764,14 +823,14 @@ class ResizeSolver:
                 for refinement in range(3):
                     self.approximate = True
                     if active:
-                        solved = least_squares(lambda z: residual(expand(z)), trial[active], bounds=(lower[active], upper[active]), method="trf", x_scale="jac", max_nfev=80, ftol=1e-9, xtol=1e-9, gtol=1e-9)
+                        solved = least_squares(lambda z: residual(expand(z)), trial[active], bounds=(space.lower[active], space.upper[active]), method="trf", x_scale="jac", max_nfev=80, ftol=1e-9, xtol=1e-9, gtol=1e-9)
                         candidate = expand(solved.x)
                     else: candidate = trial
                     self.approximate = False
                     result = residual(candidate, True)
                     self.progress(f'复核第 {refinement+1} 轮：最大约束误差 {np.max(np.abs(result[0])):.3f} 倍容差')
                     if np.max(np.abs(result[0])) <= 1:
-                        accepted.append((float(np.linalg.norm((candidate-x0)/np.maximum(np.abs(x0), 1))), result))
+                        accepted.append((float(np.linalg.norm((candidate-space.x0)/np.maximum(np.abs(space.x0), 1))), result))
                         break
                     trial = candidate
                     last_error = [f'当前最大约束误差为允许值的 {np.max(np.abs(result[0])):.3f} 倍；实际外形为 ' + ' × '.join(f'{v:.3f}' for v in result[6][1]-result[6][0]) + ' mm。']
@@ -784,8 +843,8 @@ class ResizeSolver:
                         half = np.abs(t[:3, :3]) @ ((g.bounds[1]-g.bounds[0])/2)
                         self.envelope_corrections[path] = exact_bounds(g.shape, t)-np.array([center-half, center+half])
                         updated = {}
-                        guard_bases[path] = generation_margins(self.by_path[path]["member"]["template"], actual_params[path], guard_occurrences[path])
-                        guard_probes[path] = {}
+                        space.guard_bases[path] = generation_margins(self.by_path[path]["member"]["template"], actual_params[path], constraints.guard_occurrences[path])
+                        space.guard_probes[path] = {}
                         for pid, (_, step) in probes.items():
                             definition = next(d for d in actual_geoms[path].definitions if d["id"] == pid)
                             value = actual_params[path][pid]
@@ -795,8 +854,8 @@ class ResizeSolver:
                             linear = probe_geometry(self.by_path[path]["member"]["template"], actual_params[path])
                             self.linear_bases[path] = linear
                             probe = probe_geometry(self.by_path[path]["member"]["template"], {**actual_params[path], pid: value + step})
-                            probe_guards = generation_margins(self.by_path[path]["member"]["template"], {**actual_params[path], pid: value + step}, guard_occurrences[path])
-                            guard_probes[path][pid] = {id: (probe_guards[id]-v)/step for id, v in guard_bases[path].items()}
+                            probe_guards = generation_margins(self.by_path[path]["member"]["template"], {**actual_params[path], pid: value + step}, constraints.guard_occurrences[path])
+                            space.guard_probes[path][pid] = {id: (probe_guards[id]-v)/step for id, v in space.guard_bases[path].items()}
                             updated[pid] = (replace(probe, bounds=actual_geoms[path].bounds + probe.bounds-linear.bounds), step)
                         self.surrogates[path] = (actual_geoms[path], actual_params[path], updated)
             except ResizeFailure as error:
@@ -807,21 +866,24 @@ class ResizeSolver:
                 last_error.append(str(error))
                 failure_details = []
         if not accepted:
-            limits = [{"path": list(path), "parameterId": field, "minimum": float(lo), "maximum": float(hi)} for (path, field), lo, hi in zip(variables, lower, upper) if isinstance(field, str)]
+            limits = [{"path": list(path), "parameterId": field, "minimum": float(lo), "maximum": float(hi)} for (path, field), lo, hi in zip(space.variables, space.lower, space.upper) if isinstance(field, str)]
             raise ResizeFailure("本次未找到满足接口、外形和零件限制的结果。" + (last_error[-1] if last_error else "请检查尺寸范围或调整联动关系。"), "RESIZE_NO_SOLUTION", failure_details or limits)
         accepted.sort(key=lambda a: a[0])
-        if len(accepted) > 1 and discrete and self.request.get("solutionIndex") is None:
+        if len(accepted) > 1 and space.discrete and self.request.get("solutionIndex") is None:
             raise ResizeFailure("存在多种满足要求的离散规格方案，请选择", "RESIZE_NEEDS_CHOICE",
-                [{"message": f"方案 {i+1}", "solutionIndex": i, "specifications": [{"path": list(path), "parameterId": pid, "value": item[1][1][path][pid]} for index, _ in discrete for path, pid in [variables[index]]]} for i, item in enumerate(accepted)])
+                [{"message": f"方案 {i+1}", "solutionIndex": i, "specifications": [{"path": list(path), "parameterId": pid, "value": item[1][1][path][pid]} for index, _ in space.discrete for path, pid in [space.variables[index]]]} for i, item in enumerate(accepted)])
         selection = self.request.get("solutionIndex") or 0
         if selection >= len(accepted): raise ResizeFailure("候选方案已变化，请重新试算", "RESIZE_NEEDS_CHOICE")
-        _, params, transforms, geoms, frames, boxes, actual = accepted[selection][1]
+        return accepted[selection][1]
+
+    def _build_result(self, measurement, constraints, space, result):
+        residuals, params, transforms, geoms, frames, _, actual = result
         # Only unreferenced generated occurrences may disappear. Static, used,
         # exported and slot interfaces remain protected; no source may change.
-        for key, original in base_frames.items():
-            if key not in frames and key not in required: continue
+        for key, original in measurement.base_frames.items():
+            if key not in frames and key not in constraints.required: continue
             if key not in frames or frames[key]["source"] != original["source"]:
-                raise interface_failure(key, frames)
+                raise self._interface_failure(key, frames)
         self.progress("重建并复核所有受影响零件")
         changes = []
         for leaf in self.leaves:
@@ -842,13 +904,13 @@ class ResizeSolver:
             after = {key: member[key] for key in before}
             if any(not np.allclose(before[key], after[key], atol=1e-7) if key != "parameterValues" else before[key] != after[key] for key in before):
                 changes.append({"path": list(path), "name": member["name"], "before": before, "after": after})
-        self.refresh_document(self.document, geoms, transforms, locks)
+        self.refresh_document(self.document, geoms, transforms, constraints.locks)
         dimensions = (actual[1] - actual[0]).tolist()
         self.document["schemaVersion"] = "component-1.1"
-        self.document["geometryDesign"].update(locks=locks, relations=self.relations, dimensions=dimensions)
-        self.document["geometryDesign"]["verification"].update(targetDimensions=target.tolist(), dimensionErrors=(actual[1]-actual[0]-target).tolist(), maximumNormalizedResidual=float(np.max(np.abs(accepted[selection][1][0]))))
+        self.document["geometryDesign"].update(locks=constraints.locks, relations=self.relations, dimensions=dimensions)
+        self.document["geometryDesign"]["verification"].update(targetDimensions=measurement.target.tolist(), dimensionErrors=(actual[1]-actual[0]-measurement.target).tolist(), maximumNormalizedResidual=float(np.max(np.abs(residuals))))
         self.set_dimensions(self.document, dimensions)
-        return {"document": self.document, "dimensions": dimensions, "originalDimensions": original_size.tolist(), "changes": changes, "influences": influences,
+        return {"document": self.document, "dimensions": dimensions, "originalDimensions": measurement.original_size.tolist(), "changes": changes, "influences": space.influences,
                 "structureChanges": structure_changes(self.original_document, self.document),
                 "relations": self.relations, "diagnostics": [d for g in geoms.values() for d in g.diagnostics], "checksum": fingerprint(self.document)}
 

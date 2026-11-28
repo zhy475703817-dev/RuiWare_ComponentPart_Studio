@@ -5,9 +5,9 @@ from uuid import uuid4
 from types import SimpleNamespace
 
 import numpy as np
-from fastapi import Request
 from scipy.spatial.transform import Rotation
 
+from ..library import LibraryError
 from .geometry_sources import load_sources
 from .models import ComponentDocument, ComponentAction, PartInterface, MemberParameterDefinition
 from .interface_compatibility import assess_interface_compatibility
@@ -47,6 +47,8 @@ async def geometry(app, document):
     try:
         templates, publications = await load_sources(app, document.model_dump(by_alias=True))
     except ResizeFailure as error:
+        if isinstance(error.__cause__, LibraryError):
+            raise error.__cause__
         raise ComponentError(422, error.code) from None
 
     def measure():
@@ -122,11 +124,11 @@ async def add_template_member(app, draft_id, revision, publication_id, sha256, k
         actions.append({"type": "interface.types.merge", "types": publication["document"].get("interfaceTypes", [])})
     else:
         from ..reconstruction import _read_template, editable_parameters
-        publication, draft, material = await _read_template(Request({"type": "http", "app": app}), publication_id, sha256)
+        publication, draft, material = await _read_template(app.state, publication_id, sha256)
         values = {p["id"]: p["default"] for p in editable_parameters(draft)}
         try:
             async with app.state.reconstruction_slots:
-                shape = await asyncio.to_thread(CadProvider({(publication_id, sha256): (draft, material)}).evaluate,
+                shape = await asyncio.to_thread(CadProvider({(publication_id, sha256.lower()): (draft, material)}).evaluate,
                     {"publicationId": publication_id, "sha256": sha256}, values)
         except (ValueError, RuntimeError):
             raise ComponentError(422, "ASSEMBLY_GEOMETRY_UNAVAILABLE") from None

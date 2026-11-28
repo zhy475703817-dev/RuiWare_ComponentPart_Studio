@@ -17,7 +17,9 @@ from pydantic import Field
 from .models import ComponentModel, ComponentDocument, GeometryLock, GeometryRelation, Revision, Vector3
 from .service import ComponentError, validate_component
 from .resize_geometry import CadProvider
-from .resize_solver import ResizeSolver, ResizeFailure, fingerprint, structure_changes
+from .geometry_common import ResizeFailure, fingerprint
+from .geometry_sources import load_sources
+from .resize_solver import ResizeSolver, structure_changes
 from .qualification_policy import continuation_dimensions
 
 
@@ -50,39 +52,8 @@ def serialized(function):
     return call
 
 
-async def load_geometry(request, document, cancelled, cache, *, include_hull=True):
-    templates, publications = {}, {}
-    from ..reconstruction import _read_template
-    jobs = request.app.state.resize_jobs
-    async def collect(doc, ancestors=()):
-        if len(ancestors) > 16: raise ResizeFailure("组件嵌套超过16层", "RESIZE_NESTING")
-        for member in doc["assembly"]["members"]:
-            if cancelled(): raise ResizeFailure("已取消", "RESIZE_CANCELLED")
-            reference = member["template"]
-            identity = (reference["publicationId"], reference["sha256"])
-            if reference.get("templateKind") == "component":
-                if identity in ancestors: raise ResizeFailure("组件循环引用", "RESIZE_NESTING")
-                publication = await jobs.resource(("component", *identity), lambda: asyncio.to_thread(request.app.state.publications.detail, reference["publicationId"]))
-                if any(publication[k] != reference[k] for k in ("templateId", "version", "sha256")):
-                    raise ResizeFailure("子组件发布版本不一致", "RESIZE_REFERENCE")
-                publications[identity] = publication["document"]
-                await collect(member.get("instanceDocument") or publication["document"], (*ancestors, identity))
-            elif identity not in templates:
-                # Bind the loop's identity before scheduling: resource loaders
-                # can outlive this iteration while another request shares them.
-                try:
-                    publication, draft, material = await jobs.resource(("part", *identity), lambda identity=identity: _read_template(request, *identity))
-                except Exception as error:
-                    from ..library import LibraryError
-                    if not isinstance(error, LibraryError):
-                        raise
-                    raise ResizeFailure(f"无法读取 {member.get('name', member['id'])} 的固定发布来源：{error.code}",
-                                        error.code, [{"memberId": member['id'], "publicationId": identity[0],
-                                                      "sha256": identity[1], "code": error.code}]) from error
-                if publication.templateId != reference["templateId"] or publication.version != reference["version"]:
-                    raise ResizeFailure("零件发布版本不一致", "RESIZE_REFERENCE")
-                templates[identity] = draft, material
-    await collect(document)
+async def load_geometry(app, document, cancelled, cache, *, include_hull=True):
+    templates, publications = await load_sources(app, document, cancelled, resource=app.state.resize_jobs.resource)
     provider = CadProvider(templates)
     provider.cache = cache
     provider.include_hull = include_hull
@@ -98,6 +69,8 @@ def inspection_key(document):
             # Ports resolve through source; the editable snapshot is not CAD input.
             port.pop("interface", None)
         for member in doc["assembly"]["members"]:
+            reference = member["template"]
+            reference["sha256"] = reference["sha256"].lower()
             for interface in member.get("interfaces", []): interface.pop("hardware", None)
             if member.get("instanceDocument"): normalize(member["instanceDocument"])
     normalize(source)
@@ -273,12 +246,19 @@ class ResizeJobs:
             job.update(status="stale", cancelled=True, message="草稿已变化，请重新试算")
         return job
 
+    @serialized
+    def cancel(self, draft_id, job_id):
+        job = self.get(draft_id, job_id)
+        if job["status"] != "applied":
+            job.update(cancelled=True, status="cancelled", message="试算已取消，原模型未改变")
+        return self.public(job)
+
     @staticmethod
     def public(job):
         return {k: v for k, v in job.items() if k not in ("cancelled", "before", "created")}
 
     @serialized
-    def start(self, request, draft_id, body):
+    def start(self, draft_id, body):
         draft = self.app.state.drafts.get(draft_id)["document"]
         if draft["revision"] != body.expectedRevision:
             raise ComponentError(409, "REVISION_CONFLICT")
@@ -303,11 +283,11 @@ class ResizeJobs:
             if error:
                 job.update(status="failed", message=error["message"], error=error)
                 return self.public(job)
-        task = asyncio.create_task(self.run(request, job, body.model_dump(exclude_none=True)))
+        task = asyncio.create_task(self.run(job, body.model_dump(exclude_none=True)))
         self.tasks.add(task); task.add_done_callback(self.tasks.discard)
         return self.public(job)
 
-    async def run(self, request, job, body):
+    async def run(self, job, body):
         try:
             key = inspection_key(job["before"]) if body["inspectOnly"] else None
             async with self.geometry_turn(key, lambda: job["cancelled"]) as measured:
@@ -316,7 +296,7 @@ class ResizeJobs:
                 if measured is not None:
                     result = measured
                 else:
-                    provider, publications = await load_geometry(request, job["before"], lambda: job["cancelled"], self.geometry_cache, include_hull=not body["inspectOnly"])
+                    provider, publications = await load_geometry(self.app, job["before"], lambda: job["cancelled"], self.geometry_cache, include_hull=not body["inspectOnly"])
                     if job["cancelled"]: return
                     worker = asyncio.create_task(asyncio.to_thread(solve_with_recovery, job["before"], provider, publications, body,
                         lambda: job["cancelled"], lambda message: job.update(message=message), self.remember_inspection))
@@ -381,7 +361,10 @@ router = APIRouter(prefix="/api/component-drafts", tags=["组件几何联动"])
 
 @router.get("/{draft_id}/resize-history")
 def history(request: Request, draft_id: str):
-    repository = request.app.state.drafts
+    return resize_history(request.app.state.drafts, draft_id)
+
+
+def resize_history(repository, draft_id):
     document = repository.get(draft_id)["document"]
     saved = repository.resize_history(draft_id)
     return {"undo": {"jobId": saved["jobId"], "checksum": saved["result"]["checksum"], "revision": saved["appliedRevision"]} if saved and document["revision"] == saved["appliedRevision"] else None}
@@ -389,7 +372,7 @@ def history(request: Request, draft_id: str):
 
 @router.post("/{draft_id}/resize-jobs", status_code=202)
 async def start(request: Request, draft_id: str, body: ResizeRequest):
-    return request.app.state.resize_jobs.start(request, draft_id, body)
+    return request.app.state.resize_jobs.start(draft_id, body)
 
 
 @router.get("/{draft_id}/resize-jobs/{job_id}")
@@ -399,9 +382,7 @@ def get(request: Request, draft_id: str, job_id: str):
 
 @router.delete("/{draft_id}/resize-jobs/{job_id}")
 def cancel(request: Request, draft_id: str, job_id: str):
-    job = request.app.state.resize_jobs.get(draft_id, job_id)
-    if job["status"] != "applied": job.update(cancelled=True, status="cancelled", message="试算已取消，原模型未改变")
-    return ResizeJobs.public(job)
+    return request.app.state.resize_jobs.cancel(draft_id, job_id)
 
 
 @router.post("/{draft_id}/resize-apply")

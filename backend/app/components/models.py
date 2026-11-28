@@ -668,6 +668,8 @@ class ModelRestoreState(ComponentModel):
     patterns: list[ComponentPattern]
     braceGenerationRules: list[BraceGenerationRule] = Field(default_factory=list, max_length=100)
     slots: list[ComponentSlot]
+    parameters: list[ComponentParameter] | None = None
+    interfaceTypes: list[ComponentInterfaceType] | None = Field(default=None, max_length=500)
 
 
 class ModelRestoreAction(ComponentModel):
@@ -686,6 +688,11 @@ ComponentAction = TypeAdapter(TypedAction)
 class ActionRequest(ComponentModel):
     expectedRevision: Revision
     action: TypedAction
+
+
+class ActionBatchRequest(ComponentModel):
+    expectedRevision: Revision
+    actions: list[TypedAction] = Field(min_length=1, max_length=100)
 
 
 class CreateDraftRequest(ComponentModel):

@@ -53,6 +53,7 @@ export function App() {
   const draftRecovery = workspace.shared.error && <section className="inspector-section draft-sync-error" aria-label="草稿保存恢复" role="alert"><p>{workspace.shared.error}</p>
     {workspace.shared.status !== "conflict" && <button className="ghost" onClick={workspace.retrySave}>重试</button>}
     {workspace.shared.dirty && <button className="ghost" onClick={workspace.downloadLocalDraft}>下载本地未保存副本</button>}
+    {workspace.draftBackupMessage && <p role="status">{workspace.draftBackupMessage}</p>}
     {workspace.shared.draftId && <button className="ghost" onClick={workspace.reloadDraft}>{workspace.shared.dirty ? "放弃未保存内容并重新读取" : "重新读取"}</button>}
   </section>;
   const clearInterfacePreview = () => { interfacePreviewAbort.current?.abort(); interfacePreviewAbort.current = null; setSelectedInterface(null); setInterfacePreview(undefined); };
@@ -107,7 +108,7 @@ export function App() {
 
   function renderStage() {
     switch (stage) {
-      case "definition": return <DefinitionStage definition={document.definition} codeUnique={componentCodeUnique} draftId={workspace.shared.draftId} onChange={patch => dispatch({ type: "definition.patch", patch })}/>;
+      case "definition": return <DefinitionStage onEvidenceUploaded={workspace.onEvidenceUploaded} definition={document.definition} codeUnique={componentCodeUnique} draftId={workspace.shared.draftId} onChange={patch => dispatch({ type: "definition.patch", patch })}/>;
       case "assembly": return <AssemblyStage members={members} mates={mates} onAddMate={workspace.addMate}
         selectedMember={members.find(member => member.id === workspace.selectedMemberId)} bindings={document.bindings}
         onMemberChange={patch => {

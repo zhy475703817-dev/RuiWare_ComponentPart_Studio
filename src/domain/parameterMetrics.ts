@@ -70,15 +70,6 @@ function massInKilograms(member: ComponentMember): number | undefined {
   return volumeScale && densityScale ? volume * volumeScale * density * densityScale : undefined;
 }
 
-function densityInKgPerCubicMetre(value: number | undefined, unit: string | undefined): number | undefined {
-  if (value === undefined || !Number.isFinite(value)) return undefined;
-  const normalized = unit?.trim().toLowerCase();
-  if (["kg/m3", "kg/m³", "千克/立方米"].includes(normalized || "")) return value;
-  if (["g/cm3", "g/cm³", "克/立方厘米"].includes(normalized || "")) return value * 1000;
-  if (["kg/mm3", "kg/mm³", "千克/立方毫米"].includes(normalized || "")) return value * 1e9;
-  return undefined;
-}
-
 function memberExtent(member: ComponentMember, axisIndex: number): { start: number; end: number } | undefined {
   const dimensions = [aliases.length, aliases.width, aliases.height].map(dimension => numericMemberValue(member, dimension));
   // A part may expose only one or two envelope dimensions. Use the available

@@ -2,12 +2,13 @@ import { createComponentDocument, getInterface, hasInterface, samePartInterface 
 import { inferEnvelopeDimensions } from "./parameterMetrics.ts";
 import { assessInterfaceCompatibility } from "./interfaceCompatibility.ts";
 import { defaultConnectableTypeIds, PRESET_INTERFACE_TYPES } from "./interfaceTypes.ts";
-import type { BraceGenerationRule, ComponentDefinition, ComponentDocument, ComponentMember, ComponentPattern, ComponentPort, ComponentSlot, InterfaceSource, Mate, ParameterBinding } from "./component.ts";
+import type { ComponentDefinition, ComponentDocument, ComponentMember, ComponentPattern, ComponentPort, ComponentSlot, InterfaceSource, Mate, ParameterBinding } from "./component.ts";
 
 const PRESET_CONNECTION_TYPE_IDS = new Set<string>(PRESET_INTERFACE_TYPES.map(item => item.id));
 
 export type ComponentAction =
-  | { type: "model.restore"; model: Pick<ComponentDocument, "assembly" | "ports" | "bindings" | "patterns" | "slots"> & { braceGenerationRules?: BraceGenerationRule[] } }
+  | { type: "model.restore"; model: Pick<ComponentDocument, "assembly" | "ports" | "bindings" | "patterns" | "slots" | "braceGenerationRules"> &
+      Partial<Pick<ComponentDocument, "parameters" | "interfaceTypes">> }
   | { type: "reset" }
   | { type: "definition.patch"; patch: Partial<ComponentDefinition> }
   | { type: "member.add"; member: ComponentMember }

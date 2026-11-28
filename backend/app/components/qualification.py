@@ -1,7 +1,6 @@
 """Automatic, cancellable CAD qualification; never applies trial dimensions."""
 import asyncio
 from copy import deepcopy
-from types import SimpleNamespace
 from uuid import uuid4
 
 import numpy as np
@@ -28,8 +27,10 @@ class QualificationJobs:
         if not self.closed:
             self.loop.call_soon_threadsafe(self.queue, draft_id, False, self.debounce)
 
-    def queue(self, draft_id, retry=False, delay=0):
+    def queue(self, draft_id, retry=False, delay=0, *, expected_revision=None):
         document = self.repository.get(draft_id)["document"]
+        if expected_revision is not None and document["revision"] != expected_revision:
+            raise ComponentError(409, "REVISION_CONFLICT")
         saved = self.repository.qualification(draft_id)
         active = self.jobs.get(draft_id)
         key = (document["revision"], digest(document), digest(saved["config"]))
@@ -218,7 +219,7 @@ class QualificationJobs:
             draft = self.repository.get(job["draftId"])
             failures = [c for c in draft["checks"] if c["status"] == "fail"]
             if failures: raise ResizeFailure("请先处理基础数据错误", "AUTHORING_DATA_INVALID", failures)
-            provider, publications = await load_geometry(SimpleNamespace(app=self.app), job["document"], lambda: job["cancelled"], self.app.state.resize_jobs.geometry_cache)
+            provider, publications = await load_geometry(self.app, job["document"], lambda: job["cancelled"], self.app.state.resize_jobs.geometry_cache)
             baseline = await self.solve(job, job["document"], provider, publications)
             nominal = baseline["document"]
             baseline_hash = digest(nominal)
@@ -309,9 +310,7 @@ async def status(request: Request, draft_id: str):
 
 @router.post("/{draft_id}/qualification")
 async def start(request: Request, draft_id: str, body: QualificationRequest):
-    if request.app.state.drafts.get(draft_id)["document"]["revision"] != body.expectedRevision:
-        raise ComponentError(409, "REVISION_CONFLICT")
-    return request.app.state.qualification_jobs.queue(draft_id, body.retry)
+    return request.app.state.qualification_jobs.queue(draft_id, body.retry, expected_revision=body.expectedRevision)
 
 
 @router.put("/{draft_id}/qualification/config")

@@ -1,11 +1,9 @@
 import asyncio
-import json
 from typing import Annotated, Literal
 from datetime import datetime
 
 from mcp.types import CallToolResult, ToolAnnotations
 from pydantic import Field
-from fastapi import Request, Response
 
 from ..library import read_published_library
 from ..preview import read_preview, read_publication, SHA256
@@ -24,9 +22,8 @@ def register(mcp, app, invoke):
     async def component_get_template_authoring_info(publicationId: str, sha256: Annotated[str, Field(pattern=SHA256)],
         parameters: Annotated[dict[str, ParameterValue], Field(max_length=64)] | None = None) -> CallToolResult:
         """选型与装配前读取固定发布版本的公开可调参数、范围、离散规格、原始契约及当前参数下展开的真实接口和诊断。不依赖包内STL，不修改草稿；无效或受保护参数拒绝使用。"""
-        from ..reconstruction import reconstruction_info
-        return await invoke(reconstruction_info, publicationId, Request({"type": "http", "app": app}), Response(),
-                            sha256, json.dumps(parameters or {}, ensure_ascii=False, allow_nan=False))
+        from ..reconstruction import template_info
+        return await invoke(template_info, app.state, publicationId, sha256, parameters or {})
 
     @mcp.tool(annotations=readonly, structured_output=False)
     async def component_search_templates(query: str = "", limit: Annotated[int, Field(strict=True, ge=1, le=100)] = 20,

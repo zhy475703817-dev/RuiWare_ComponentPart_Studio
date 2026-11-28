@@ -152,6 +152,12 @@ def _member_extent(member: dict, axis: int) -> tuple[float, float] | None:
     return center - radius, center + radius
 
 
+def _round_component_integer(value: float) -> int:
+    # Match Math.round without rounding the intermediate sum at a half-integer.
+    lower = math.floor(value)
+    return lower + 1 if value - lower >= 0.5 else lower
+
+
 def _infer_envelope_dimensions(parameters: list[dict], members: list[dict], patterns: list[dict]) -> dict[str, float | None]:
     expanded = []
     by_id = {parameter["id"]: parameter for parameter in parameters}
@@ -160,7 +166,7 @@ def _infer_envelope_dimensions(parameters: list[dict], members: list[dict], patt
         for pattern in patterns:
             if member["id"] not in pattern["memberIds"]:
                 continue
-            count = max(1, round(by_id.get(pattern["countParameterId"], {}).get("value") or 1))
+            count = max(1, _round_component_integer(by_id.get(pattern["countParameterId"], {}).get("value") or 1))
             spacing = by_id.get(pattern["spacingParameterId"], {}).get("value") or 0
             axis = {"x": 0, "y": 1, "z": 2}[pattern["axis"]]
             for index in range(1, count):
@@ -216,9 +222,12 @@ def apply_action(document: ComponentDocument, action: TypedAction) -> ComponentD
         action.id.startswith("geometryEnvelope") or any(b.parameterId == action.id for b in document.bindings)
         or any(action.id in (p.countParameterId, p.spacingParameterId) for p in document.patterns))):
         raise ComponentError(422, "GEOMETRY_RESIZE_REQUIRED")
+    family = action.type.split(".", 1)[0]
     data = document.model_dump(by_alias=True)
     if action.type == "model.restore":
-        data.update(action.model.model_dump(by_alias=True))
+        data.update(action.model.model_dump(by_alias=True, exclude={
+            field for field in ("parameters", "interfaceTypes") if getattr(action.model, field) is None
+        }))
     elif action.type == "reset":
         data = create_component_document().model_dump(by_alias=True)
         data["revision"] = document.revision
@@ -227,14 +236,61 @@ def apply_action(document: ComponentDocument, action: TypedAction) -> ComponentD
         if isinstance(patch.get("code"), str):
             patch["code"] = patch["code"].upper()
         data["definition"].update(patch)
-    elif action.type == "member.add" and document.geometryDesign:
-        if any(member.id == action.member.id for member in document.assembly.members):
+    elif family == "member":
+        _apply_member_action(data, action)
+    elif family in ("mate", "slot", "port", "interface"):
+        if not _apply_interface_action(data, action, document=document):
+            return document
+    elif family in ("binding", "parameter", "pattern"):
+        _apply_parameter_action(data, action, document=document)
+    elif action.type == "brace.rule.set":
+        rule = action.rule.model_dump()
+        if (error := _brace_rule_error(document, action.rule)) is not None:
+            messages = {
+                'INVALID_BRACE_RULE_PATTERN': '孔列模式必须含一个编号占位符，如 hole.{index:03d}；补零宽度限1到10。',
+                'INVALID_BRACE_RULE_UNIT': '高度、余量及横撑和斜撑孔距参数均须使用 mm 单位。',
+                'INVALID_BRACE_RULE_PARAMETERS': '请引用已定义的高度、孔距和余量参数；高度、横撑孔距、底部余量、顶部余量需分别使用独立参数。',
+                'INVALID_BRACE_RULE_RANGE': '请检查高度和余量范围，横撑与斜撑孔距必须为正数。',
+                'INVALID_BRACE_RULE_INTERFACE': '撑杆两端须引用存在且不同的真实接口。',
+            }
+            raise ComponentError(422, error, message=messages.get(error))
+        if any(item["id"] == rule["id"] for item in data.get("braceGenerationRules", [])):
+            data["braceGenerationRules"] = [item for item in data["braceGenerationRules"] if item["id"] != rule["id"]]
+        data.setdefault("braceGenerationRules", []).append(rule)
+        if conflicts := brace_rule_conflicts(data):
+            raise ComponentError(422, conflicts[0]['code'], message=conflicts[0]['message'], details=conflicts)
+    elif action.type == "rule.add":
+        rule = action.rule.model_dump()
+        if not rule["id"].strip() or not rule["expression"].strip() or any(item["id"] == rule["id"] for item in data["rules"]):
+            raise ComponentError(422, "INVALID_RULE")
+        data["rules"].append(rule)
+    elif action.type == "rule.remove":
+        if not any(item["id"] == action.id for item in data["rules"]):
+            raise ComponentError(404, "COMPONENT_ITEM_NOT_FOUND")
+        data["rules"] = [item for item in data["rules"] if item["id"] != action.id]
+    elif action.type == "rule.expression":
+        rule = next((item for item in data["rules"] if item["id"] == action.id), None)
+        if rule is None:
+            raise ComponentError(404, "COMPONENT_ITEM_NOT_FOUND")
+        rule["expression"] = action.expression
+    if data.get("geometryDesign") and action.type not in ("definition.patch", "rule.expression", "rule.add", "rule.remove", "interface.hardware.set"):
+        data["geometryDesign"]["verified"] = False
+    if data == document.model_dump(by_alias=True):
+        return document
+    data["revision"] = document.revision + 1
+    return ComponentDocument.model_validate(data)
+
+
+def _apply_member_action(data: dict, action: TypedAction) -> None:
+    if action.type == "member.add" and data.get("geometryDesign"):
+        if any(member["id"] == action.member.id for member in data["assembly"]["members"]):
             raise ComponentError(422, "DUPLICATE_ID")
         data["assembly"]["members"].append(action.member.model_dump(by_alias=True))
     elif action.type == "member.add":
-        if any(member.id == action.member.id for member in document.assembly.members):
+        if any(member["id"] == action.member.id for member in data["assembly"]["members"]):
             raise ComponentError(422, "DUPLICATE_ID")
         previous_inferred = _infer_envelope_dimensions(data["parameters"], data["assembly"]["members"], data["patterns"])
+        first_member = not data["assembly"]["members"]
         member = action.member.model_dump(by_alias=True)
         data["assembly"]["members"].append(member)
         existing = {(item["parameterId"], item["memberId"], item["memberParameterId"]) for item in data["bindings"]}
@@ -247,7 +303,7 @@ def apply_action(document: ComponentDocument, action: TypedAction) -> ComponentD
                                and any(alias.lower() in item.get(key, "").lower() for key in ("id", "label") for alias in names)), None)
             if definition is None:
                 continue
-            if not document.assembly.members and parameter["value"] is not None and isinstance(definition.get("default"), (int, float)) and not isinstance(definition.get("default"), bool):
+            if first_member and parameter["value"] is not None and isinstance(definition.get("default"), (int, float)) and not isinstance(definition.get("default"), bool):
                 minimum = max(parameter["min"], definition.get("minimum") if definition.get("minimum") is not None else float("-inf"))
                 maximum = min(parameter["max"], definition.get("maximum") if definition.get("maximum") is not None else float("inf"))
                 parameter["value"] = min(maximum, max(minimum, definition["default"]))
@@ -276,7 +332,7 @@ def apply_action(document: ComponentDocument, action: TypedAction) -> ComponentD
             minimum = max(parameter["min"], definition.get("minimum") if definition.get("minimum") is not None else float("-inf"))
             maximum = min(parameter["max"], definition.get("maximum") if definition.get("maximum") is not None else float("inf"))
             if minimum <= maximum:
-                value = round(parameter["value"]) if definition.get("valueType") == "integer" else parameter["value"]
+                value = _round_component_integer(parameter["value"]) if definition.get("valueType") == "integer" else parameter["value"]
                 member["parameterValues"][definition["id"]] = min(maximum, max(minimum, value))
     elif action.type in ("member.patch", "member.remove"):
         member = next((member for member in data["assembly"]["members"] if member["id"] == action.id), None)
@@ -308,7 +364,11 @@ def apply_action(document: ComponentDocument, action: TypedAction) -> ComponentD
                     slot["interfaceId"] = None
                 if (slot.get("baseInterface") or {}).get("memberId") == action.id:
                     slot["baseInterface"] = None
-    elif action.type == "mate.add":
+
+
+def _apply_interface_action(data: dict, action: TypedAction, *, document: ComponentDocument) -> bool:
+    """Return false for actions that bypass revision and verification updates."""
+    if action.type == "mate.add":
         mate = action.mate
         if not has_interface(document, mate.from_) or not has_interface(document, mate.to) or mate.from_.memberId == mate.to.memberId:
             raise ComponentError(422, "INVALID_REFERENCE")
@@ -330,7 +390,7 @@ def apply_action(document: ComponentDocument, action: TypedAction) -> ComponentD
         data["assembly"]["mates"].append(mate.model_dump(by_alias=True))
     elif action.type == "mate.remove":
         if not any(item["id"] == action.id for item in data["assembly"]["mates"]):
-            return document
+            return False
         data["assembly"]["mates"] = [item for item in data["assembly"]["mates"] if item["id"] != action.id]
     elif action.type == "slot.add":
         slot = action.slot
@@ -350,7 +410,7 @@ def apply_action(document: ComponentDocument, action: TypedAction) -> ComponentD
             raise ComponentError(404, "COMPONENT_ITEM_NOT_FOUND")
         patch = action.patch.model_dump(by_alias=True, exclude_unset=True)
         if not patch:
-            return document
+            return False
         if "name" in patch:
             name = (patch["name"] or "").strip()
             if not name:
@@ -510,7 +570,11 @@ def apply_action(document: ComponentDocument, action: TypedAction) -> ComponentD
         if len(data["interfaceTypes"]) + len(additions) > 500:
             raise ComponentError(422, "INTERFACE_TYPE_LIMIT")
         data["interfaceTypes"].extend(additions)
-    elif action.type == "binding.set":
+    return True
+
+
+def _apply_parameter_action(data: dict, action: TypedAction, *, document: ComponentDocument) -> None:
+    if action.type == "binding.set":
         data["bindings"] = [item for item in data["bindings"] if item["id"] != action.id]
         if action.binding is not None:
             if action.binding.id != action.id:
@@ -538,7 +602,7 @@ def apply_action(document: ComponentDocument, action: TypedAction) -> ComponentD
                 raise ComponentError(422, "INVALID_BINDING_RANGE")
             parameter_data = next(item for item in data["parameters"] if item["id"] == parameter.id)
             if parameter_data["value"] is not None:
-                current = math.floor(parameter_data["value"] + 0.5) if integer_bound else parameter_data["value"]
+                current = _round_component_integer(parameter_data["value"]) if integer_bound else parameter_data["value"]
                 parameter_data["value"] = min(upper, max(lower, current))
                 for target_binding in targets:
                     target_member = next(entry for entry in data["assembly"]["members"] if entry["id"] == target_binding["memberId"])
@@ -573,37 +637,11 @@ def apply_action(document: ComponentDocument, action: TypedAction) -> ComponentD
         if not any(item["id"] == action.id for item in data["patterns"]):
             raise ComponentError(404, "COMPONENT_ITEM_NOT_FOUND")
         data["patterns"] = [item for item in data["patterns"] if item["id"] != action.id]
-    elif action.type == "brace.rule.set":
-        rule = action.rule.model_dump()
-        if (error := _brace_rule_error(document, action.rule)) is not None:
-            messages = {
-                'INVALID_BRACE_RULE_PATTERN': '孔列模式必须含一个编号占位符，如 hole.{index:03d}；补零宽度限1到10。',
-                'INVALID_BRACE_RULE_UNIT': '高度、余量及横撑和斜撑孔距参数均须使用 mm 单位。',
-                'INVALID_BRACE_RULE_PARAMETERS': '请引用已定义的高度、孔距和余量参数；高度、横撑孔距、底部余量、顶部余量需分别使用独立参数。',
-                'INVALID_BRACE_RULE_RANGE': '请检查高度和余量范围，横撑与斜撑孔距必须为正数。',
-                'INVALID_BRACE_RULE_INTERFACE': '撑杆两端须引用存在且不同的真实接口。',
-            }
-            raise ComponentError(422, error, message=messages.get(error))
-        if any(item["id"] == rule["id"] for item in data.get("braceGenerationRules", [])):
-            data["braceGenerationRules"] = [item for item in data["braceGenerationRules"] if item["id"] != rule["id"]]
-        data.setdefault("braceGenerationRules", []).append(rule)
-        if conflicts := brace_rule_conflicts(data):
-            raise ComponentError(422, conflicts[0]['code'], message=conflicts[0]['message'], details=conflicts)
-    elif action.type == "rule.add":
-        rule = action.rule.model_dump()
-        if not rule["id"].strip() or not rule["expression"].strip() or any(item["id"] == rule["id"] for item in data["rules"]):
-            raise ComponentError(422, "INVALID_RULE")
-        data["rules"].append(rule)
-    elif action.type == "rule.remove":
-        if not any(item["id"] == action.id for item in data["rules"]):
-            raise ComponentError(404, "COMPONENT_ITEM_NOT_FOUND")
-        data["rules"] = [item for item in data["rules"] if item["id"] != action.id]
-    elif action.type in ("parameter.value", "rule.expression"):
-        collection, field = ("parameters", "value") if action.type == "parameter.value" else ("rules", "expression")
-        item = next((item for item in data[collection] if item["id"] == action.id), None)
+    elif action.type == "parameter.value":
+        item = next((item for item in data["parameters"] if item["id"] == action.id), None)
         if item is None:
             raise ComponentError(404, "COMPONENT_ITEM_NOT_FOUND")
-        if action.type == "parameter.value" and action.value is not None:
+        if action.value is not None:
             definitions = []
             for binding in data["bindings"]:
                 if binding["parameterId"] != action.id:
@@ -619,29 +657,22 @@ def apply_action(document: ComponentDocument, action: TypedAction) -> ComponentD
                 lower, upper = math.ceil(lower), math.floor(upper)
             if lower > upper:
                 raise ComponentError(422, "INVALID_BINDING_RANGE")
-            candidate = math.floor(action.value + 0.5) if integer_bound else action.value
-            item[field] = min(upper, max(lower, candidate))
+            candidate = _round_component_integer(action.value) if integer_bound else action.value
+            item["value"] = min(upper, max(lower, candidate))
         else:
-            item[field] = getattr(action, field)
-        if action.type == "parameter.value":
-            for binding in data["bindings"]:
-                if binding["parameterId"] != action.id:
-                    continue
-                member = next((entry for entry in data["assembly"]["members"] if entry["id"] == binding["memberId"]), None)
-                definition = next((entry for entry in (member or {}).get("parameterDefinitions", []) if entry["id"] == binding["memberParameterId"] and entry.get("unit") == item["unit"] and entry.get("valueType") in ("number", "integer")), None)
-                if member is not None:
-                    if action.value is None:
-                        member["parameterValues"].pop(binding["memberParameterId"], None)
-                    elif definition is not None:
-                        minimum = max(item["min"], definition["minimum"]) if definition.get("minimum") is not None else item["min"]
-                        maximum = min(item["max"], definition["maximum"]) if definition.get("maximum") is not None else item["max"]
-                        member["parameterValues"][binding["memberParameterId"]] = min(maximum, max(minimum, item[field]))
-    if data.get("geometryDesign") and action.type not in ("definition.patch", "rule.expression", "rule.add", "rule.remove", "interface.hardware.set"):
-        data["geometryDesign"]["verified"] = False
-    if data == document.model_dump(by_alias=True):
-        return document
-    data["revision"] = document.revision + 1
-    return ComponentDocument.model_validate(data)
+            item["value"] = None
+        for binding in data["bindings"]:
+            if binding["parameterId"] != action.id:
+                continue
+            member = next((entry for entry in data["assembly"]["members"] if entry["id"] == binding["memberId"]), None)
+            definition = next((entry for entry in (member or {}).get("parameterDefinitions", []) if entry["id"] == binding["memberParameterId"] and entry.get("unit") == item["unit"] and entry.get("valueType") in ("number", "integer")), None)
+            if member is not None:
+                if action.value is None:
+                    member["parameterValues"].pop(binding["memberParameterId"], None)
+                elif definition is not None:
+                    minimum = max(item["min"], definition["minimum"]) if definition.get("minimum") is not None else item["min"]
+                    maximum = min(item["max"], definition["maximum"]) if definition.get("maximum") is not None else item["max"]
+                    member["parameterValues"][binding["memberParameterId"]] = min(maximum, max(minimum, item["value"]))
 
 
 def validate_component(document: ComponentDocument, *, code_unique: bool = True) -> list[dict]:

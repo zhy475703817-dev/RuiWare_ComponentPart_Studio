@@ -3,7 +3,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse, Response
 
-from .models import ActionRequest, CreateDraftRequest, PublishRequest
+from .models import ActionBatchRequest, ActionRequest, CreateDraftRequest, PublishRequest
 
 
 router = APIRouter(prefix="/api/component-drafts", tags=["组件草稿"])
@@ -61,6 +61,11 @@ def update_draft(request: Request, draft_id: str, body: ActionRequest):
     return request.app.state.drafts.update(draft_id, body.expectedRevision, body.action)
 
 
+@router.post("/{draft_id}/actions/batch")
+def update_draft_batch(request: Request, draft_id: str, body: ActionBatchRequest):
+    return request.app.state.drafts.update(draft_id, body.expectedRevision, body.actions)
+
+
 @router.put("/{draft_id}/evidence/{evidence_id}")
 async def upload_evidence(request: Request, draft_id: str, evidence_id: str, fileName: str = Query(max_length=255)):
     length = request.headers.get("content-length")
@@ -85,8 +90,8 @@ def download_evidence(request: Request, draft_id: str, evidence_id: str):
 
 
 @router.delete("/{draft_id}/evidence/{evidence_id}", status_code=204)
-def delete_evidence(request: Request, draft_id: str, evidence_id: str):
-    request.app.state.drafts.delete_evidence(draft_id, evidence_id)
+def delete_evidence(request: Request, draft_id: str, evidence_id: str, unreferencedOnly: bool = False):
+    request.app.state.drafts.delete_evidence(draft_id, evidence_id, unreferenced_only=unreferencedOnly)
     return Response(status_code=204)
 
 

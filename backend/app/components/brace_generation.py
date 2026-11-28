@@ -4,7 +4,7 @@ from __future__ import annotations
 from copy import deepcopy
 import math
 
-from .resize_solver import ResizeFailure, fingerprint
+from .geometry_common import ResizeFailure, fingerprint
 from .brace_policy import INDEX_TOKEN, active_brace_rules, brace_relation_owner, brace_rule_conflicts, valid_interface_pattern
 
 

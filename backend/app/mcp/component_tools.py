@@ -28,10 +28,7 @@ def register(mcp, app, invoke):
     async def component_finish_authoring(draftId: str, expectedRevision: Revision, retry: bool = False) -> CallToolResult:
         """制作完成入口：平台自动执行原尺寸修复、增大/缩小/组合/孔列边界试调和复验。返回任务状态；通过前不能交付或发布，试验尺寸不覆盖原尺寸。"""
         async def start():
-            from ..components.service import ComponentError
-            if app.state.drafts.get(draftId)["document"]["revision"] != expectedRevision:
-                raise ComponentError(409, "REVISION_CONFLICT")
-            return app.state.qualification_jobs.queue(draftId, retry)
+            return app.state.qualification_jobs.queue(draftId, retry, expected_revision=expectedRevision)
         return await invoke(start)
 
     @mcp.tool(annotations=readonly, structured_output=False)
@@ -71,9 +68,8 @@ def register(mcp, app, invoke):
     @mcp.tool(annotations=write, structured_output=False)
     async def component_resize_preview(draftId: str, request: ResizeRequest) -> CallToolResult:
         """制作中尽早试算真实CAD。inspectOnly只读尺寸；false且省略dimensions检查原尺寸完整联动。返回jobId，轮询status；失败需在制作时修复。试调不会保存。"""
-        from types import SimpleNamespace
         async def start():
-            return app.state.resize_jobs.start(SimpleNamespace(app=app), draftId, request)
+            return app.state.resize_jobs.start(draftId, request)
         return await invoke(start)
 
     @mcp.tool(annotations=readonly, structured_output=False)
@@ -84,11 +80,7 @@ def register(mcp, app, invoke):
     @mcp.tool(annotations=write, structured_output=False)
     async def component_resize_cancel(draftId: str, jobId: str) -> CallToolResult:
         """取消几何试算，保留原组件。"""
-        def cancel():
-            job = app.state.resize_jobs.get(draftId, jobId)
-            if job['status'] != 'applied': job.update(cancelled=True, status='cancelled', message='试算已取消')
-            return ResizeJobs.public(job)
-        return await invoke(cancel)
+        return await invoke(app.state.resize_jobs.cancel, draftId, jobId)
 
     @mcp.tool(annotations=write, structured_output=False)
     async def component_resize_apply(draftId: str, request: ResizeApplyRequest) -> CallToolResult:

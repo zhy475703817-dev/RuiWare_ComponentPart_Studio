@@ -7,7 +7,10 @@ src/main.tsx                      应用挂载
 src/app/App.tsx                   工作台组合、各阶段数据与回调连接
 src/app/WorkspaceLayout.tsx       顶栏、七阶段导航、三列布局、状态栏
 src/app/stages.ts                 稳定的阶段标识及中文名称
-src/app/useComponentWorkspace.ts  草稿 reducer、界面选择、导出副作用
+src/app/useComponentWorkspace.ts  草稿生命周期、阶段、装配事务与导出发布组合
+src/app/useModelEditing.ts       模型选择、撤销历史、复制粘贴、分组及位姿编辑
+src/app/documentExport.ts        后端完整导出下载与未保存文档的附件嵌入
+src/library/draftEvidence.ts     附件上传、读取及内容校验
 src/stages/                      七个实际编辑面板
 src/domain/component.ts          工程数据模型与新草稿默认值
 src/domain/componentReducer.ts   无副作用的编辑操作及关联清理
@@ -27,7 +30,9 @@ backend/app/preview.py            包下载校验、安全 ZIP 读取、模型�
 backend/app/main.py               FastAPI 入口、生命周期、健康检查、静态页面
 backend/app/components/           共享工程模型、编辑/验证/导出、SQLite 修订事务、REST
 backend/app/components/assembly.py  固定发布成员导入、复制、真实 CAD 贴地与连接组对齐
-backend/app/components/geometry_sources.py  装配和几何试算共用的固定版本 CAD 输入加载
+backend/app/components/geometry_sources.py  装配、几何试算和验收共用的固定版本 CAD 输入加载
+backend/app/components/geometry_common.py   几何错误、文档哈希和固定版本缓存键
+backend/app/components/publication_package.py  发布 ZIP 字节组装，不操作数据库或网络
 backend/app/mcp/                  官方 MCP SDK Streamable HTTP 入口及业务工具
 src/app/sharedDraft.ts            共享草稿请求、串行保存、乐观显示、轮询和冲突恢复
 src/app/AgentChanges.tsx           Agent 来源提示、修订记录、中文字段前后差异
@@ -38,7 +43,7 @@ scripts/start-dev.ps1             一键安装、后台启动及就绪检查
 tests/                           Node 原生领域和前端列表测试
 ```
 
-前端依赖方向：`app → stages / library / viewport / domain`，`stages → domain（类型）`，`viewport → domain / library（类型）`。`domain` 不导入 React、DOM、网络、服务端配置或 Three.js。后端 Python 模块不进入浏览器构建。
+前端依赖方向：`app → stages / library / viewport / domain`，阶段面板使用领域类型和计算，附件访问委托 `library/draftEvidence`，画布从 `library` 读取发布模型。`domain` 不导入 React、DOM、网络或服务端配置；装配姿态计算可使用 Three.js 的数学对象，渲染和 geometry 生命周期仍由 viewport/library 管理。后端 Python 模块不进入浏览器构建。
 
 运行链路：`浏览器 → Vite :5180 /api 转发 → FastAPI :8020 → SQLite 快照`，后台直接从共享 MinIO 读取零部件和组件发布记录、按需下载并校验包，准备待应用的新列表。两类发布使用同一个 bucket，以 `templateKind` 区分，旧记录默认是零部件；无需启动零部件平台。`metadata.json` 是发布完成标记，包路径须与记录处于同一发布目录，包大小和 SHA-256 必须一致。读取仅需存储连接与读取目录，组件发布另外要求成员写入目录。
 
@@ -82,7 +87,7 @@ FastAPI 提供 `/api/health`、`/api/published-templates`、兼容 STL 预览接
 
 网页保存完成后的检查与导出使用后端 `validate_component` / `serialize_component`，保存期间使用前端纯函数显示预检查；两者受共享文档兼容测试约束。`sharedDraft` 控制器串行保存，空闲时读取 AI 修改并持续展示前后差异，保存响应中的 Agent 变更同样进入提示。SQLite 在同一事务记录来源和差异；用户旧修订写入只在全部中间修订均来自 Agent 时重放该动作，实现同字段用户优先、其他字段保留。MCP 仍使用精确修订检查；其他用户窗口冲突、历史不全、重置和对象删除不会自动合并。保存失败时保留本地投影，可下载本地副本，显式重新读取才放弃未保存内容。草稿选择保存在 URL `?draft=` 与 localStorage，工程数据保存在后端。
 
-MCP `/mcp` 与 REST 共用 `DraftRepository`、HTTP 客户端和预览缓存，MCP 会话管理器由 FastAPI lifespan 启停。预览通过显式 `client/settings/cache` 参数复用，不依赖虚构的 HTTP Request。MCP 工具不会模拟浏览器点击，模型返回固定发布哈希的绝对下载 URL。详见 [MCP 接入](MCP.md)。
+MCP `/mcp` 与 REST 共用 `DraftRepository`、HTTP 客户端和预览缓存，MCP 会话管理器由 FastAPI lifespan 启停。模板读取接收后端 state，几何任务由自身持有的 app 取得服务；REST 与 MCP 直接调用同一业务入口，不构造虚假的 HTTP Request。MCP 工具不会模拟浏览器点击，模型返回固定发布哈希的绝对下载 URL。详见 [MCP 接入](MCP.md)。
 
 MCP 当前提供 66 个工具，按草稿、完整编辑动作、装配、发布库和维护拆分注册。原子批量动作、CAD 自动放置/对齐都复用后端动作验证，并在一次 SQLite 事务中保存一个修订。几何应用/撤销也接收服务入口指定的 actor；MCP 统一记为 agent，REST 记为 user，网页差异和用户优先合并覆盖两类路径。MCP 统一入口为所有草稿编辑结果附加当前修订制作检查，选型工具复用参数重建接口，不依赖旧 STL。清理工具复用 REST 业务处理与原有备份/引用/审计保护，并把 HTTP 失败及部分清理失败映射为结构化 MCP 错误。
 
@@ -97,3 +102,22 @@ MCP 当前提供 66 个工具，按草稿、完整编辑动作、装配、发布
 发布包完整性与兼容 STL 预览位于 `backend/app/preview.py`，本地重建位于 `backend/app/reconstruction.py`，固定 CAD 引擎快照位于 `backend/engine/`；前端 `library` 管理参数、请求取消和共享模型缓存。零件实例位置按实际包围盒计算，不更改几何本身；画布上的参数失败会保留上一次可用几何。记录连接关系、自动对齐和完整几何联动是独立操作；原始接口契约保留在发布定义中，不能用接口名称推断装配位置。
 
 真实模型已接入 `viewport`。MCP 装配操作使用同一固定 CAD 引擎读取真实边界和明确接口定位，贴地和连接组整体变换以修订检查原子保存；缺少真实接口来源时拒绝猜测。正式发布已通过 ComponentPublications 接入共享存储，与本地 JSON 导出独立；规则执行尚未实现。
+
+
+## 编辑事务与错误恢复
+
+单动作 REST `POST /api/component-drafts/{id}/actions` 保持兼容，复合编辑通过 `POST /api/component-drafts/{id}/actions/batch` 提交 `expectedRevision` 与 1–100 个 `actions`。两者调用同一个仓储更新事务。批次按顺序验证，失败全部回滚，成功仅增加一个修订；actor、差异记录、用户优先合并规则与单动作一致。
+
+前端 `SharedDraftController.commit(actions, onSaved?)` 为调用方提供本次操作的确认结果，连接与位姿、模板加入与放置作为一组排队并乐观显示。`flush()` 只保证队列已处理，不能替代操作成功确认。业务拒绝移除整个批次；后续操作依赖已被拒绝的对象或模型快照时进入冲突并保留完整本地投影。网络错误、429 和服务器故障保留输入；显式重试仍使用原确认修订，避免响应丢失后重复覆盖。
+
+模型快照记录其创建时的模型基线，按对象字段值比较而不依赖 JSON 键顺序，防止重放快照时带回已被拒绝或被其他来源修改的结构。全量模型恢复只接受精确修订，不跨 Agent 修订自动重放。撤销历史在后端实际确认时更新，断网后的成功重试同样记录；卸载后迟到响应不更新页面。成员加入引起的尺寸和接口类型变化随该操作记录，撤销时保留后续人工参数修改；服务端合并包含并发 Agent 编辑时不生成混合快照的撤销记录，外部模型更新后旧快照失效。
+
+组件整数参数按与 JavaScript Math.round 一致的规则舍入，包括半值向正无穷及浮点边界；共享 `tests/fixtures/component-actions-v1.json` 检查两端每步动作的文档、修订、有效范围和关联清理。
+
+## 附件与导出
+
+附件字节以草稿后端 SQLite 为权威来源。`definition.evidenceFiles` 是文件清单，旧 `evidence` 保留为显示元数据；浏览器不另建 IndexedDB 附件副本。上传、大小限制和读取校验位于 draftEvidence 适配层。上传结果按来源草稿 ID 合并到最新文件清单；草稿已切换等原因导致拒收时，按条件清理尚未引用的上传文件并释放配额。普通编辑仅清理从上一份已保存清单明确移除的文件，避免误删正在上传等待登记的内容。
+
+正常导出等待保存，后端在同一读事务中读取文档与文件并嵌入 dataUrl，浏览器直接下载返回 JSON。恢复副本在点击时捕获草稿 ID 与本地文档，按本地文件清单读取附件并嵌入 `definition.evidenceFiles`，不会先保存或重新读取覆盖本地输入。缺失或已替换的附件明确报出文件名，不生成缺内容的恢复文件。
+
+固定版本来源遍历只保留 geometry_sources 一处实现。装配直接加载，试算和制作验收接入既有任务资源缓存；版本 key 与哈希比较统一使用小写，文档中的原始固定引用不被改写。求解器与撑杆生成共同依赖 geometry_common，消除反向导入。

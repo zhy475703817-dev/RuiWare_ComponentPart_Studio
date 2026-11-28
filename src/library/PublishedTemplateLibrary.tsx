@@ -69,7 +69,6 @@ export function PublishedTemplateLibrary({ onPreview, onAdd, onDragTemplate, mem
   const term = query.trim().toLocaleLowerCase();
   const visible = items.filter(item => `${item.name} ${item.code}`.toLocaleLowerCase().includes(term));
   const selected = items.find(item => publicationKey(item) === selectedId);
-  const alreadyAdded = (item: PublishedTemplate) => memberPublicationIds.includes(item.publicationId);
 
   return <section className="published-library" aria-label="已发布模板库">
     <div className="panel-title"><span><Boxes size={16}/>已发布模板</span><div className="library-actions"><small>{initialized || items.length ? items.length : "—"}</small><button className="library-refresh" onClick={() => void refresh("sync")} disabled={loading} aria-label={error ? "重试读取发布库" : "刷新发布库"} title="刷新发布库"><RefreshCw size={14} className={loading ? "spinning" : ""}/></button></div></div>

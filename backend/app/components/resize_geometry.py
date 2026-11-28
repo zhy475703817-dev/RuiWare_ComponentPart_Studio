@@ -11,6 +11,7 @@ from threading import RLock
 import numpy as np
 from scipy.spatial.transform import Rotation
 
+from .geometry_common import template_key
 from ..config import PROJECT_ROOT
 from ..reconstruction import editable_parameters, resolved_interfaces
 from .models import PartInterface
@@ -95,7 +96,7 @@ class CadProvider:
         """
         from template_core import TemplateDraft
         from template_core.rules import evaluate_expression, resolve_parameters
-        data, material = self.templates[(reference["publicationId"], reference["sha256"])]
+        data, material = self.templates[template_key(reference)]
         draft = TemplateDraft.model_validate(data)
         external = {name: material.get(name, {}) for name in ("product", "component", "projectZone", "standard")}
         external["material"] = material.get("record", material)
@@ -134,7 +135,7 @@ class CadProvider:
         running all repeated hole booleans for each finite difference adds no locator
         information. Never expose this temporary shape as a preview or measurement.
         """
-        key = (reference["publicationId"], reference["sha256"], "probe", hashlib.sha256(json.dumps(parameters, sort_keys=True).encode()).hexdigest())
+        key = (*template_key(reference), "probe", hashlib.sha256(json.dumps(parameters, sort_keys=True).encode()).hexdigest())
         if key not in self.cache:
             draft, material = self.templates[key[:2]]
             if len(self.cache) >= 256: self.cache.pop(next(iter(self.cache)))
@@ -142,7 +143,7 @@ class CadProvider:
         return self.cache[key]
 
     def evaluate(self, reference, parameters):
-        key = (reference["publicationId"], reference["sha256"], hashlib.sha256(json.dumps(parameters, sort_keys=True).encode()).hexdigest())
+        key = (*template_key(reference), hashlib.sha256(json.dumps(parameters, sort_keys=True).encode()).hexdigest())
         with self.lock:
             if key in self.cache:
                 result = self.cache[key]

@@ -333,42 +333,54 @@ class CleanupRequest(BaseModel):
 
 @router.post('/cleanup-preview', summary='扫描旧模板包占用和引用，仅生成清理预览')
 async def preview_cleanup(request: Request):
-    state = request.app.state
+    return JSONResponse(await scan_cleanup(request.app.state), headers={'Cache-Control': 'no-store'})
+
+
+async def scan_cleanup(state):
     report = await asyncio.to_thread(cleanup_preview, state.published_storage, state.drafts, state.publications,
                                      state.reference_registry, state.library_cache)
-    report = await asyncio.to_thread(state.cleanup_store.save_scan, report)
-    return JSONResponse(report, headers={'Cache-Control': 'no-store'})
+    return await asyncio.to_thread(state.cleanup_store.save_scan, report)
 
 
-async def _cleanup(request: Request, body: CleanupRequest):
-    state = request.app.state
+async def clean_selected(state, body: CleanupRequest):
     scan_id, publication_ids = body.scanId, body.publicationIds
     report = await asyncio.to_thread(state.cleanup_store.load_scan, scan_id)
     if report is None:
-        return JSONResponse({'error': {'code': 'CLEANUP_SCAN_NOT_FOUND'}}, status_code=404)
+        raise LibraryError(404, 'CLEANUP_SCAN_NOT_FOUND')
     if not report.get('scanComplete'):
-        return JSONResponse({'scanId': scan_id, 'items': [
+        return {'scanId': scan_id, 'items': [
             {'publicationId': identifier, 'status': 'blocked', 'errorCode': 'CLEANUP_SCAN_INCOMPLETE'}
-            for identifier in publication_ids]}, status_code=409, headers={'Cache-Control': 'no-store'})
-    result = await asyncio.to_thread(execute_cleanup, state, report, publication_ids)
-    status = 200 if all(item['status'] == 'deleted' for item in result['items']) else 409
-    return JSONResponse(result, status_code=status, headers={'Cache-Control': 'no-store'})
+            for identifier in publication_ids]}
+    return await asyncio.to_thread(execute_cleanup, state, report, publication_ids)
+
+
+def cleanup_failed(result):
+    return any(item['status'] != 'deleted' for item in result['items'])
 
 
 @router.post('/cleanup', summary='按扫描结果清理已确认的模板包')
 async def cleanup(request: Request, body: CleanupRequest):
-    return await _cleanup(request, body)
+    result = await clean_selected(request.app.state, body)
+    return JSONResponse(result, status_code=409 if cleanup_failed(result) else 200, headers={'Cache-Control': 'no-store'})
+
+
+def backup_list(store):
+    return {'items': store.list_backups()}
 
 
 @router.get('/backups', summary='列出本地清理备份')
 async def list_backups(request: Request):
-    return JSONResponse({'items': await asyncio.to_thread(request.app.state.cleanup_store.list_backups)}, headers={'Cache-Control': 'no-store'})
+    return JSONResponse(await asyncio.to_thread(backup_list, request.app.state.cleanup_store), headers={'Cache-Control': 'no-store'})
+
+
+def audit_entries(store):
+    return {'items': store.read_audit()}
 
 
 @router.get('/cleanup-audit', summary='导出清理审计记录')
 async def export_audit(request: Request):
-    entries = await asyncio.to_thread(request.app.state.cleanup_store.read_audit)
-    return JSONResponse({'items': entries}, headers={'Cache-Control': 'no-store',
+    entries = await asyncio.to_thread(audit_entries, request.app.state.cleanup_store)
+    return JSONResponse(entries, headers={'Cache-Control': 'no-store',
                         'Content-Disposition': 'attachment; filename="template-cleanup-audit.json"'})
 
 
@@ -386,10 +398,10 @@ async def download_backup(request: Request, backup_id: str):
 
 @router.post('/backups/{backup_id}/restore', summary='恢复本地清理备份')
 async def restore_backup(request: Request, backup_id: str):
-    return await asyncio.to_thread(_restore_backup, request.app.state, backup_id)
+    return await asyncio.to_thread(restore_saved_backup, request.app.state, backup_id)
 
 
-def _restore_backup(state, backup_id: str):
+def restore_saved_backup(state, backup_id: str):
     with state.cleanup_lock:
         return _restore_backup_locked(state, backup_id)
 
@@ -397,7 +409,7 @@ def _restore_backup(state, backup_id: str):
 def _restore_backup_locked(state, backup_id: str):
     backup = state.cleanup_store.backup(backup_id)
     if backup is None:
-        return JSONResponse({'error': {'code': 'BACKUP_NOT_FOUND'}}, status_code=404)
+        raise LibraryError(404, 'BACKUP_NOT_FOUND')
     manifest, package, metadata = backup
     object_key = manifest.get('objectKey')
     object_path = PurePosixPath(object_key) if isinstance(object_key, str) else PurePosixPath('.')
@@ -406,14 +418,14 @@ def _restore_backup_locked(state, backup_id: str):
             manifest.get('templateKind') != 'part' or object_path.parts[:len(prefix_parts)] != prefix_parts or
             len(object_path.parts) != len(prefix_parts) + 3 or object_path.name != 'template.rwpart' or
             object_path.parent.name != manifest.get('publicationId')):
-        return JSONResponse({'error': {'code': 'BACKUP_KEY_INVALID'}}, status_code=409)
+        raise LibraryError(409, 'BACKUP_KEY_INVALID')
     try:
         current = state.published_storage.record('part', manifest['publicationId'])
         if current.object_key != object_key or current.publication.sha256.lower() != manifest['sha256'].lower():
-            return JSONResponse({'error': {'code': 'BACKUP_TARGET_EXISTS'}}, status_code=409)
+            raise LibraryError(409, 'BACKUP_TARGET_EXISTS')
     except LibraryError as error:
         if error.code != 'REMOTE_TEMPLATE_NOT_FOUND':
-            return JSONResponse({'error': {'code': error.code}}, status_code=error.status)
+            raise
     metadata_key = f"{object_path.parent.as_posix()}/metadata.json"
     audit = {'publicationId': manifest['publicationId'], 'backupId': backup_id, 'sha256': manifest['sha256'],
              'objectKey': object_key, 'createdAt': datetime.now(timezone.utc).isoformat()}
@@ -428,9 +440,9 @@ def _restore_backup_locked(state, backup_id: str):
             state.cleanup_store.append_audit({**audit, 'status': 'restore-failed', 'errorCode': error.code})
         except OSError:
             pass
-        return JSONResponse({'error': {'code': error.code}}, status_code=error.status)
+        raise
     except OSError:
-        return JSONResponse({'error': {'code': 'CLEANUP_AUDIT_FAILED'}}, status_code=503)
+        raise LibraryError(503, 'CLEANUP_AUDIT_FAILED')
     try:
         state.cleanup_store.append_audit({**audit, 'status': 'restored'})
     except OSError:
@@ -441,20 +453,23 @@ def _restore_backup_locked(state, backup_id: str):
 
 @router.delete('/backups/{backup_id}', summary='删除过期本地备份')
 async def delete_backup(request: Request, backup_id: str):
-    store = request.app.state.cleanup_store
+    return await remove_backup(request.app.state.cleanup_store, backup_id)
+
+
+async def remove_backup(store, backup_id):
     backup = await asyncio.to_thread(store.backup, backup_id)
     if backup is None:
-        return JSONResponse({'error': {'code': 'BACKUP_NOT_FOUND'}}, status_code=404)
+        raise LibraryError(404, 'BACKUP_NOT_FOUND')
     if datetime.fromisoformat(backup[0]['expiresAt'].replace('Z', '+00:00')) > datetime.now(timezone.utc):
-        return JSONResponse({'error': {'code': 'BACKUP_NOT_EXPIRED'}}, status_code=409)
+        raise LibraryError(409, 'BACKUP_NOT_EXPIRED')
     audit = {'backupId': backup_id, 'publicationId': backup[0]['publicationId'],
              'createdAt': datetime.now(timezone.utc).isoformat()}
     try:
         await asyncio.to_thread(store.append_audit, {**audit, 'status': 'deleting-backup'})
     except OSError:
-        return JSONResponse({'error': {'code': 'CLEANUP_AUDIT_FAILED'}}, status_code=503)
+        raise LibraryError(503, 'CLEANUP_AUDIT_FAILED')
     if not await asyncio.to_thread(store.delete_backup, backup_id):
-        return JSONResponse({'error': {'code': 'BACKUP_NOT_FOUND'}}, status_code=404)
+        raise LibraryError(404, 'BACKUP_NOT_FOUND')
     try:
         await asyncio.to_thread(store.append_audit, {**audit, 'status': 'backup-deleted'})
     except OSError:
