@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { Box3, Vector3 } from 'three';
 import { createComponentDocument } from '../src/domain/component.ts';
@@ -6,7 +7,7 @@ import { placeNextMember } from '../src/domain/assemblyPlacement.ts';
 import { componentReducer } from '../src/domain/componentReducer.ts';
 import { validateComponent } from '../src/domain/validation.ts';
 import { serializeComponent } from '../src/domain/serialization.ts';
-import { deriveComponentMetrics, effectiveParameterBounds } from '../src/domain/parameterMetrics.ts';
+import { deriveComponentMetrics, effectiveParameterBounds, inferEnvelopeDimensions } from '../src/domain/parameterMetrics.ts';
 import { resolveComponentComposition } from '../src/domain/composition.ts';
 import { interfacesCompatible } from '../src/domain/interfaceCompatibility.ts';
 import { groupHardwareUsage, summarizeHardwareUsage } from '../src/domain/hardware.ts';
@@ -20,6 +21,32 @@ const member = id => ({
   } }],
 });
 const source = memberId => ({ memberId, interfaceId: 'face.left' });
+
+test('组件动作按共享契约舍入、约束并清理引用', () => {
+  const fixture = JSON.parse(readFileSync(new URL('./fixtures/component-actions-v1.json', import.meta.url), 'utf-8'));
+  let { document } = fixture;
+  for (const step of fixture.steps) {
+    const revision = document.revision + (step.revisionDelta ?? 1);
+    document = componentReducer(document, step.action);
+    const values = Object.fromEntries(document.assembly.members.map(member => [member.id, member.parameterValues]));
+    // JSON treats negative zero and zero as the same numeric value.
+    assert.deepEqual(JSON.parse(JSON.stringify(values)), step.values, JSON.stringify(step.action));
+    assert.equal(document.revision, revision);
+    if (step.bounds) {
+      const parameter = document.parameters.find(item => item.id === 'componentLength');
+      const { min, max } = effectiveParameterBounds(parameter, document.bindings, document.assembly.members);
+      assert.deepEqual([min, max], step.bounds);
+    }
+    if (step.inferredLength !== undefined) {
+      assert.equal(inferEnvelopeDimensions(document.parameters, document.assembly.members, document.patterns).length, step.inferredLength);
+    }
+    if (step.removedReferences) {
+      assert.deepEqual(document.ports, []);
+      assert.deepEqual(document.patterns, []);
+      assert.deepEqual(document.bindings.map(binding => binding.id), ['offset.binding', 'travel.binding']);
+    }
+  }
+});
 
 test('撑杆规则允许共用立柱，制作预检查拒绝重复原型、错误孔位格式及斜撑孔距单位', () => {
   const draft = createComponentDocument();

@@ -5,9 +5,8 @@ from pydantic import Field
 
 from ..components import assembly
 from ..components.models import Revision, Vector3, InterfaceSource
-from ..components.resize_jobs import history
+from ..components.resize_jobs import resize_history
 from ..preview import SHA256
-from fastapi import Request
 
 
 def register(mcp, app, invoke):
@@ -43,4 +42,4 @@ def register(mcp, app, invoke):
     @mcp.tool(annotations=readonly, structured_output=False)
     async def component_get_resize_history(draftId: str) -> CallToolResult:
         """读取当前修订可用的几何撤销任务、校验值及修订号；后端重启后仍可读取。"""
-        return await invoke(history, Request({"type": "http", "app": app}), draftId)
+        return await invoke(resize_history, app.state.drafts, draftId)

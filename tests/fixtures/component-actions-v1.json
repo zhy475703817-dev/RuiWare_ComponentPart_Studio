@@ -1,0 +1,135 @@
+{
+  "document": {
+    "schemaVersion": "component-1.0",
+    "templateKind": "component",
+    "revision": 7,
+    "unitSystem": "mm-kg-s",
+    "coordinateSystem": "right-handed-z-up",
+    "definition": {
+      "name": "动作契约",
+      "code": "CMP-CONTRACT",
+      "category": "",
+      "description": "",
+      "projectCode": "",
+      "owner": "",
+      "organization": "",
+      "searchTags": [],
+      "partConnectionType": "螺栓连接",
+      "partConnectionCustom": "",
+      "componentConnectionType": "螺栓连接",
+      "componentConnectionCustom": "",
+      "connectionForms": {
+        "internal": {"mode": "preset", "value": "螺栓连接", "details": ""},
+        "interComponent": {"mode": "preset", "value": "插接/卡扣", "details": ""}
+      },
+      "designConstraints": "",
+      "evidenceFiles": [],
+      "evidence": []
+    },
+    "assembly": {"members": [], "mates": [], "groups": []},
+    "ports": [],
+    "interfaceTypes": [],
+    "slots": [],
+    "bindings": [],
+    "patterns": [],
+    "braceGenerationRules": [],
+    "parameters": [
+      {"id": "componentLength", "label": "总长", "value": 2.5, "unit": "mm", "min": -20, "max": 20},
+      {"id": "count", "label": "数量", "value": 2, "unit": "个", "min": 1, "max": 4},
+      {"id": "spacing", "label": "间隔", "value": 10, "unit": "mm", "min": 0, "max": 50},
+      {"id": "offset", "label": "偏移值", "value": -2.5, "unit": "mm", "min": -10, "max": 10}
+    ],
+    "rules": []
+  },
+  "steps": [
+    {
+      "action": {"type": "member.add", "member": {
+        "id": "beam", "name": "横梁", "code": "BEAM", "role": "横梁",
+        "template": {"publicationId": "version.1", "templateId": "part.1", "version": 1, "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+        "position": [0, 0, 0], "rotation": [0, 0, 0],
+        "parameterValues": {},
+        "parameterDefinitions": [
+          {"id": "length", "label": "长度", "unit": "mm", "valueType": "integer", "minimum": -5.5, "maximum": 10.7, "default": 2.5}
+        ],
+        "interfaces": [{"id": "face.left", "name": "左端面", "type": "plane", "tags": []}]
+      }},
+      "bounds": [-5, 10],
+      "values": {"beam": {"length": 3}}
+    },
+    {
+      "action": {"type": "parameter.value", "id": "componentLength", "value": -0.5},
+      "values": {"beam": {"length": 0}}
+    },
+    {
+      "action": {"type": "parameter.value", "id": "componentLength", "value": 3.5},
+      "values": {"beam": {"length": 4}}
+    },
+    {
+      "action": {"type": "parameter.value", "id": "componentLength", "value": -2.5},
+      "values": {"beam": {"length": -2}}
+    },
+    {
+      "action": {"type": "parameter.value", "id": "componentLength", "value": 0.49999999999999994},
+      "values": {"beam": {"length": 0}}
+    },
+    {
+      "action": {"type": "parameter.value", "id": "componentLength", "value": null},
+      "values": {"beam": {}}
+    },
+    {
+      "action": {"type": "member.add", "member": {
+        "id": "limit", "name": "限位件", "code": "LIMIT", "role": "限位",
+        "template": {"publicationId": "version.2", "templateId": "part.2", "version": 1, "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+        "position": [0, 0, 0], "rotation": [0, 0, 0],
+        "parameterValues": {},
+        "parameterDefinitions": [
+          {"id": "travel", "label": "行程", "unit": "mm", "valueType": "number", "minimum": -3.2, "maximum": 6.4, "default": 2},
+          {"id": "offset", "label": "偏移量", "unit": "mm", "valueType": "integer", "minimum": -6, "maximum": 6, "default": 0}
+        ],
+        "interfaces": []
+      }},
+      "values": {"beam": {}, "limit": {}}
+    },
+    {
+      "action": {"type": "binding.set", "id": "offset.binding", "binding": {"id": "offset.binding", "parameterId": "offset", "memberId": "limit", "memberParameterId": "offset"}},
+      "values": {"beam": {}, "limit": {"offset": -2}}
+    },
+    {
+      "action": {"type": "binding.set", "id": "travel.binding", "binding": {"id": "travel.binding", "parameterId": "componentLength", "memberId": "limit", "memberParameterId": "travel"}},
+      "bounds": [-3, 6],
+      "values": {"beam": {}, "limit": {"offset": -2}}
+    },
+    {
+      "action": {"type": "parameter.value", "id": "componentLength", "value": -100},
+      "values": {"beam": {"length": -3}, "limit": {"offset": -2, "travel": -3}}
+    },
+    {
+      "action": {"type": "parameter.value", "id": "componentLength", "value": 100},
+      "values": {"beam": {"length": 6}, "limit": {"offset": -2, "travel": 6}}
+    },
+    {
+      "action": {"type": "port.add", "port": {"id": "port.beam", "name": "横梁接口", "source": {"memberId": "beam", "interfaceId": "face.left"}, "tags": []}},
+      "values": {"beam": {"length": 6}, "limit": {"offset": -2, "travel": 6}}
+    },
+    {
+      "action": {"type": "pattern.add", "pattern": {"id": "beam.pattern", "label": "横梁阵列", "memberIds": ["beam"], "countParameterId": "count", "spacingParameterId": "spacing", "axis": "x"}},
+      "values": {"beam": {"length": 6}, "limit": {"offset": -2, "travel": 6}}
+    },
+    {
+      "action": {"type": "parameter.value", "id": "count", "value": 2.5},
+      "inferredLength": 26,
+      "values": {"beam": {"length": 6}, "limit": {"offset": -2, "travel": 6}}
+    },
+    {
+      "action": {"type": "parameter.value", "id": "componentLength", "value": 6},
+      "revisionDelta": 0,
+      "values": {"beam": {"length": 6}, "limit": {"offset": -2, "travel": 6}}
+    },
+    {
+      "action": {"type": "member.remove", "id": "beam"},
+      "bounds": [-3.2, 6.4],
+      "removedReferences": true,
+      "values": {"limit": {"offset": -2, "travel": 6}}
+    }
+  ]
+}

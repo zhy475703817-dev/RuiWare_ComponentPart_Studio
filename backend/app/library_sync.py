@@ -40,6 +40,14 @@ class LibrarySync:
         return {**self.cache.snapshot(), 'syncing': self.task is not None and not self.task.done(), 'errors': self.errors,
                 'cleanup': self.cleanup}
 
+    async def check(self, force=False):
+        self.start(force=force)
+        return self.snapshot()
+
+    def apply(self):
+        self.cache.apply()
+        return self.snapshot()
+
     async def close(self):
         if self.task is not None:
             self.task.cancel()
@@ -200,19 +208,14 @@ router = APIRouter(prefix='/api/template-library', tags=['发布库缓存'])
 
 @router.get('')
 async def cached_library(request: Request):
-    sync = request.app.state.library_sync
-    sync.start()
-    return JSONResponse(sync.snapshot(), headers={'Cache-Control': 'no-store'})
+    return JSONResponse(await request.app.state.library_sync.check(), headers={'Cache-Control': 'no-store'})
 
 
 @router.post('/sync')
 async def check_library(request: Request):
-    sync = request.app.state.library_sync
-    sync.start(force=True)
-    return JSONResponse(sync.snapshot(), headers={'Cache-Control': 'no-store'})
+    return JSONResponse(await request.app.state.library_sync.check(force=True), headers={'Cache-Control': 'no-store'})
 
 
 @router.post('/apply')
 async def apply_library(request: Request):
-    request.app.state.library_cache.apply()
-    return JSONResponse(request.app.state.library_sync.snapshot(), headers={'Cache-Control': 'no-store'})
+    return JSONResponse(request.app.state.library_sync.apply(), headers={'Cache-Control': 'no-store'})

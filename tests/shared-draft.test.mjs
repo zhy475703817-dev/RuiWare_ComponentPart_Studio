@@ -319,3 +319,243 @@ test('先前保存成功但 Agent 删除后续排队操作的引用时，保留�
   assert.deepEqual(workspace.getSnapshot().document.assembly.members, []);
   assert.equal(workspace.getSnapshot().dirty, false);
 });
+
+
+function batchServer() {
+  const result = server();
+  result.api.applyBatch = async (id, revision, actions) => {
+    const current = result.documents.get(id);
+    if (current.revision !== revision) throw Object.assign(new Error('conflict'), { code: 'REVISION_CONFLICT' });
+    let next = actions.reduce(componentReducer, current);
+    if (next !== current) next = { ...next, revision: current.revision + 1 };
+    result.documents.set(id, next);
+    return envelope(id, structuredClone(next));
+  };
+  return result;
+}
+
+test('批量编辑一次确认只增加一个修订，后续输入继续串行保存', async () => {
+  const { api, documents } = batchServer();
+  const gate = deferred();
+  const applyBatch = api.applyBatch;
+  api.applyBatch = async (...args) => { await gate.promise; return applyBatch(...args); };
+  const workspace = new SharedDraftController(api);
+  await workspace.start();
+  const committed = workspace.commit([
+    { type: 'definition.patch', patch: { name: '批量名称' } },
+    { type: 'definition.patch', patch: { owner: '负责人' } },
+  ]);
+  assert.equal(workspace.getSnapshot().document.revision, 2);
+  workspace.dispatch({ type: 'definition.patch', patch: { description: '后续输入' } });
+  gate.resolve();
+  const saved = await committed;
+  assert.equal(saved.document.revision, 2);
+  await workspace.flush();
+  assert.equal(documents.get('draft-1').revision, 3);
+  assert.equal(documents.get('draft-1').definition.owner, '负责人');
+  assert.equal(documents.get('draft-1').definition.description, '后续输入');
+  workspace.dispose();
+});
+
+test('业务拒绝整个批次，操作调用方收到失败而后续编辑可继续保存', async () => {
+  const { api, documents } = batchServer();
+  api.applyBatch = async () => { throw Object.assign(new Error('rejected'), { code: 'ENDPOINT_ALREADY_CONSUMED' }); };
+  const workspace = new SharedDraftController(api);
+  await workspace.start();
+  const committed = workspace.commit([
+    { type: 'definition.patch', patch: { name: '不能留下' } },
+    { type: 'definition.patch', patch: { owner: '不能留下' } },
+  ]);
+  workspace.dispatch({ type: 'definition.patch', patch: { description: '后续编辑' } });
+  await assert.rejects(committed, { code: 'ENDPOINT_ALREADY_CONSUMED' });
+  await workspace.flush();
+  assert.equal(documents.get('draft-1').definition.name, '横梁组件');
+  assert.equal(documents.get('draft-1').definition.owner, '');
+  assert.equal(documents.get('draft-1').definition.description, '后续编辑');
+  workspace.dispose();
+});
+
+test('批次网络失败保留本地投影，重试成功后保存完整批次', async () => {
+  const { api, documents } = batchServer();
+  const applyBatch = api.applyBatch;
+  api.applyBatch = async () => { throw new Error('offline'); };
+  const workspace = new SharedDraftController(api);
+  await workspace.start();
+  await assert.rejects(workspace.commit([
+    { type: 'definition.patch', patch: { name: '本地名称' } },
+    { type: 'definition.patch', patch: { owner: '本地负责人' } },
+  ]), /offline/);
+  assert.equal(workspace.getSnapshot().dirty, true);
+  assert.equal(workspace.getSnapshot().document.definition.owner, '本地负责人');
+  assert.equal(documents.get('draft-1').revision, 1);
+  api.applyBatch = applyBatch;
+  await workspace.retry();
+  assert.equal(documents.get('draft-1').revision, 2);
+  assert.equal(documents.get('draft-1').definition.name, '本地名称');
+  workspace.dispose();
+});
+
+test('释放控制器会拒绝等待中的操作，迟到响应不能重新发布', async () => {
+  const { api } = batchServer();
+  const gate = deferred();
+  const applyBatch = api.applyBatch;
+  api.applyBatch = async (...args) => { await gate.promise; return applyBatch(...args); };
+  const workspace = new SharedDraftController(api);
+  await workspace.start();
+  const committed = workspace.commit([{ type: 'definition.patch', patch: { name: '迟到' } }]);
+  workspace.dispose();
+  await assert.rejects(committed, /释放/);
+  const snapshot = workspace.getSnapshot();
+  gate.resolve();
+  await assert.rejects(workspace.flush());
+  assert.equal(workspace.getSnapshot(), snapshot);
+});
+
+
+test('非法批次不留下部分投影，拒绝批次引用的后续操作仍可下载恢复', async () => {
+  const { api } = batchServer();
+  const workspace = new SharedDraftController(api);
+  await workspace.start();
+  await assert.rejects(workspace.commit([
+    { type: 'definition.patch', patch: { name: '不可见半批次' } },
+    { type: 'member.patch', id: 'missing', patch: { position: [1, 0, 0] } },
+  ]));
+  assert.equal(workspace.getSnapshot().document.definition.name, '横梁组件');
+  assert.equal(workspace.getSnapshot().dirty, false);
+  const gate = deferred();
+  api.applyBatch = async () => { await gate.promise; throw Object.assign(new Error('duplicate'), { code: 'DUPLICATE_ID' }); };
+  const member = { id: 'new', name: 'new', code: 'NEW', role: 'new',
+    template: { publicationId: 'p', templateId: 't', version: 1, sha256: 'a'.repeat(64) },
+    position: [0, 0, 0], rotation: [0, 0, 0], parameterValues: {}, interfaces: [] };
+  const committed = workspace.commit([{ type: 'member.add', member }]);
+  workspace.dispatch({ type: 'member.patch', id: 'new', patch: { position: [20, 0, 0] } });
+  gate.resolve();
+  await assert.rejects(committed, { code: 'DUPLICATE_ID' });
+  await assert.rejects(workspace.flush());
+  assert.equal(workspace.getSnapshot().status, 'conflict');
+  assert.deepEqual(workspace.getSnapshot().document.assembly.members[0].position, [20, 0, 0]);
+  workspace.dispose();
+});
+
+
+test('模型快照依赖被拒绝的前序编辑时不能重新保存该编辑', async () => {
+  const { api, documents } = batchServer();
+  const workspace = new SharedDraftController(api);
+  await workspace.start();
+  const gate = deferred();
+  api.applyBatch = async () => { await gate.promise; throw Object.assign(new Error('duplicate'), { code: 'DUPLICATE_ID' }); };
+  const member = { id: 'new', name: 'new', code: 'NEW', role: 'new',
+    template: { publicationId: 'p', templateId: 't', version: 1, sha256: 'a'.repeat(64) },
+    position: [0, 0, 0], rotation: [0, 0, 0], parameterValues: {}, interfaces: [] };
+  const addition = workspace.commit([{ type: 'member.add', member }]);
+  const local = workspace.getSnapshot().document;
+  const model = structuredClone(Object.fromEntries(['assembly', 'ports', 'bindings', 'patterns', 'slots', 'braceGenerationRules'].map(key => [key, local[key]])));
+  model.assembly.members[0].position = [20, 0, 0];
+  const transform = workspace.commit([{ type: 'model.restore', model }]);
+  const rejectedAddition = assert.rejects(addition);
+  const rejectedTransform = assert.rejects(transform);
+  gate.resolve();
+  await Promise.all([rejectedAddition, rejectedTransform]);
+  await assert.rejects(workspace.flush());
+  assert.equal(documents.get('draft-1').assembly.members.length, 0);
+  assert.equal(workspace.getSnapshot().status, 'conflict');
+  assert.deepEqual(workspace.getSnapshot().document.assembly.members[0].position, [20, 0, 0]);
+  workspace.dispose();
+});
+
+test('网络失败的操作重试确认只调用一次持久化回调', async () => {
+  const { api } = batchServer();
+  const applyBatch = api.applyBatch;
+  api.applyBatch = async () => { throw new Error('offline'); };
+  const workspace = new SharedDraftController(api);
+  await workspace.start();
+  const revisions = [];
+  await assert.rejects(workspace.commit([{ type: 'definition.patch', patch: { name: '重试后可撤销' } }], saved => revisions.push(saved.document.revision)));
+  assert.deepEqual(revisions, []);
+  api.applyBatch = applyBatch;
+  await workspace.retry();
+  await workspace.flush();
+  assert.deepEqual(revisions, [2]);
+  workspace.dispose();
+});
+
+
+test('未携带业务错误码的网关故障仍保留批次，恢复后可以重试', async () => {
+  const { api, documents } = batchServer();
+  const applyBatch = api.applyBatch;
+  api.applyBatch = async () => { throw Object.assign(new Error('gateway unavailable'), { status: 503, code: 'INVALID_REQUEST' }); };
+  const workspace = new SharedDraftController(api);
+  await workspace.start();
+  await assert.rejects(workspace.commit([{ type: 'definition.patch', patch: { name: '不能丢失' } }]));
+  assert.equal(workspace.getSnapshot().dirty, true);
+  assert.equal(workspace.getSnapshot().document.definition.name, '不能丢失');
+  api.applyBatch = applyBatch;
+  await workspace.retry();
+  assert.equal(documents.get('draft-1').definition.name, '不能丢失');
+  workspace.dispose();
+});
+
+
+test('服务端 JSON 字段顺序改变不会使连续模型编辑冲突', async () => {
+  const { api } = batchServer();
+  const workspace = new SharedDraftController(api);
+  await workspace.start();
+  const gate = deferred();
+  const apply = api.apply;
+  api.apply = async (...args) => {
+    await gate.promise;
+    const saved = await apply(...args);
+    saved.document.assembly = Object.fromEntries(Object.entries(saved.document.assembly).reverse());
+    return saved;
+  };
+  workspace.dispatch({ type: 'definition.patch', patch: { name: '前序编辑' } });
+  const local = workspace.getSnapshot().document;
+  const model = structuredClone(Object.fromEntries(['assembly', 'ports', 'bindings', 'patterns', 'slots', 'braceGenerationRules'].map(key => [key, local[key]])));
+  const committed = workspace.commit([{ type: 'model.restore', model }]);
+  gate.resolve();
+  await committed;
+  await workspace.flush();
+  assert.equal(workspace.getSnapshot().status, 'ready');
+  workspace.dispose();
+});
+
+
+test('被拒绝的新增成员使后续槽位接口选择保留为冲突输入', async () => {
+  const { api } = batchServer();
+  const created = await api.create();
+  const workspace = new SharedDraftController(api);
+  await workspace.start(created.draftId);
+  workspace.dispatch({ type: 'slot.add', slot: { id: 'slot', name: '槽位', required: false, baseInterface: null, memberId: null, interfaceId: null } });
+  await workspace.flush();
+  const gate = deferred();
+  api.applyBatch = async () => { await gate.promise; throw Object.assign(new Error('duplicate'), { code: 'DUPLICATE_ID' }); };
+  const member = { id: 'new', name: 'new', code: 'NEW', role: 'new',
+    template: { publicationId: 'p', templateId: 't', version: 1, sha256: 'a'.repeat(64) },
+    position: [0, 0, 0], rotation: [0, 0, 0], parameterValues: {}, interfaces: [{id:'face',name:'face',type:'plane',tags:[]}] };
+  const committed = workspace.commit([{ type: 'member.add', member }]);
+  workspace.dispatch({ type: 'slot.patch', id: 'slot', patch: { baseInterface: { memberId: 'new', interfaceId: 'face' } } });
+  const rejection = assert.rejects(committed);
+  gate.resolve();
+  await rejection;
+  await assert.rejects(workspace.flush());
+  assert.equal(workspace.getSnapshot().status, 'conflict');
+  assert.equal(workspace.getSnapshot().document.slots[0].baseInterface.memberId, 'new');
+  workspace.dispose();
+});
+
+
+test('附件完成只合并到来源草稿的最新清单，迟到上传不写入另一草稿', async () => {
+  const { api } = batchServer();
+  const workspace = new SharedDraftController(api);
+  await workspace.start();
+  const file=id=>({id,fileName:id+'.txt',mediaType:'text/plain',size:3,sha256:'a'.repeat(64),dataUrl:null});
+  assert.equal(workspace.appendEvidence('draft-1',[file('a')]),true);
+  assert.equal(workspace.appendEvidence('draft-1',[file('b')]),true);
+  await workspace.flush();
+  assert.deepEqual(workspace.getSnapshot().document.definition.evidenceFiles.map(x=>x.id),['a','b']);
+  const second=await api.create();
+  await workspace.select(second.draftId);
+  assert.equal(workspace.appendEvidence('draft-1',[file('late')]),false);
+  assert.deepEqual(workspace.getSnapshot().document.definition.evidenceFiles,[]);
+  workspace.dispose();
+});

@@ -1,7 +1,8 @@
-import { createComponentDocument } from "../domain/component.ts";
-import type { ComponentDocument } from "../domain/component.ts";
+import { createComponentDocument, hasInterface } from "../domain/component.ts";
+import type { ComponentDocument, EvidenceFile } from "../domain/component.ts";
 import { componentReducer } from "../domain/componentReducer.ts";
 import type { ComponentAction } from "../domain/componentReducer.ts";
+import { captureModel } from "../domain/assemblyGroups.ts";
 import { inferEnvelopeDimensions } from "../domain/parameterMetrics.ts";
 import { validateComponent } from "../domain/validation.ts";
 import type { ValidationCheck } from "../domain/validation.ts";
@@ -18,6 +19,7 @@ export type DraftApi = {
   create: () => Promise<DraftEnvelope>;
   get: (id: string, afterRevision?: number) => Promise<DraftEnvelope>;
   apply: (id: string, revision: number, action: ComponentAction) => Promise<DraftEnvelope>;
+  applyBatch: (id: string, revision: number, actions: ComponentAction[]) => Promise<DraftEnvelope>;
   export: (id: string) => Promise<unknown>;
 };
 export type SharedDraftState = {
@@ -124,12 +126,76 @@ function actionIdentity(action: ComponentAction): string {
   return JSON.stringify(action);
 }
 
+type PendingEdit = {
+  actions: ComponentAction[];
+  batch?: boolean;
+  modelBase?: string;
+  ancillaryBase?: string;
+  onSaved?: (draft: DraftEnvelope) => void;
+  resolve?: (draft: DraftEnvelope) => void;
+  reject?: (error: unknown) => void;
+};
+
+function stableKey(value: unknown): string {
+  return JSON.stringify(value, (_key, item: unknown) => item !== null && typeof item === "object" && !Array.isArray(item)
+    ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b))) : item);
+}
+
+function ancillaryKey(document: ComponentDocument): string {
+  return stableKey([document.parameters, document.interfaceTypes ?? []]);
+}
+
+function modelBase(document: ComponentDocument, actions: ComponentAction[]): Partial<PendingEdit> {
+  if (!actions.some(action => action.type === "model.restore")) return {};
+  return { modelBase: stableKey(captureModel(document)),
+    ...(actions.some(action => action.type === "model.restore" && (action.model.parameters || action.model.interfaceTypes)) ? { ancillaryBase: ancillaryKey(document) } : {}) };
+}
+
+function projectEdit(document: ComponentDocument, edit: PendingEdit): ComponentDocument {
+  if (edit.modelBase !== undefined && edit.modelBase !== stableKey(captureModel(document))) {
+    throw new Error("模型快照依赖的编辑已变化，请保留本地副本后核对。");
+  }
+  if (edit.ancillaryBase !== undefined && edit.ancillaryBase !== ancillaryKey(document)) {
+    throw new Error("撤销依赖的参数或接口类型已变化，请核对后重试。");
+  }
+  let result = document;
+  for (const action of edit.actions) {
+    const next = componentReducer(result, action);
+    const missingTarget = ((action.type === "member.patch" || action.type === "member.remove") && !result.assembly.members.some(item => item.id === action.id))
+      || ((action.type === "interface.type.set" || action.type === "interface.connectable.set") && !result.assembly.members.some(member => member.id === action.memberId && member.interfaces.some(item => item.id === action.interfaceId)))
+      || (action.type === "interface.hardware.set" && !result.assembly.members.some(member => member.id === action.memberId && member.interfaces.some(item => item.id === action.interfaceId)))
+      || ((action.type === "port.remove" || action.type === "port.rename") && !result.ports.some(item => item.id === action.id))
+      || ((action.type === "slot.patch" || action.type === "slot.remove") && !result.slots.some(item => item.id === action.id))
+      || (action.type === "slot.patch" && (
+        (action.patch.baseInterface != null && !hasInterface(result, action.patch.baseInterface))
+        || (action.patch.memberId != null && !result.assembly.members.some(member => member.id === action.patch.memberId))
+        || (action.patch.interfaceId != null && !hasInterface(result, {
+          memberId: action.patch.memberId ?? result.slots.find(slot => slot.id === action.id)?.memberId ?? "",
+          interfaceId: action.patch.interfaceId,
+        }))))
+      || (action.type === "parameter.value" && !result.parameters.some(item => item.id === action.id))
+      || (action.type === "rule.expression" && !result.rules.some(item => item.id === action.id))
+      || (action.type === "rule.remove" && !result.rules.some(item => item.id === action.id))
+      || (action.type === "binding.set" && action.binding !== null && (
+        !result.assembly.members.some(member => member.id === action.binding!.memberId)
+        || !result.parameters.some(parameter => parameter.id === action.binding!.parameterId)))
+      || (action.type === "pattern.add" && (
+        !action.pattern.memberIds.every(id => result.assembly.members.some(member => member.id === id))
+        || !result.parameters.some(parameter => parameter.id === action.pattern.countParameterId)
+        || !result.parameters.some(parameter => parameter.id === action.pattern.spacingParameterId)));
+    const invalidAddition = ["member.add", "mate.add", "port.add", "slot.add", "rule.add"].includes(action.type) && next === result;
+    if (missingTarget || invalidAddition) throw new Error("排队操作的对象或引用已变化，无法直接合并。");
+    result = next;
+  }
+  return result === document ? document : { ...result, revision: document.revision + 1 };
+}
+
 // The server owns persisted data/checks. The reducer only projects queued input so typing stays responsive.
 export class SharedDraftController {
   private api: DraftApi;
   private state = initialSharedState();
   private confirmed: DraftEnvelope | null = null;
-  private pending: ComponentAction[] = [];
+  private pending: PendingEdit[] = [];
   private listeners = new Set<() => void>();
   private saving: Promise<void> | null = null;
   private generation = 0;
@@ -141,7 +207,14 @@ export class SharedDraftController {
   constructor(api: DraftApi) { this.api = api; }
   getSnapshot = (): SharedDraftState => this.state;
   subscribe = (listener: () => void): (() => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
-  dispose() { this.disposed = true; this.generation++; this.listeners.clear(); }
+  dispose() {
+    this.disposed = true; this.generation++; this.listeners.clear();
+    this.rejectPending(new Error("编辑控制器已释放"));
+    this.pending.forEach(edit => { edit.onSaved = undefined; });
+  }
+  private rejectPending(error: unknown) {
+    for (const edit of this.pending) { edit.reject?.(error); edit.reject = undefined; edit.resolve = undefined; }
+  }
   private publish(patch: Partial<SharedDraftState>) {
     if (this.disposed) return;
     this.state = { ...this.state, ...patch };
@@ -150,32 +223,21 @@ export class SharedDraftController {
   private accept(draft: DraftEnvelope) {
     draft = { ...draft, document: normalizeDraftDocument(draft.document) };
     const migrationActions = draftMigrationActions(draft.document);
-    const queuedActions = new Set(this.pending.map(actionIdentity));
+    const queuedActions = new Set(this.pending.flatMap(edit => edit.actions.map(actionIdentity)));
     this.pending = [
-      ...migrationActions.filter(action => !queuedActions.has(actionIdentity(action))),
+      ...migrationActions.filter(action => !queuedActions.has(actionIdentity(action))).map(action => ({ actions: [action] })),
       ...this.pending,
     ];
     if (this.confirmed?.draftId === draft.draftId) this.recordChanges(draft);
     else this.publish({ agentChanges: [], changesTruncated: false, userPriority: false });
     this.confirmed = draft;
-    let projection = draft.document;
-    for (const action of this.pending) {
-      const next = componentReducer(projection, action);
-      const missingTarget = ((action.type === "member.patch" || action.type === "member.remove") && !projection.assembly.members.some(item => item.id === action.id))
-        || ((action.type === "interface.type.set" || action.type === "interface.connectable.set") && !projection.assembly.members.some(member => member.id === action.memberId && member.interfaces.some(item => item.id === action.interfaceId)))
-        || (action.type === "interface.hardware.set" && !projection.assembly.members.some(member => member.id === action.memberId && member.interfaces.some(item => item.id === action.interfaceId)))
-        || ((action.type === "port.remove" || action.type === "port.rename") && !projection.ports.some(item => item.id === action.id))
-        || ((action.type === "slot.patch" || action.type === "slot.remove") && !projection.slots.some(item => item.id === action.id))
-        || (action.type === "parameter.value" && !projection.parameters.some(item => item.id === action.id))
-        || (action.type === "rule.expression" && !projection.rules.some(item => item.id === action.id))
-        || (action.type === "rule.remove" && !projection.rules.some(item => item.id === action.id));
-      const invalidAddition = ["member.add", "mate.add", "port.add", "slot.add", "rule.add", "interface.types.merge"].includes(action.type) && next === projection;
-      if (missingTarget || invalidAddition) {
-        // Keep the full visible local document for download; reprojecting would silently drop queued additions.
-        this.publish({ status: "conflict", dirty: true, error: "Agent 修改影响了后续操作的对象或引用，无法直接合并。本页完整输入已保留，请下载本地副本后核对差异。" });
-        return;
-      }
-      projection = next;
+    try {
+      this.pending.reduce(projectEdit, draft.document);
+    } catch (error) {
+      // Keep the full visible document so recovery never loses queued additions.
+      this.rejectPending(error);
+      this.publish({ status: "conflict", dirty: true, error: "Agent 修改影响了后续操作的对象或引用，无法直接合并。本页完整输入已保留，请下载本地副本后核对差异。" });
+      return;
     }
     this.project({ status: this.pending.length ? "saving" : "ready", error: null, notice: "", items: this.reconcileItems(this.state.items) });
   }
@@ -195,7 +257,7 @@ export class SharedDraftController {
   }
   private project(patch: Partial<SharedDraftState> = {}) {
     if (!this.confirmed) return;
-    const document = this.pending.reduce(componentReducer, this.confirmed.document);
+    const document = this.pending.reduce(projectEdit, this.confirmed.document);
     this.publish({ draftId: this.confirmed.draftId, document,
       checks: this.pending.length ? validateComponent(document) : this.confirmed.checks,
       dirty: this.pending.length > 0, ...patch });
@@ -232,33 +294,77 @@ export class SharedDraftController {
   dispatch(action: ComponentAction): boolean {
     if (!this.confirmed || !["ready", "saving"].includes(this.state.status) || this.disposed) return false;
     if (componentReducer(this.state.document, action) === this.state.document) return action.type !== "mate.add";
-    this.pending.push(structuredClone(action));
+    this.pending.push({ actions: [structuredClone(action)], ...modelBase(this.state.document, [action]) });
     this.editGeneration++;
     this.project({ status: "saving", error: null, notice: "" });
     this.beginSave();
     return true;
   }
+  commit(actions: ComponentAction[], onSaved?: (draft: DraftEnvelope) => void): Promise<DraftEnvelope> {
+    if (!this.confirmed || !["ready", "saving"].includes(this.state.status) || this.disposed) return Promise.reject(new Error("草稿暂不可编辑"));
+    if (!actions.length || actions.length > 100) return Promise.reject(new Error("一次操作需要 1 至 100 个动作"));
+    const copied = structuredClone(actions);
+    try { projectEdit(this.state.document, { actions: copied }); }
+    catch (error) { return Promise.reject(error); }
+    return new Promise((resolve, reject) => {
+      this.pending.push({ actions: copied, batch: true, resolve, reject, onSaved,
+        ...modelBase(this.state.document, copied) });
+      this.editGeneration++;
+      this.project({ status: "saving", error: null, notice: "" });
+      this.beginSave();
+    });
+  }
+  appendEvidence(draftId: string, additions: EvidenceFile[]): boolean {
+    if (this.state.draftId !== draftId || this.disposed) return false;
+    const definition = this.state.document.definition;
+    const existing = new Set(definition.evidenceFiles.map(file => file.id));
+    const files = additions.filter(file => !existing.has(file.id));
+    if (!files.length) return true;
+    if (definition.evidenceFiles.length + files.length > 10
+        || [...definition.evidenceFiles, ...files].reduce((sum, file) => sum + file.size, 0) > 15 * 1024 * 1024) return false;
+    const addedAt = new Date().toISOString();
+    return this.dispatch({ type: "definition.patch", patch: {
+      evidenceFiles: [...definition.evidenceFiles, ...files],
+      evidence: [...definition.evidence, ...files.map(file => ({ id: file.id, name: file.fileName, mediaType: file.mediaType, size: file.size, addedAt }))],
+    } });
+  }
   private beginSave() {
     if (this.saving || !this.pending.length || this.disposed) return;
-    this.saving = this.save().finally(() => { this.saving = null; });
+    this.saving = this.save().finally(() => {
+      this.saving = null;
+      if (this.state.status === "saving") this.beginSave();
+    });
   }
   private async save() {
     while (this.pending.length && this.confirmed && !this.disposed) {
+      const edit = this.pending[0];
       try {
-        const result = await this.api.apply(this.confirmed.draftId, this.confirmed.document.revision, this.pending[0]);
+        const result = edit.batch
+          ? await this.api.applyBatch(this.confirmed.draftId, this.confirmed.document.revision, edit.actions)
+          : await this.api.apply(this.confirmed.draftId, this.confirmed.document.revision, edit.actions[0]);
         if (this.disposed) return;
         this.pending.shift();
         this.accept(result);
+        edit.onSaved?.(result);
+        edit.resolve?.(result);
         if (this.state.status === "conflict") return;
       } catch (error) {
+        edit.reject?.(error); edit.reject = undefined; edit.resolve = undefined;
         const current = (error as { current?: DraftEnvelope })?.current;
         if (current?.draftId === this.confirmed.draftId) this.recordChanges(current);
-        if (rejectedEditCodes.has(errorCode(error))) {
+        const status = (error as { status?: number }).status;
+        const retryable = status === 429 || (status !== undefined && status >= 500);
+        const rejected = rejectedEditCodes.has(errorCode(error)) || (edit.batch && (
+          status === 400 || status === 422 || ["INVALID_BINDING_RANGE", "COMPONENT_ITEM_NOT_FOUND"].includes(errorCode(error))));
+        if (!retryable && rejected) {
           this.pending.shift();
-          this.project({ status: this.pending.length ? "saving" : "ready", error: null, notice: errorMessage(error) });
+          this.accept(this.confirmed);
+          if (this.state.status === "conflict") return;
+          this.publish({ notice: errorMessage(error) });
           continue;
         }
         const conflict = ["REVISION_CONFLICT", "EDIT_TARGET_REMOVED", "EDIT_STRUCTURE_CONFLICT"].includes(errorCode(error));
+        this.rejectPending(error);
         this.publish({ status: conflict ? "conflict" : "error", error: errorMessage(error) });
         return;
       }
@@ -284,6 +390,7 @@ export class SharedDraftController {
     try {
       const draft = await this.api.get(this.confirmed.draftId);
       if (this.disposed || generation !== this.generation) return;
+      this.rejectPending(new Error("已放弃未保存的操作"));
       this.pending = [];
       this.accept(draft);
     } catch (error) { this.publish({ status: "error", error: errorMessage(error) }); }
@@ -335,12 +442,13 @@ async function request<T>(path: string, body?: unknown): Promise<T> {
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const data = await response.json();
-  if (!response.ok) throw Object.assign(new Error("草稿请求失败"), { code: data?.error?.code || "INVALID_REQUEST", current: data?.error?.current });
+  if (!response.ok) throw Object.assign(new Error("草稿请求失败"), { status: response.status, code: data?.error?.code || "INVALID_REQUEST", current: data?.error?.current });
   return data as T;
 }
 export const httpDraftApi: DraftApi = {
   list: () => request(""), create: () => request("", {}),
   get: (id, afterRevision) => request(`/${encodeURIComponent(id)}${afterRevision === undefined ? "" : `?afterRevision=${afterRevision}`}`),
   apply: (id, expectedRevision, action) => request(`/${encodeURIComponent(id)}/actions`, { expectedRevision, action }),
+  applyBatch: (id, expectedRevision, actions) => request(`/${encodeURIComponent(id)}/actions/batch`, { expectedRevision, actions }),
   export: id => request(`/${encodeURIComponent(id)}/export`),
 };

@@ -229,10 +229,10 @@ def _run_worker(draft_data: dict[str, Any], material: dict[str, Any], overrides:
         return stl
 
 
-async def _read_template(request: Request, publication_id: str, expected_hash: str | None, *, publication: PublishedTemplate | None = None):
-    client, settings = request.app.state.http, request.app.state.settings
-    store = request.app.state.library_cache
-    storage = getattr(request.app.state, "published_storage", None)
+async def _read_template(state, publication_id: str, expected_hash: str | None, *, publication: PublishedTemplate | None = None):
+    client, settings = state.http, state.settings
+    store = state.library_cache
+    storage = getattr(state, "published_storage", None)
     cache_enabled = storage is not None and storage.client is not None
     record = None
     try:
@@ -293,7 +293,7 @@ async def template_availability(publication_id: str, request: Request, response:
             cached = store.model(publication)
         if cached is None:
             try:
-                _, draft, material = await _read_template(request, publication_id, sha256, publication=publication)
+                _, draft, material = await _read_template(request.app.state, publication_id, sha256, publication=publication)
                 cached = await asyncio.to_thread(_run_worker, draft, material, {})
             except LibraryError as error:
                 # Infrastructure failures are retryable; never remember them as bad templates.
@@ -315,10 +315,16 @@ async def reconstruction_info(publication_id: str, request: Request, response: R
         overrides = json.loads(parameters, parse_constant=lambda _: (_ for _ in ()).throw(ValueError()))
     except (ValueError, TypeError, RecursionError):
         raise LibraryError(422, "PARAMETER_INVALID") from None
+    result = await template_info(request.app.state, publication_id, sha256, overrides)
+    response.headers["Cache-Control"] = "no-store"
+    return result
+
+
+async def template_info(state, publication_id, sha256, overrides):
     if not isinstance(overrides, dict) or len(overrides) > 64 or any(not isinstance(key, str) or len(key) > 128 for key in overrides):
         raise LibraryError(422, "PARAMETER_INVALID")
-    async with request.app.state.reconstruction_slots:
-        publication, draft, material = await _read_template(request, publication_id, sha256)
+    async with state.reconstruction_slots:
+        publication, draft, material = await _read_template(state, publication_id, sha256)
     definitions = {item["id"]: item for item in editable_parameters(draft)}
     for key, value in overrides.items():
         definition = definitions.get(key)
@@ -342,7 +348,6 @@ async def reconstruction_info(publication_id: str, request: Request, response: R
         if definition["allowedValues"] and value not in definition["allowedValues"]:
             raise LibraryError(422, "PARAMETER_INVALID")
     resolved, diagnostics = await asyncio.to_thread(resolved_interfaces, draft, material, overrides)
-    response.headers["Cache-Control"] = "no-store"
     return {
         "publication": publication.model_dump(mode="json"),
         "parameters": editable_parameters(draft),
@@ -374,7 +379,7 @@ async def reconstruction_model(publication_id: str, request: Request, sha256: st
     if not isinstance(parameters, dict) or len(parameters) > 64 or any(not isinstance(key, str) or len(key) > 128 for key in parameters):
         raise LibraryError(422, "PARAMETER_INVALID")
     async with request.app.state.reconstruction_slots:
-        publication, draft, material = await _read_template(request, publication_id, sha256)
+        publication, draft, material = await _read_template(request.app.state, publication_id, sha256)
         defaults = {item["id"]: item["default"] for item in editable_parameters(draft)}
         is_default = all(key in defaults and isinstance(value, bool) == isinstance(defaults[key], bool) and value == defaults[key] for key, value in parameters.items())
         cached = request.app.state.reconstruction_cache.get(publication) if is_default else None

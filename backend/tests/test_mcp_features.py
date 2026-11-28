@@ -135,6 +135,28 @@ class LibraryMaintenanceMCPTests(LibraryCleanupFixture, unittest.TestCase):
     def client(self):
         return TestClient(create_app(self.settings, dist_dir=None), base_url='http://127.0.0.1:8020', client=('127.0.0.1', 12345))
 
+    def test_partial_cleanup_reports_deleted_and_rejected_items_on_both_transports(self):
+        old = self.seed('old')
+        self.seed('new', version=2)
+        with self.client() as client:
+            def selection():
+                scan = client.post('/api/template-library/cleanup-preview').json()
+                return {'scanId': scan['scanId'], 'publicationIds': ['old', 'unknown']}
+
+            response = client.post('/api/template-library/cleanup', json=selection())
+            self.assertEqual(response.status_code, 409)
+            deleted, rejected = response.json()['items']
+            self.assertEqual(deleted['status'], 'deleted')
+            self.assertEqual(rejected, {'publicationId': 'unknown', 'status': 'rejected', 'errorCode': 'PUBLICATION_CHANGED'})
+            self.assertEqual(client.post('/api/template-library/backups/' + deleted['backupId'] + '/restore').status_code, 200)
+
+            result = self.call(client, 'component_cleanup_library', {'request': selection()})
+            self.assertTrue(result.get('isError'), result)
+            again, other = result['structuredContent']['items']
+            self.assertEqual((again['publicationId'], again['status']), ('old', 'deleted'))
+            self.assertEqual(other, rejected)
+            self.assertNotIn(('templates', old['objectKey']), self.storage.objects)
+
     def test_cleanup_confirmation_backups_restore_and_errors_use_shared_service(self):
         old = self.seed('old')
         payload = self.storage.objects['templates', old['objectKey']]

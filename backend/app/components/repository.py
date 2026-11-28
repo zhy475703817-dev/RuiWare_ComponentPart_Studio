@@ -5,15 +5,14 @@ import base64
 from datetime import datetime, timezone
 import hashlib
 import json
-from io import BytesIO
 from pathlib import Path
 import re
 import sqlite3
 from uuid import uuid4
-from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
 from .changes import document_changes
 from .models import ComponentAction, ComponentDocument, Revision, TypedAction
+from .publication_package import build_component_package
 from .service import ComponentError, apply_action, create_component_document, validate_component
 from pydantic import TypeAdapter
 
@@ -161,16 +160,8 @@ class DraftRepository:
             manifest = {"schemaVersion": "component-package-1.1" if document.geometryDesign else "component-package-1.0", "templateKind": "component", "publicationId": publication_id,
                         "templateId": draft_id, "version": version, "createdAt": self._now(), "sourceRevision": document.revision}
             data = document.model_dump(by_alias=True)
-            output = BytesIO()
-            with ZipFile(output, "w") as package:
-                documents = [("manifest.json", manifest), ("component.json", data), ("checks.json", checks), ("qualification.json", qualification)]
-                if document.definition.evidenceFiles:
-                    documents.append(("evidence.json", self._portable_evidence(connection, draft_id, document)))
-                for name, value in documents:
-                    info = ZipInfo(name)
-                    info.compress_type = ZIP_DEFLATED
-                    package.writestr(info, json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8"))
-            payload = output.getvalue()
+            evidence = self._portable_evidence(connection, draft_id, document) if document.definition.evidenceFiles else None
+            payload = build_component_package(manifest, data, checks, qualification, evidence)
             metadata = {**manifest, "name": document.definition.name, "code": document.definition.code.strip() or draft_id[:8],
                         "sha256": hashlib.sha256(payload).hexdigest(), "size": len(payload),
                         "downloadUrl": f"/api/published-components/{publication_id}/download", "memberCount": len(document.assembly.members),
@@ -197,7 +188,7 @@ class DraftRepository:
                     SUM(CASE WHEN actor = 'agent' THEN 1 ELSE 0 END) AS agents
                     FROM component_draft_changes WHERE draft_id = ? AND revision > ? AND revision <= ?""",
                     (draft_id, expected_revision, document.revision)).fetchone()
-                reconciled = (actor == "user" and all(item.type != "reset" for item in actions) and expected_revision < document.revision
+                reconciled = (actor == "user" and all(item.type not in ("reset", "model.restore") for item in actions) and expected_revision < document.revision
                               and history["total"] == history["agents"] == document.revision - expected_revision)
                 if not reconciled:
                     raise ComponentError(409, "REVISION_CONFLICT", self._envelope(connection, draft_id, document, expected_revision))
@@ -223,7 +214,7 @@ class DraftRepository:
                 connection.execute("INSERT INTO component_draft_changes VALUES (?, ?, ?, ?, ?)", (
                     draft_id, updated.revision, actor, now, json.dumps(items, ensure_ascii=False),
                 ))
-                self._remove_unreferenced_evidence(connection, draft_id, updated)
+                self._remove_detached_evidence(connection, draft_id, document, updated)
                 self.on_change(draft_id)
             result = self._envelope(connection, draft_id, updated, expected_revision)
             result["reconciled"] = reconciled
@@ -392,18 +383,24 @@ class DraftRepository:
         return {"id": row["id"], "fileName": row["file_name"], "mediaType": row["media_type"], "size": row["size"],
                 "sha256": row["sha256"], "content": bytes(row["content"])}
 
-    def delete_evidence(self, draft_id: str, evidence_id: str) -> None:
+    def delete_evidence(self, draft_id: str, evidence_id: str, *, unreferenced_only: bool = False) -> None:
         with closing(self._connect()) as connection, connection:
+            if unreferenced_only:
+                connection.execute("BEGIN IMMEDIATE")
+                document = self._read(connection, draft_id)
+                if any(item.id == evidence_id for item in document.definition.evidenceFiles):
+                    return
             connection.execute("DELETE FROM component_draft_evidence WHERE draft_id = ? AND id = ?", (draft_id, evidence_id))
 
     def export(self, draft_id: str) -> dict:
         from .service import serialize_component
 
-        document = ComponentDocument.model_validate(self.get(draft_id)["document"])
+        with closing(self._connect()) as connection, connection:
+            connection.execute("BEGIN")
+            document = self._read(connection, draft_id)
+            evidence = self._portable_evidence(connection, draft_id, document)
         result = serialize_component(document)
-        for evidence in result["stages"]["definition"]["evidenceFiles"]:
-            stored = self.get_evidence(draft_id, evidence["id"])
-            evidence["dataUrl"] = f"data:{stored['mediaType']};base64,{base64.b64encode(stored['content']).decode('ascii')}"
+        result["stages"]["definition"]["evidenceFiles"] = evidence
         return result
 
     @staticmethod
@@ -452,12 +449,11 @@ class DraftRepository:
                 raise ComponentError(422, "EVIDENCE_CONTENT_MISSING")
 
     @staticmethod
-    def _remove_unreferenced_evidence(connection, draft_id: str, document: ComponentDocument):
-        referenced = {item.id for item in document.definition.evidenceFiles}
-        rows = connection.execute("SELECT id FROM component_draft_evidence WHERE draft_id = ?", (draft_id,)).fetchall()
-        for row in rows:
-            if row["id"] not in referenced:
-                connection.execute("DELETE FROM component_draft_evidence WHERE draft_id = ? AND id = ?", (draft_id, row["id"]))
+    def _remove_detached_evidence(connection, draft_id: str, previous: ComponentDocument, updated: ComponentDocument):
+        referenced = {item.id for item in updated.definition.evidenceFiles}
+        for item in previous.definition.evidenceFiles:
+            if item.id not in referenced:
+                connection.execute("DELETE FROM component_draft_evidence WHERE draft_id = ? AND id = ?", (draft_id, item.id))
 
     @staticmethod
     def _envelope(connection, draft_id, document, after_revision):
